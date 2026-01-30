@@ -1,0 +1,136 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoad_ExampleConfig_ParsesAllFields(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "assets", "examples", "ralph.wanidroid.yaml"))
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.Project != "Wanidroid" {
+		t.Errorf("Project = %q, want %q", cfg.Project, "Wanidroid")
+	}
+	if cfg.Repo.DefaultBase != "main" {
+		t.Errorf("Repo.DefaultBase = %q, want %q", cfg.Repo.DefaultBase, "main")
+	}
+	if cfg.Repo.BranchPattern != `^ralph/[a-zA-Z0-9._-]+$` {
+		t.Errorf("Repo.BranchPattern = %q, unexpected", cfg.Repo.BranchPattern)
+	}
+	if cfg.Paths.TasksDir != ".ralph/tasks" {
+		t.Errorf("Paths.TasksDir = %q, want %q", cfg.Paths.TasksDir, ".ralph/tasks")
+	}
+	if cfg.Paths.SkillsDir != ".ralph/skills" {
+		t.Errorf("Paths.SkillsDir = %q, want %q", cfg.Paths.SkillsDir, ".ralph/skills")
+	}
+	if len(cfg.QualityChecks) != 4 {
+		t.Errorf("QualityChecks length = %d, want 4", len(cfg.QualityChecks))
+	}
+}
+
+func TestLoad_MissingFields_ReturnsError(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name:    "missing project",
+			content: "repo:\n  default_base: main\n",
+			wantErr: "missing required field: project",
+		},
+		{
+			name:    "missing repo.default_base",
+			content: "project: P\n",
+			wantErr: "missing required field: repo.default_base",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "ralph.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if got := err.Error(); !contains(got, tt.wantErr) {
+				t.Errorf("error = %q, want to contain %q", got, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoad_NonexistentFile_ReturnsError(t *testing.T) {
+	_, err := Load("/nonexistent/path/ralph.yaml")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+}
+
+func TestDiscover_FromSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	if err := os.MkdirAll(ralphDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	configContent := "project: Test\nrepo:\n  default_base: main\n"
+	if err := os.WriteFile(filepath.Join(ralphDir, "ralph.yaml"), []byte(configContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	subDir := filepath.Join(dir, "src", "deep")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(subDir)
+
+	cfg, err := Discover()
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if cfg.Project != "Test" {
+		t.Errorf("Project = %q, want %q", cfg.Project, "Test")
+	}
+}
+
+func TestResolve_ExplicitPathTakesPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "custom.yaml")
+	content := "project: Custom\nrepo:\n  default_base: main\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Resolve(path)
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if cfg.Project != "Custom" {
+		t.Errorf("Project = %q, want %q", cfg.Project, "Custom")
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

@@ -4,16 +4,24 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/uesteibar/ralph/internal/commands"
 )
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "Ralph Orchestrator (WIP)\n")
-	fmt.Fprintf(os.Stderr, "Usage:\n")
-	fmt.Fprintf(os.Stderr, "  ralph issue [flags] <issue-number>\n")
-	fmt.Fprintf(os.Stderr, "  ralph review [flags] <pr-number>\n")
-	fmt.Fprintf(os.Stderr, "  ralph sync-branch [flags] <pr-number>\n")
-	fmt.Fprintf(os.Stderr, "  ralph prd new|from-issue <issue-number>\n")
-	fmt.Fprintf(os.Stderr, "  ralph chat\n")
+	fmt.Fprintf(os.Stderr, `Ralph — autonomous coding agent loop
+
+Usage:
+  ralph init
+  ralph validate [--project-config path]
+  ralph prd new [--project-config path]
+  ralph run [--project-config path] [--max-iterations n]
+  ralph chat [--project-config path]
+
+Flags:
+  --project-config    Path to project config YAML (default: discover .ralph/ralph.yaml)
+  --max-iterations    Maximum loop iterations for run command (default: 20)
+`)
 }
 
 func main() {
@@ -25,21 +33,30 @@ func main() {
 	}
 
 	subcmd := os.Args[1]
+	rest := os.Args[2:]
+
+	var err error
 	switch subcmd {
-	case "issue":
-		log.Println("TODO: implement ralph issue")
-	case "review":
-		log.Println("TODO: implement ralph review")
-	case "sync-branch":
-		log.Println("TODO: implement ralph sync-branch")
+	case "init":
+		err = commands.Init(rest)
+	case "validate":
+		err = commands.Validate(rest)
+	case "run":
+		err = commands.Run(rest)
 	case "prd":
-		log.Println("TODO: implement ralph prd")
+		err = commands.PRD(rest)
 	case "chat":
-		log.Println("TODO: implement ralph chat")
+		err = commands.Chat(rest)
 	case "help", "-h", "--help":
 		usage()
+		return
 	default:
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", subcmd)
 		usage()
 		os.Exit(1)
+	}
+
+	if err != nil {
+		log.Fatalf("ralph %s: %v", subcmd, err)
 	}
 }

@@ -1,4 +1,4 @@
-project: Wanidroid
+project: ralph
 
 repo:
   default_base: main
@@ -9,7 +9,5 @@ paths:
   skills_dir: ".ralph/skills"
 
 quality_checks:
-  - "npm test"
-  - "npm run lint"
-  - "npm run typecheck"
-  - "cd android && ./gradlew test"
+  - "just test"
+  - "just vet"
