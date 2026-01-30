@@ -1,0 +1,27 @@
+project: Wanidroid
+
+repo:
+  path: /Users/mediacenter/code/uesteibar/wanidroid
+  owner: uesteibar
+  name: wanidroid
+  default_base: main
+  branch_pattern: "^ralph/[a-zA-Z0-9._-]+$"
+
+gh:
+  project_v2_number: 2
+  status_field_name: Status
+  status_values:
+    ready: Ready
+    in_progress: In progress
+    in_review: In review
+
+paths:
+  tasks_dir: ".ralph/tasks"
+  prd_json: ".ralph/prd.json"
+  prompts_dir: ".ralph/prompts"  # optional overrides
+
+quality_checks:
+  - "npm test"
+  - "npm run lint"
+  - "npm run typecheck"
+  - "cd android && ./gradlew test"
