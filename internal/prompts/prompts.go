@@ -58,6 +58,21 @@ func RenderChatSystem(data ChatSystemData) (string, error) {
 	return render("templates/chat_system.md", data)
 }
 
+// RebaseConflictData holds the context for the rebase conflict resolution prompt.
+type RebaseConflictData struct {
+	PRDDescription string
+	Stories        string
+	Progress       string
+	FeatureDiff    string
+	BaseDiff       string
+	ConflictFiles  string
+}
+
+// RenderRebaseConflict renders the prompt for rebase conflict resolution.
+func RenderRebaseConflict(data RebaseConflictData) (string, error) {
+	return render("templates/rebase_conflict.md", data)
+}
+
 func render(name string, data any) (string, error) {
 	content, err := templateFS.ReadFile(name)
 	if err != nil {

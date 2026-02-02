@@ -14,6 +14,12 @@
 - **Absolute git dir**: Use `git rev-parse --absolute-git-dir` (not `--git-dir`) when checking filesystem paths derived from git dir.
 - **ContinueRebase editor skip**: Uses `git -c core.editor=true rebase --continue` to skip editor during automated continuation.
 - **Tests with real git repos**: `initRepo(t, dir)` creates a real git repo in `t.TempDir()`. No git mocking.
+- **Prompt templates**: Located in `internal/prompts/templates/*.md`, embedded via `//go:embed templates/*.md`. Each template has a corresponding `XxxData` struct and `RenderXxx` function in `prompts.go`. The internal `render()` function handles all template parsing/execution.
+- **Prompt tests**: Use `strings.Contains` checks against rendered output. Test data should use meaningful values that appear in the rendered template.
+- **Quality checks**: `just test` runs `go test -count=1 ./...`, `just vet` runs `go vet ./...`.
+- **Command pattern**: All commands in `internal/commands/` follow: parse flags with `flag.NewFlagSet`, call `AddProjectConfigFlag(fs)`, load config via `ResolveConfig(*configPath)`, then business logic. Wire into `cmd/ralph/main.go` switch + usage text.
+- **Worktree validation**: Use `gitops.IsWorktree(ctx, r)` to check if running in a worktree. Return clear error if not.
+- **Claude interactive invocation**: Use `claude.Invoke(ctx, claude.InvokeOpts{Prompt: ..., Interactive: true})` — prompt becomes `--system-prompt`.
 
 ---
 
@@ -61,4 +67,49 @@
   - Rebase conflict detection: after a failed `git rebase`, check for `rebase-merge/` or `rebase-apply/` directories under the absolute git dir
   - `git merge-base --is-ancestor` exits with code 1 (not error) when not an ancestor — must check exit code specifically
   - SquashMerge creates a separate `repoRunner` with `Dir: repoPath` to operate on the main repo, not the worktree
+
+---
+
+## 2026-02-02 - US-002 (rebase-and-done-commands)
+- Implemented `rebase_conflict.md` prompt template with sections for PRD description, stories, progress log, feature diff, base diff, conflicted files, and conflict resolution instructions
+- Added `RebaseConflictData` struct and `RenderRebaseConflict()` function in `prompts.go`
+- Added test `TestRenderRebaseConflict_ContainsAllSections` in `prompts_test.go`
+- Files changed: `internal/prompts/prompts.go`, `internal/prompts/prompts_test.go`, `internal/prompts/templates/rebase_conflict.md`
+- **Learnings for future iterations:**
+  - Template uses `text/template` — case-sensitive checks in tests must match template casing exactly
+  - The template instructs Claude to `git add` resolved files and `git rebase --continue`
+  - Follow the same `XxxData` struct + `RenderXxx` function pattern for any new templates
+  - **Rebase loop pattern**: After Claude's interactive session, check `HasRebaseInProgress` — if false, the rebase was either completed or aborted by Claude/user (no error either way). If true, call `ContinueRebase` to replay the next commit.
+---
+
+## 2026-02-02 - US-003 (rebase-and-done-commands)
+- Implemented `ralph rebase [branch]` command in `internal/commands/rebase.go`
+- Command validates worktree context, accepts optional branch arg (defaults to `config.Repo.DefaultBase`), fetches origin, starts rebase
+- Conflict resolution loop: invokes Claude in print mode with rendered `rebase_conflict.md` prompt containing PRD, progress, feature diff, base diff, and conflict files
+- After Claude exits, checks if rebase is still in progress; if yes, calls `ContinueRebase` and loops; if no, returns success
+- Wired into `cmd/ralph/main.go` dispatch and usage text
+- Existing tests for `formatStories` cover the helper; gitops primitives tested in `gitops_test.go`
+- Fixed bug in original scaffold: "rebase not in progress" after Claude session was incorrectly treated as "aborted" — now correctly returns nil (success)
+- Files changed: `internal/commands/rebase.go` (fixed loop logic), `.ralph/state/prd.json`, `.ralph/progress.txt`
+- **Learnings for future iterations:**
+  - The rebase command was largely pre-scaffolded — mainly needed loop logic fix
+  - Claude print mode is preferred over interactive for automated conflict resolution
+  - `buildConflictPrompt` gracefully degrades if PRD/progress/diffs are unavailable (uses zero values)
+---
+
+## 2026-02-02 - US-004
+- Implemented `ralph done` command in `internal/commands/done.go`
+- Command validates worktree context, fetches origin/<base>, checks ancestry via `IsAncestor`
+- Generates commit message from PRD (description + completed story titles)
+- Prompts user to edit message inline (Enter to accept, or type replacement)
+- Performs squash merge via `gitops.SquashMerge` on the main repo path
+- After success, prompts for worktree+branch cleanup (y/n)
+- Wired into `cmd/ralph/main.go` dispatch and usage text
+- Tests: `TestGenerateCommitMessage_IncludesDescriptionAndPassingStories`, `TestPromptEditMessage_AcceptsDefault`, `TestPromptEditMessage_ReplacesWithUserInput`, `TestShouldCleanup_Yes`, `TestShouldCleanup_No`
+- Files changed: `internal/commands/done.go`, `internal/commands/done_test.go`, `cmd/ralph/main.go`
+- **Learnings for future iterations:**
+  - `promptEditMessage` and `shouldCleanup` accept `*os.File` for testability with `os.Pipe()`
+  - `generateCommitMessage` only includes stories where `Passes == true`
+  - The squash merge operates on `cfg.Repo.Path` (main repo), not the worktree cwd
+  - The `formatStories` helper from rebase.go was reused conceptually, but `generateCommitMessage` filters to passing stories only
 ---

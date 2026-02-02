@@ -48,6 +48,40 @@ func TestRenderChatSystem_ContainsProjectName(t *testing.T) {
 	}
 }
 
+func TestRenderRebaseConflict_ContainsAllSections(t *testing.T) {
+	data := RebaseConflictData{
+		PRDDescription: "Add rebase and done commands for worktree workflows",
+		Stories:        "- US-001: Add gitops helpers\n- US-002: Add prompt template",
+		Progress:       "## US-001\nImplemented gitops helpers\n",
+		FeatureDiff:    "diff --git a/main.go\n+feature code here",
+		BaseDiff:       "diff --git a/main.go\n+base change here",
+		ConflictFiles:  "internal/main.go\ninternal/util.go",
+	}
+
+	out, err := RenderRebaseConflict(data)
+	if err != nil {
+		t.Fatalf("RenderRebaseConflict failed: %v", err)
+	}
+
+	checks := []string{
+		data.PRDDescription,
+		"US-001: Add gitops helpers",
+		"US-002: Add prompt template",
+		data.Progress,
+		data.FeatureDiff,
+		data.BaseDiff,
+		"internal/main.go",
+		"internal/util.go",
+		"git add",
+		"Preserve the intent of the feature",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
 func TestRenderChatSystem_IncludesContext(t *testing.T) {
 	data := ChatSystemData{
 		ProjectName:   "TestProject",

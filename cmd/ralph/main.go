@@ -18,6 +18,8 @@ Usage:
   ralph run [--project-config path] [--max-iterations n]
   ralph chat [--project-config path]
   ralph switch [--project-config path]
+  ralph rebase [branch] [--project-config path]
+  ralph done [--project-config path]
 
 Flags:
   --project-config    Path to project config YAML (default: discover .ralph/ralph.yaml)
@@ -50,6 +52,10 @@ func main() {
 		err = commands.Chat(rest)
 	case "switch":
 		err = commands.Switch(rest)
+	case "rebase":
+		err = commands.Rebase(rest)
+	case "done":
+		err = commands.Done(rest)
 	case "help", "-h", "--help":
 		usage()
 		return
