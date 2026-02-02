@@ -2,4 +2,63 @@
 
 ## Codebase Patterns
 
+- **CLI dispatch**: Custom dispatcher in `cmd/ralph/main.go`, not Cobra. Each command is a function in `internal/commands/`.
+- **String helpers**: `init.go` has manual `splitLines`, `trimSpace`, `containsLine` to avoid importing `strings` package.
+- **Test style**: Standard Go testing, table-driven where appropriate. Tests use `t.TempDir()` and `os.Chdir` for filesystem operations.
+- **Idempotency**: Init checks `os.Stat` before writing files; re-runs skip existing files.
+- **No external test deps**: Only stdlib + `gopkg.in/yaml.v3`.
+- **Testable external calls**: Use package-level function variables (e.g. `invokeClaudeFn`) to mock external CLI calls in tests.
+- **shell.Runner for git**: All git operations use `*shell.Runner` with `Dir` set to the target directory. Non-zero exits produce `*shell.ExitError` with Code and Stderr.
+- **gitops package**: Pure functions taking `(ctx, runner, ...)`. Worktree operations use a `repoRunner` with `Dir: repoPath`.
+- **RebaseResult struct**: `StartRebase` and `ContinueRebase` return `RebaseResult{Success, HasConflicts}` for structured results.
+- **Absolute git dir**: Use `git rev-parse --absolute-git-dir` (not `--git-dir`) when checking filesystem paths derived from git dir.
+- **ContinueRebase editor skip**: Uses `git -c core.editor=true rebase --continue` to skip editor during automated continuation.
+- **Tests with real git repos**: `initRepo(t, dir)` creates a real git repo in `t.TempDir()`. No git mocking.
+
+---
+
+## 2026-02-02 - US-001
+- Added interactive prompts to `ralph init`: git-tracking choice (1=track in git, 2=keep local) and LLM analysis opt-in (Y/n)
+- `Init` signature changed from `Init(args []string) error` to `Init(args []string, in io.Reader) error` for testability
+- `ensureGitignoreEntries` now accepts a `gitTrackChoice int` parameter: option 1 gitignores `.ralph/worktrees/` and `.ralph/state/`, option 2 gitignores entire `.ralph/`
+- LLM opt-in prints placeholder message (actual implementation deferred to US-002)
+- Files changed:
+  - `internal/commands/init.go` — added `bufio`, `io` imports; added `promptGitTracking`, `promptLLMAnalysis` functions; updated `ensureGitignoreEntries` signature
+  - `internal/commands/init_test.go` — new file with 7 tests covering both git-tracking options, LLM opt-in/out, idempotency, invalid input retry, default-yes behavior
+  - `cmd/ralph/main.go` — updated Init call to pass `os.Stdin`
+- **Learnings for future iterations:**
+  - Pass `io.Reader` to command functions that need stdin for testability
+  - `bufio.Scanner` works well for line-by-line interactive prompts
+  - Tests use `strings.NewReader` to simulate stdin input
+---
+
+## 2026-02-02 - US-002
+- Replaced LLM placeholder with actual Claude CLI invocation via `claude.Invoke` in `--print` mode
+- Added `invokeClaudeFn` package-level variable for testability (tests swap it to mock Claude responses)
+- Added `detectQualityChecks(dir)` — invokes Claude with a focused prompt asking for YAML list of quality check commands
+- Added `parseQualityChecks(output)` — parses Claude's YAML output into `[]string`
+- Added `buildConfigWithChecks(projectName, checks)` — generates ralph.yaml with detected quality checks via `yaml.Marshal`
+- On Claude failure, falls back to default template and prints a warning
+- Files changed:
+  - `internal/commands/init.go` — added `context`, `claude` imports; added `invokeClaudeFn`, `qualityCheckPrompt`, `detectQualityChecks`, `parseQualityChecks`, `buildConfigWithChecks`; replaced LLM placeholder with real invocation logic
+  - `internal/commands/init_test.go` — added `context`, `fmt`, `claude` imports; replaced placeholder test with `TestInit_LLMOptIn_InjectsDetectedChecks` and `TestInit_LLMOptIn_FallsBackOnClaudeFailure`; added `TestParseQualityChecks_*` unit tests
+- **Learnings for future iterations:**
+  - Package-level function variables (`var fn = realImpl`) is an effective Go pattern for mocking external calls without interfaces
+  - `yaml.Marshal` on a `config.Config` struct produces clean YAML output suitable for ralph.yaml
+  - Tests should save/restore package-level mock vars with `defer`
+---
+
+## 2026-02-02 - US-001 (rebase-and-done-commands)
+- Added gitops helper functions for worktree detection, merge-base check, rebase, and squash merge
+- Functions added to `internal/gitops/gitops.go`: IsWorktree, CurrentBranch, IsAncestor, FetchBranch, StartRebase, HasRebaseInProgress, ContinueRebase, AbortRebase, ConflictFiles, SquashMerge
+- Added `RebaseResult` struct with `Success` and `HasConflicts` fields for structured rebase outcomes
+- Files changed:
+  - `internal/gitops/gitops.go` — added 11 new exported functions/types, added `errors` import
+  - `internal/gitops/gitops_test.go` — new file with 9 test functions covering all helpers using real temporary git repos
+- **Learnings for future iterations:**
+  - `git rev-parse --git-dir` returns relative paths; use `--absolute-git-dir` when checking filesystem paths
+  - `git -c core.editor=true rebase --continue` is needed to skip the editor prompt in automated rebase continuation
+  - Rebase conflict detection: after a failed `git rebase`, check for `rebase-merge/` or `rebase-apply/` directories under the absolute git dir
+  - `git merge-base --is-ancestor` exits with code 1 (not error) when not an ancestor — must check exit code specifically
+  - SquashMerge creates a separate `repoRunner` with `Dir: repoPath` to operate on the main repo, not the worktree
 ---

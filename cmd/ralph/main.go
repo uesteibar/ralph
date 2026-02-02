@@ -38,7 +38,7 @@ func main() {
 	var err error
 	switch subcmd {
 	case "init":
-		err = commands.Init(rest)
+		err = commands.Init(rest, os.Stdin)
 	case "validate":
 		err = commands.Validate(rest)
 	case "run":

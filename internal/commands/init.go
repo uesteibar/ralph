@@ -1,16 +1,31 @@
 package commands
 
 import (
+	"bufio"
+	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/uesteibar/ralph/internal/claude"
 	"github.com/uesteibar/ralph/internal/config"
 )
+
+// invokeClaudeFn is the function used to invoke Claude CLI. It can be
+// overridden in tests to avoid calling the real CLI.
+var invokeClaudeFn = claude.Invoke
+
+const qualityCheckPrompt = `Analyze this codebase and detect the quality check commands that should be run (tests, linting, type checking, formatting, etc.).
+
+Output ONLY a YAML list of shell commands, one per line. No explanation, no code fences, no surrounding text. Example format:
+- "npm test"
+- "npm run lint"
+`
 
 const defaultConfigTemplate = `project: %s
 
@@ -73,7 +88,8 @@ Write a valid JSON file to ` + "`.ralph/state/prd.json`" + ` with this exact sch
 // Init scaffolds the .ralph/ directory in the current project.
 // It is idempotent: re-running it skips existing files and ensures
 // all directories and skills are up to date.
-func Init(args []string) error {
+// The in parameter provides stdin for interactive prompts.
+func Init(args []string, in io.Reader) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -84,6 +100,8 @@ func Init(args []string) error {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
 
+	scanner := bufio.NewScanner(in)
+
 	ralphDir := filepath.Join(cwd, ".ralph")
 	stateDir := filepath.Join(ralphDir, "state")
 	configPath := filepath.Join(ralphDir, "ralph.yaml")
@@ -91,6 +109,12 @@ func Init(args []string) error {
 	finishSkillPath := filepath.Join(cwd, ".claude", "commands", "finish.md")
 
 	var created, skipped []string
+
+	// --- Git tracking prompt ---
+	gitTrackChoice := promptGitTracking(scanner)
+
+	// --- LLM analysis prompt ---
+	useLLM := promptLLMAnalysis(scanner)
 
 	// Create directory structure (MkdirAll is idempotent)
 	dirs := []string{
@@ -111,7 +135,22 @@ func Init(args []string) error {
 	if _, err := os.Stat(configPath); err != nil {
 		projectName := filepath.Base(cwd)
 
-		content := fmt.Sprintf(defaultConfigTemplate, projectName)
+		var qualityChecks []string
+		if useLLM {
+			detected, llmErr := detectQualityChecks(cwd)
+			if llmErr != nil {
+				fmt.Printf("Warning: Claude analysis failed (%v), using default template.\n", llmErr)
+			} else {
+				qualityChecks = detected
+			}
+		}
+
+		var content string
+		if len(qualityChecks) > 0 {
+			content = buildConfigWithChecks(projectName, qualityChecks)
+		} else {
+			content = fmt.Sprintf(defaultConfigTemplate, projectName)
+		}
 
 		var cfg config.Config
 		if err := yaml.Unmarshal([]byte(content), &cfg); err != nil {
@@ -150,8 +189,8 @@ func Init(args []string) error {
 	}
 	created = append(created, ".claude/commands/finish.md")
 
-	// Ensure ephemeral paths are in .gitignore
-	ensureGitignoreEntries(cwd)
+	// Ensure appropriate paths are in .gitignore based on user's choice
+	ensureGitignoreEntries(cwd, gitTrackChoice)
 
 	log.Printf("[init] initialized .ralph/ in %s", cwd)
 	fmt.Println("Ralph initialized.")
@@ -178,13 +217,57 @@ func Init(args []string) error {
 	return nil
 }
 
-func ensureGitignoreEntries(dir string) {
+// promptGitTracking asks the user how to handle .ralph/ in git.
+// Returns 1 for "track in git" or 2 for "keep local".
+func promptGitTracking(scanner *bufio.Scanner) int {
+	fmt.Println("How should .ralph/ be handled in git?")
+	fmt.Println()
+	fmt.Println("  1) Track in git — share config with your team")
+	fmt.Println("  2) Keep local  — gitignore the entire .ralph/ directory")
+	fmt.Println()
+
+	for {
+		fmt.Print("Choose [1/2]: ")
+		if !scanner.Scan() {
+			return 1
+		}
+		choice := trimSpace(scanner.Text())
+		if choice == "1" {
+			return 1
+		}
+		if choice == "2" {
+			return 2
+		}
+		fmt.Println("Please enter 1 or 2.")
+	}
+}
+
+// promptLLMAnalysis asks whether to use Claude for quality check detection.
+// Returns true if the user accepts (default yes).
+func promptLLMAnalysis(scanner *bufio.Scanner) bool {
+	fmt.Print("Use Claude to detect quality checks? [Y/n] ")
+	if !scanner.Scan() {
+		return true
+	}
+	answer := trimSpace(scanner.Text())
+	if answer == "" || answer == "Y" || answer == "y" || answer == "yes" || answer == "Yes" {
+		return true
+	}
+	return false
+}
+
+func ensureGitignoreEntries(dir string, gitTrackChoice int) {
 	gitignorePath := filepath.Join(dir, ".gitignore")
 	content, _ := os.ReadFile(gitignorePath)
 
-	entries := []string{".ralph/worktrees/", ".ralph/state/"}
-	var toAdd []string
+	var entries []string
+	if gitTrackChoice == 2 {
+		entries = []string{".ralph/"}
+	} else {
+		entries = []string{".ralph/worktrees/", ".ralph/state/"}
+	}
 
+	var toAdd []string
 	existing := string(content)
 	for _, entry := range entries {
 		if !containsLine(existing, entry) {
@@ -247,4 +330,52 @@ func trimSpace(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+// detectQualityChecks invokes Claude CLI to analyze the codebase and return
+// a list of quality check commands.
+func detectQualityChecks(dir string) ([]string, error) {
+	fmt.Println("Analyzing the codebase...")
+
+	ctx := context.Background()
+	output, err := invokeClaudeFn(ctx, claude.InvokeOpts{
+		Prompt:   qualityCheckPrompt,
+		Dir:      dir,
+		Print:    true,
+		MaxTurns: 3,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return parseQualityChecks(output)
+}
+
+// parseQualityChecks parses Claude's YAML list output into a string slice.
+func parseQualityChecks(output string) ([]string, error) {
+	var checks []string
+	if err := yaml.Unmarshal([]byte(output), &checks); err != nil {
+		return nil, fmt.Errorf("parsing Claude output as YAML list: %w", err)
+	}
+	if len(checks) == 0 {
+		return nil, fmt.Errorf("Claude returned no quality checks")
+	}
+	return checks, nil
+}
+
+// buildConfigWithChecks generates ralph.yaml content with the given quality checks.
+func buildConfigWithChecks(projectName string, checks []string) string {
+	cfg := config.Config{
+		Project: projectName,
+		Repo: config.RepoConfig{
+			DefaultBase:   "main",
+			BranchPattern: "^ralph/[a-zA-Z0-9._-]+$",
+		},
+		Paths: config.PathsConfig{
+			TasksDir:  ".ralph/tasks",
+			SkillsDir: ".ralph/skills",
+		},
+		QualityChecks: checks,
+	}
+	out, _ := yaml.Marshal(&cfg)
+	return string(out)
 }

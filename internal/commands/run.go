@@ -33,6 +33,12 @@ func Run(args []string) error {
 
 	ctx := context.Background()
 
+	// Check if we're already inside a worktree — if so, run the loop here directly.
+	if wtRoot, ok := worktreeRoot(cfg.Repo.Path); ok {
+		log.Printf("[run] detected worktree at %s, resuming", wtRoot)
+		return runLoop(ctx, wtRoot, *maxIter, cfg.QualityChecks)
+	}
+
 	// 1. Read staged PRD
 	stagedPath := cfg.StatePRDPath()
 	p, err := prd.Read(stagedPath)
@@ -62,6 +68,9 @@ func Run(args []string) error {
 
 	// 3. Handle existing branch
 	r := &shell.Runner{Dir: cfg.Repo.Path}
+	var worktreePath string
+	resuming := false
+
 	if gitops.BranchExistsLocally(ctx, r, p.BranchName) {
 		choice, err := promptBranchConflict(p.BranchName, cfg.Repo.DefaultBase)
 		if err != nil {
@@ -76,45 +85,80 @@ func Run(args []string) error {
 				return fmt.Errorf("deleting existing branch: %w", err)
 			}
 			log.Printf("[run] deleted branch %s, starting fresh", p.BranchName)
+		} else {
+			worktreePath = gitops.WorktreePath(cfg.Repo.Path, p.BranchName)
+			resuming = true
+			log.Printf("[run] resuming in existing worktree at %s", worktreePath)
 		}
 	}
 
-	// 4. Create worktree
-	worktreePath, err := gitops.CreateWorktree(ctx, r, cfg.Repo.Path, p.BranchName, cfg.Repo.DefaultBase)
-	if err != nil {
-		return fmt.Errorf("creating worktree: %w", err)
-	}
-	log.Printf("[run] created worktree at %s", worktreePath)
+	if !resuming {
+		// 4. Create worktree
+		var createErr error
+		worktreePath, createErr = gitops.CreateWorktree(ctx, r, cfg.Repo.Path, p.BranchName, cfg.Repo.DefaultBase)
+		if createErr != nil {
+			return fmt.Errorf("creating worktree: %w", createErr)
+		}
+		log.Printf("[run] created worktree at %s", worktreePath)
 
-	// 5. Copy .ralph into worktree
-	if err := gitops.CopyDotRalph(cfg.Repo.Path, worktreePath); err != nil {
-		return fmt.Errorf("copying .ralph: %w", err)
+		// 5. Copy .ralph into worktree
+		if err := gitops.CopyDotRalph(cfg.Repo.Path, worktreePath); err != nil {
+			return fmt.Errorf("copying .ralph: %w", err)
+		}
+
+		// 6. Write prd.json into worktree
+		prdPath := filepath.Join(worktreePath, ".ralph", "state", "prd.json")
+		if err := os.MkdirAll(filepath.Dir(prdPath), 0755); err != nil {
+			return fmt.Errorf("creating worktree state directory: %w", err)
+		}
+		if err := prd.Write(prdPath, p); err != nil {
+			return fmt.Errorf("writing PRD to worktree: %w", err)
+		}
 	}
 
-	// 6. Write prd.json into worktree
-	worktreePRDPath := filepath.Join(worktreePath, ".ralph", "state", "prd.json")
-	if err := os.MkdirAll(filepath.Dir(worktreePRDPath), 0755); err != nil {
-		return fmt.Errorf("creating worktree state directory: %w", err)
-	}
-	if err := prd.Write(worktreePRDPath, p); err != nil {
-		return fmt.Errorf("writing PRD to worktree: %w", err)
-	}
+	return runLoop(ctx, worktreePath, *maxIter, cfg.QualityChecks)
+}
 
-	// 7. Run the execution loop
-	err = loop.Run(ctx, loop.Config{
-		MaxIterations: *maxIter,
-		WorkDir:       worktreePath,
+func runLoop(ctx context.Context, workDir string, maxIter int, qualityChecks []string) error {
+	worktreePRDPath := filepath.Join(workDir, ".ralph", "state", "prd.json")
+	err := loop.Run(ctx, loop.Config{
+		MaxIterations: maxIter,
+		WorkDir:       workDir,
 		PRDPath:       worktreePRDPath,
-		ProgressPath:  filepath.Join(worktreePath, ".ralph", "progress.txt"),
-		QualityChecks: cfg.QualityChecks,
+		ProgressPath:  filepath.Join(workDir, ".ralph", "progress.txt"),
+		QualityChecks: qualityChecks,
 	})
 	if err != nil {
 		log.Printf("[run] loop ended: %v", err)
 		return err
 	}
 
-	log.Printf("[run] complete for branch %s", p.BranchName)
+	log.Println("[run] complete")
 	return nil
+}
+
+// worktreeRoot checks if repoPath (derived from config file location) is
+// inside a .ralph/worktrees/ directory. This happens when the user runs
+// `ralph run` from within an existing worktree (which has a copied
+// .ralph/ralph.yaml). Returns the worktree root path and true if detected.
+func worktreeRoot(repoPath string) (string, bool) {
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		return "", false
+	}
+	sep := string(filepath.Separator)
+	marker := sep + ".ralph" + sep + "worktrees" + sep
+	idx := strings.Index(absPath, marker)
+	if idx < 0 {
+		return "", false
+	}
+	// The worktree root is the first path component after .ralph/worktrees/
+	afterMarker := absPath[idx+len(marker):]
+	slashIdx := strings.Index(afterMarker, sep)
+	if slashIdx >= 0 {
+		return absPath[:idx+len(marker)+slashIdx], true
+	}
+	return absPath, true
 }
 
 // promptBranchConflict asks the user whether to start fresh or resume an
