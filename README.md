@@ -232,10 +232,28 @@ ralph chat --project-config /path/to/config.yaml
 
 **Behavior:**
 
-- If a project config is found, Claude is given the project name as
-  context and the working directory is set to the repo path
-- If no config is found, launches a plain Claude interactive session
+- Must be run from inside a worktree (use `ralph run` first)
+- Claude is given the project name, config, progress log, and recent
+  git history as context
 - stdin/stdout are connected directly to your terminal
+
+---
+
+### `ralph switch`
+
+Interactively select a worktree and open a new shell session inside it.
+Type `exit` to return to where you were.
+
+```bash
+ralph switch
+ralph switch --project-config /path/to/config.yaml
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-config` | auto-discover | Path to project config YAML |
 
 ---
 

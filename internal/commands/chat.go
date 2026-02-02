@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -23,11 +22,11 @@ func Chat(args []string) error {
 
 	cfg, err := ResolveConfig(*configPath)
 	if err != nil {
-		log.Printf("[chat] no project config found, running without context: %v", err)
-		_, invokeErr := claude.Invoke(context.Background(), claude.InvokeOpts{
-			Interactive: true,
-		})
-		return invokeErr
+		return fmt.Errorf("resolving config: %w", err)
+	}
+
+	if _, ok := worktreeRoot(cfg.Repo.Path); !ok {
+		return fmt.Errorf("ralph chat must be run from inside a worktree\n\nUse 'ralph run' first to create a worktree, then cd into it.")
 	}
 
 	data := prompts.ChatSystemData{

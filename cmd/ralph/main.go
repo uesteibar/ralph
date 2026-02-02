@@ -17,6 +17,7 @@ Usage:
   ralph prd new [--project-config path]
   ralph run [--project-config path] [--max-iterations n]
   ralph chat [--project-config path]
+  ralph switch [--project-config path]
 
 Flags:
   --project-config    Path to project config YAML (default: discover .ralph/ralph.yaml)
@@ -47,6 +48,8 @@ func main() {
 		err = commands.PRD(rest)
 	case "chat":
 		err = commands.Chat(rest)
+	case "switch":
+		err = commands.Switch(rest)
 	case "help", "-h", "--help":
 		usage()
 		return
