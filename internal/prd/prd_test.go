@@ -137,3 +137,196 @@ func TestRead_InvalidJSON_ReturnsError(t *testing.T) {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
+
+func TestIntegrationTests_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prd.json")
+
+	original := &PRD{
+		Project:     "TestProject",
+		BranchName:  "ralph/test",
+		Description: "Test with integration tests",
+		UserStories: []Story{
+			{ID: "US-001", Title: "First", Passes: true},
+		},
+		IntegrationTests: []IntegrationTest{
+			{
+				ID:          "IT-001",
+				Description: "Test login flow",
+				Steps:       []string{"Open login page", "Enter credentials", "Click submit"},
+				Passes:      false,
+				Failure:     "Button not found",
+				Notes:       "Needs UI update",
+			},
+			{
+				ID:          "IT-002",
+				Description: "Test logout",
+				Steps:       []string{"Click logout"},
+				Passes:      true,
+				Failure:     "",
+				Notes:       "",
+			},
+		},
+	}
+
+	if err := Write(path, original); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	loaded, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if len(loaded.IntegrationTests) != 2 {
+		t.Fatalf("IntegrationTests count = %d, want 2", len(loaded.IntegrationTests))
+	}
+
+	it := loaded.IntegrationTests[0]
+	if it.ID != "IT-001" {
+		t.Errorf("IT[0].ID = %q, want %q", it.ID, "IT-001")
+	}
+	if it.Description != "Test login flow" {
+		t.Errorf("IT[0].Description = %q, want %q", it.Description, "Test login flow")
+	}
+	if len(it.Steps) != 3 {
+		t.Errorf("IT[0].Steps count = %d, want 3", len(it.Steps))
+	}
+	if it.Steps[0] != "Open login page" {
+		t.Errorf("IT[0].Steps[0] = %q, want %q", it.Steps[0], "Open login page")
+	}
+	if it.Passes != false {
+		t.Errorf("IT[0].Passes = %v, want false", it.Passes)
+	}
+	if it.Failure != "Button not found" {
+		t.Errorf("IT[0].Failure = %q, want %q", it.Failure, "Button not found")
+	}
+	if it.Notes != "Needs UI update" {
+		t.Errorf("IT[0].Notes = %q, want %q", it.Notes, "Needs UI update")
+	}
+
+	it2 := loaded.IntegrationTests[1]
+	if it2.Passes != true {
+		t.Errorf("IT[1].Passes = %v, want true", it2.Passes)
+	}
+}
+
+func TestRead_PRDWithoutIntegrationTests_ParsesCorrectly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prd.json")
+
+	// Write a PRD JSON without integrationTests field
+	jsonData := `{
+  "project": "OldProject",
+  "branchName": "ralph/old-feature",
+  "description": "Legacy PRD",
+  "userStories": [
+    {"id": "US-001", "title": "Story", "passes": true}
+  ]
+}`
+	if err := os.WriteFile(path, []byte(jsonData), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if loaded.Project != "OldProject" {
+		t.Errorf("Project = %q, want %q", loaded.Project, "OldProject")
+	}
+	if len(loaded.UserStories) != 1 {
+		t.Errorf("UserStories count = %d, want 1", len(loaded.UserStories))
+	}
+	// IntegrationTests should be nil or empty
+	if len(loaded.IntegrationTests) != 0 {
+		t.Errorf("IntegrationTests count = %d, want 0 for legacy PRD", len(loaded.IntegrationTests))
+	}
+}
+
+func TestAllIntegrationTestsPass_Empty_ReturnsTrue(t *testing.T) {
+	p := &PRD{}
+	if !AllIntegrationTestsPass(p) {
+		t.Error("AllIntegrationTestsPass should be true when there are no integration tests")
+	}
+}
+
+func TestAllIntegrationTestsPass_AllTrue(t *testing.T) {
+	p := &PRD{
+		IntegrationTests: []IntegrationTest{
+			{ID: "IT-001", Passes: true},
+			{ID: "IT-002", Passes: true},
+		},
+	}
+	if !AllIntegrationTestsPass(p) {
+		t.Error("AllIntegrationTestsPass should be true when all tests pass")
+	}
+}
+
+func TestAllIntegrationTestsPass_SomeFailing(t *testing.T) {
+	p := &PRD{
+		IntegrationTests: []IntegrationTest{
+			{ID: "IT-001", Passes: true},
+			{ID: "IT-002", Passes: false},
+		},
+	}
+	if AllIntegrationTestsPass(p) {
+		t.Error("AllIntegrationTestsPass should be false when some tests fail")
+	}
+}
+
+func TestAllIntegrationTestsPass_AllFailing(t *testing.T) {
+	p := &PRD{
+		IntegrationTests: []IntegrationTest{
+			{ID: "IT-001", Passes: false},
+			{ID: "IT-002", Passes: false},
+		},
+	}
+	if AllIntegrationTestsPass(p) {
+		t.Error("AllIntegrationTestsPass should be false when all tests fail")
+	}
+}
+
+func TestFailedIntegrationTests_ReturnsOnlyFailing(t *testing.T) {
+	p := &PRD{
+		IntegrationTests: []IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: true},
+			{ID: "IT-002", Description: "Test 2", Passes: false},
+			{ID: "IT-003", Description: "Test 3", Passes: false},
+		},
+	}
+
+	failed := FailedIntegrationTests(p)
+
+	if len(failed) != 2 {
+		t.Fatalf("expected 2 failed tests, got %d", len(failed))
+	}
+	if failed[0].ID != "IT-002" {
+		t.Errorf("failed[0].ID = %q, want %q", failed[0].ID, "IT-002")
+	}
+	if failed[1].ID != "IT-003" {
+		t.Errorf("failed[1].ID = %q, want %q", failed[1].ID, "IT-003")
+	}
+}
+
+func TestFailedIntegrationTests_Empty_ReturnsNil(t *testing.T) {
+	p := &PRD{}
+	failed := FailedIntegrationTests(p)
+	if failed != nil {
+		t.Errorf("expected nil for empty PRD, got %v", failed)
+	}
+}
+
+func TestFailedIntegrationTests_AllPassing_ReturnsNil(t *testing.T) {
+	p := &PRD{
+		IntegrationTests: []IntegrationTest{
+			{ID: "IT-001", Passes: true},
+			{ID: "IT-002", Passes: true},
+		},
+	}
+	failed := FailedIntegrationTests(p)
+	if failed != nil {
+		t.Errorf("expected nil when all tests pass, got %v", failed)
+	}
+}

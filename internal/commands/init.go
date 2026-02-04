@@ -66,6 +66,19 @@ Write a valid JSON file to ` + "`.ralph/state/prd.json`" + ` with this exact sch
       "passes": false,
       "notes": ""
     }
+  ],
+  "integrationTests": [
+    {
+      "id": "IT-001",
+      "description": "<what this test verifies at a feature level>",
+      "steps": [
+        "Step 1: <action to perform>",
+        "Step 2: <expected result to verify>"
+      ],
+      "passes": false,
+      "failure": "",
+      "notes": ""
+    }
   ]
 }
 ` + "```" + `
@@ -78,6 +91,14 @@ Write a valid JSON file to ` + "`.ralph/state/prd.json`" + ` with this exact sch
 - Include "All quality checks pass" in every story's acceptance criteria
 - All stories start with ` + "`passes: false`" + `
 - Priority determines execution order (1 = first)
+
+## Integration Test Rules
+
+- Include integration tests agreed upon during PRD discussion
+- Each test has: id (IT-xxx), description, steps (array), passes, failure, notes
+- All integration tests start with ` + "`passes: false`" + `
+- ` + "`failure`" + ` field records why a test failed (empty string if not yet run)
+- ` + "`notes`" + ` field captures observations or additional context
 
 ## After Writing
 

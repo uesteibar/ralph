@@ -8,10 +8,11 @@ import (
 )
 
 type PRD struct {
-	Project     string  `json:"project"`
-	BranchName  string  `json:"branchName"`
-	Description string  `json:"description"`
-	UserStories []Story `json:"userStories"`
+	Project          string            `json:"project"`
+	BranchName       string            `json:"branchName"`
+	Description      string            `json:"description"`
+	UserStories      []Story           `json:"userStories"`
+	IntegrationTests []IntegrationTest `json:"integrationTests,omitempty"`
 }
 
 type Story struct {
@@ -22,6 +23,15 @@ type Story struct {
 	Priority           int      `json:"priority"`
 	Passes             bool     `json:"passes"`
 	Notes              string   `json:"notes"`
+}
+
+type IntegrationTest struct {
+	ID          string   `json:"id"`
+	Description string   `json:"description"`
+	Steps       []string `json:"steps"`
+	Passes      bool     `json:"passes"`
+	Failure     string   `json:"failure"`
+	Notes       string   `json:"notes"`
 }
 
 // Read loads a PRD from the given JSON file.
@@ -84,6 +94,17 @@ func AllPass(p *PRD) bool {
 	return true
 }
 
+// AllIntegrationTestsPass returns true when every integration test has Passes set to true.
+// Returns true if there are no integration tests.
+func AllIntegrationTestsPass(p *PRD) bool {
+	for _, t := range p.IntegrationTests {
+		if !t.Passes {
+			return false
+		}
+	}
+	return true
+}
+
 // MarkPassing sets the story with the given ID to Passes=true.
 func MarkPassing(p *PRD, storyID string) bool {
 	for i := range p.UserStories {
@@ -93,4 +114,15 @@ func MarkPassing(p *PRD, storyID string) bool {
 		}
 	}
 	return false
+}
+
+// FailedIntegrationTests returns all integration tests where Passes is false.
+func FailedIntegrationTests(p *PRD) []IntegrationTest {
+	var failed []IntegrationTest
+	for _, t := range p.IntegrationTests {
+		if !t.Passes {
+			failed = append(failed, t)
+		}
+	}
+	return failed
 }

@@ -73,6 +73,31 @@ func RenderRebaseConflict(data RebaseConflictData) (string, error) {
 	return render("templates/rebase_conflict.md", data)
 }
 
+// QAVerificationData holds the context for the QA verification prompt.
+type QAVerificationData struct {
+	PRDPath       string
+	ProgressPath  string
+	QualityChecks []string
+}
+
+// RenderQAVerification renders the prompt for QA integration test verification.
+func RenderQAVerification(data QAVerificationData) (string, error) {
+	return render("templates/qa_verification.md", data)
+}
+
+// QAFixData holds the context for the QA fix prompt.
+type QAFixData struct {
+	PRDPath       string
+	ProgressPath  string
+	QualityChecks []string
+	FailedTests   []prd.IntegrationTest
+}
+
+// RenderQAFix renders the prompt for fixing integration test failures.
+func RenderQAFix(data QAFixData) (string, error) {
+	return render("templates/qa_fix.md", data)
+}
+
 func render(name string, data any) (string, error) {
 	content, err := templateFS.ReadFile(name)
 	if err != nil {

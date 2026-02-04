@@ -113,3 +113,174 @@
   - The squash merge operates on `cfg.Repo.Path` (main repo), not the worktree cwd
   - The `formatStories` helper from rebase.go was reused conceptually, but `generateCommitMessage` filters to passing stories only
 ---
+
+## 2026-02-03 - US-001 (improve-work-success-verification)
+- Added `IntegrationTest` struct to `internal/prd/prd.go` with fields: ID, Description, Steps ([]string), Passes (bool), Failure (string), Notes (string)
+- Added `IntegrationTests []IntegrationTest` field to `PRD` struct with `json:"integrationTests,omitempty"` tag for backwards compatibility
+- Files changed:
+  - `internal/prd/prd.go` — added IntegrationTest struct and IntegrationTests field to PRD
+  - `internal/prd/prd_test.go` — added `TestIntegrationTests_Roundtrip` and `TestRead_PRDWithoutIntegrationTests_ParsesCorrectly`
+- **Learnings for future iterations:**
+  - Use `omitempty` JSON tag for new optional fields to ensure backwards compatibility with existing PRD files
+  - Slice fields with `omitempty` will be omitted from JSON output when nil/empty, maintaining clean output for PRDs without integration tests
+---
+
+## 2026-02-03 - US-002 (improve-work-success-verification)
+- Added "Proposing Integration Tests" section to `prd_new.md` prompt template
+- Section instructs LLM to propose integration tests after user stories are agreed upon
+- Includes structured format for tests (ID, Description, Steps) and guidelines emphasizing automated, re-runnable tests
+- Instructs LLM to present proposed tests and ask user to confirm/refine them
+- Files changed:
+  - `internal/prompts/templates/prd_new.md` — added new section between "Discuss, refine..." and "Story writing guidelines"
+- **Learnings for future iterations:**
+  - This change is prompt-only, no Go code changes needed (template is already embedded via go:embed in prompts.go)
+  - Existing tests pass because the template just needs to be valid text; no render function changes were required
+---
+
+## 2026-02-03 - US-003 (improve-work-success-verification)
+- Updated `finishSkillContent` constant in `internal/commands/init.go` to include integration tests in PRD JSON schema
+- Added `integrationTests` array to the JSON schema example with all fields: id, description, steps, passes, failure, notes
+- Added "Integration Test Rules" section documenting:
+  - Integration tests agreed upon during PRD discussion should be included
+  - All fields (id IT-xxx, description, steps array, passes, failure, notes)
+  - All integration tests start with `passes: false`
+  - Purpose of `failure` and `notes` fields
+- Files changed:
+  - `internal/commands/init.go` — updated `finishSkillContent` constant with integrationTests array and rules section
+- **Learnings for future iterations:**
+  - The `/finish` skill content is stored as a constant in `init.go`, not as a template file
+  - `ralph init` always rewrites `.claude/commands/finish.md` to keep it up to date
+  - The `.claude/` directory is gitignored, so skill updates require running `ralph init` again
+---
+
+## 2026-02-03 - US-004 (improve-work-success-verification)
+- Created `internal/prompts/templates/qa_verification.md` — comprehensive QA agent prompt for integration test verification
+- Prompt covers all acceptance criteria:
+  - Instructs agent to read `integrationTests` from PRD
+  - Instructs agent to BUILD automated tests for each integration test spec
+  - Instructs agent to ALSO verify autonomously (run app, check UI, call APIs)
+  - Instructs agent to install tooling as needed (Playwright, etc.)
+  - Instructs agent to update PRD with passes/failure/notes for each test
+  - Instructs agent to save reusable testing approaches in `.ralph/skills/`
+- Added `QAVerificationData` struct with fields: PRDPath, ProgressPath, QualityChecks
+- Added `RenderQAVerification(data QAVerificationData)` function in `prompts.go`
+- Added `TestRenderQAVerification_ContainsAllSections` test in `prompts_test.go`
+- Files changed:
+  - `internal/prompts/templates/qa_verification.md` — new file
+  - `internal/prompts/prompts.go` — added QAVerificationData struct and RenderQAVerification function
+  - `internal/prompts/prompts_test.go` — added test for QA verification prompt
+- **Learnings for future iterations:**
+  - Follow the established `XxxData` struct + `RenderXxx` function pattern for new templates
+  - The `//go:embed templates/*.md` directive automatically picks up new .md files
+  - Template uses `{{range .QualityChecks}}` for iterating over quality checks
+---
+
+## 2026-02-03 - US-005 (improve-work-success-verification)
+- Created `internal/prompts/templates/qa_fix.md` — QA fix agent prompt for resolving integration test failures
+- Prompt covers all acceptance criteria:
+  - Instructs agent to read integration test failures from PRD (via `FailedTests` field in template data)
+  - Instructs agent to FIRST reproduce failure with an automated test before fixing
+  - Instructs agent to fix the code until the automated test passes
+  - Specifies commit format: `fix(QA): <description>`
+- Added `QAFixData` struct with fields: PRDPath, ProgressPath, QualityChecks, FailedTests ([]prd.IntegrationTest)
+- Added `RenderQAFix(data QAFixData)` function in `prompts.go`
+- Added `TestRenderQAFix_ContainsAllSections` test in `prompts_test.go`
+- Files changed:
+  - `internal/prompts/templates/qa_fix.md` — new file
+  - `internal/prompts/prompts.go` — added QAFixData struct and RenderQAFix function
+  - `internal/prompts/prompts_test.go` — added test for QA fix prompt
+- **Learnings for future iterations:**
+  - QAFixData uses `[]prd.IntegrationTest` directly from the prd package for FailedTests
+  - Template iterates over failed tests with `{{range .FailedTests}}` and accesses fields like `.ID`, `.Description`, `.Steps`, `.Failure`, `.Notes`
+  - Nested range for steps: `{{range .Steps}}- {{.}}\n{{end}}`
+---
+
+## 2026-02-04 - US-006 (improve-work-success-verification)
+- Verified that render functions for QA templates were already implemented in US-004 and US-005
+- All acceptance criteria already satisfied:
+  - `QAVerificationData` struct exists with PRDPath, ProgressPath, QualityChecks fields
+  - `RenderQAVerification(data QAVerificationData)` renders qa_verification.md template
+  - `QAFixData` struct exists with PRDPath, ProgressPath, QualityChecks, FailedTests fields
+  - `RenderQAFix(data QAFixData)` renders qa_fix.md template
+  - Tests exist: `TestRenderQAVerification_ContainsAllSections`, `TestRenderQAFix_ContainsAllSections`
+- All quality checks pass (`just test`, `just vet`)
+- Files unchanged (implementation was complete)
+- **Learnings for future iterations:**
+  - Story dependencies: US-006 overlapped with US-004/US-005 — the render functions were implemented alongside the templates
+  - This is expected when iteratively breaking down work — sometimes a later story is effectively complete from earlier work
+---
+
+## 2026-02-04 - US-007 (improve-work-success-verification)
+- Added QA verification phase to the loop execution in `internal/loop/loop.go`
+- Implementation details:
+  - Added `invokeOpts` struct with `prompt`, `dir`, and `isQAVerification` fields for testable Claude invocations
+  - Added `invokeClaudeFn` package-level variable (defaulting to `claude.Invoke`) for testability
+  - Added `runQAVerification(ctx, cfg)` helper function that renders qa_verification.md and invokes Claude
+  - Modified main loop to detect when all stories pass (`NextUnfinished` returns nil)
+  - When stories complete and integration tests exist, loop invokes QA verification agent
+  - After QA agent completes, loop re-reads PRD and checks if all integration tests pass
+  - If tests don't pass, loop continues (allowing fix cycles in future US-008)
+  - If no integration tests exist, loop completes immediately after stories pass
+- Added comprehensive test suite in `internal/loop/loop_test.go`:
+  - `TestRun_InvokesQAVerificationWhenAllStoriesPass` — verifies QA agent is invoked when stories complete
+  - `TestRun_SkipsQAVerificationWhenNoIntegrationTests` — verifies no QA invocation without integration tests
+  - `TestRun_QAVerificationReceivesCorrectContext` — verifies correct WorkDir and prompt context
+  - `TestRun_ReturnsSuccessAfterQAVerificationCompletes` — verifies loop exits on success
+  - `TestRun_ContinuesLoopIfQAVerificationDoesNotPassAllTests` — verifies retry behavior
+  - `TestEnsureProgressFile_CreatesFileIfNotExists` and `TestEnsureProgressFile_DoesNotOverwriteExisting`
+- Files changed:
+  - `internal/loop/loop.go` — added invokeOpts, invokeClaudeFn, runQAVerification; modified Run to detect story completion and invoke QA
+  - `internal/loop/loop_test.go` — new file with 7 tests covering QA verification behavior
+- **Learnings for future iterations:**
+  - The `invokeOpts.isQAVerification` flag allows tests to distinguish QA invocations from story invocations
+  - Loop continues after QA verification if tests fail — this prepares for US-008's fix cycle
+  - When no integration tests exist, loop exits immediately after stories pass (backwards compatible)
+  - The same `invokeClaudeFn` pattern from `internal/commands/init.go` works well for loop testing
+---
+
+## 2026-02-04 - US-008 (improve-work-success-verification)
+- Added QA fix cycle to loop execution in `internal/loop/loop.go`
+- Implementation details:
+  - Added `isQAFix` field to `invokeOpts` struct for testability
+  - Added `runQAFix(ctx, cfg, failedTests)` helper function that renders qa_fix.md with failed tests and invokes Claude
+  - Modified loop to invoke fix agent after QA verification when tests fail
+  - Loop flow: QA verification → check for failures → invoke fix agent → re-verify (continues until all pass or max iterations)
+- Added `FailedIntegrationTests(p *PRD)` helper to `internal/prd/prd.go`:
+  - Returns slice of integration tests where `Passes == false`
+  - Returns nil when no tests fail (consistent with Go slice semantics)
+- Added comprehensive test suite:
+  - `TestFailedIntegrationTests_ReturnsOnlyFailing` — verifies correct filtering
+  - `TestFailedIntegrationTests_Empty_ReturnsNil` — verifies nil for empty PRD
+  - `TestFailedIntegrationTests_AllPassing_ReturnsNil` — verifies nil when all pass
+  - `TestRun_InvokesQAFixWhenIntegrationTestsFail` — verifies fix agent is invoked after verification fails
+  - `TestRun_QAFixReceivesFailedTests` — verifies fix prompt contains failed test details (ID, failure message)
+  - `TestRun_FixCycleContinuesUntilAllTestsPass` — verifies multiple fix iterations work
+  - `TestRun_FixCycleRespectsMaxIterations` — verifies max iterations limit is enforced
+- Files changed:
+  - `internal/loop/loop.go` — added isQAFix flag, runQAFix function, modified loop to invoke fix cycle
+  - `internal/loop/loop_test.go` — added 4 new tests for fix cycle behavior
+  - `internal/prd/prd.go` — added FailedIntegrationTests function
+  - `internal/prd/prd_test.go` — added 3 tests for FailedIntegrationTests
+- **Learnings for future iterations:**
+  - The fix cycle naturally integrates with the existing verification loop — after fix, next iteration re-verifies
+  - `FailedIntegrationTests` returns nil (not empty slice) when no failures, following Go conventions
+  - The `isQAFix` flag in invokeOpts allows tests to distinguish fix invocations from verification invocations
+  - Fix prompt receives full IntegrationTest structs including Failure field for context
+---
+
+## 2026-02-04 - US-009 (improve-work-success-verification)
+- Updated `loop_iteration.md` prompt to reflect new completion criteria requiring both stories AND integration tests to pass
+- Added two new tests to `loop_test.go`:
+  - `TestRun_CompleteSignalRejectedWhenIntegrationTestsFail` — verifies COMPLETE signal is rejected when integration tests fail
+  - `TestRun_CompleteSignalAcceptedWhenBothStoriesAndIntegrationTestsPass` — verifies loop exits immediately when all pass
+- Added `TestRenderLoopIteration_CompletionRequiresBothStoriesAndIntegrationTests` to `prompts_test.go` — verifies template mentions both userStories and integrationTests in completion criteria
+- The loop.go code already had the correct implementation from US-007/US-008 — this story updates the agent prompt to match
+- Files changed:
+  - `internal/prompts/templates/loop_iteration.md` — updated completion check section
+  - `internal/prompts/prompts_test.go` — added template test for completion criteria
+  - `internal/loop/loop_test.go` — added two tests for COMPLETE signal behavior
+- **Learnings for future iterations:**
+  - The loop completion logic was already implemented in US-007/US-008; this story focused on the prompt documentation
+  - Tests verify both the template content (prompts_test.go) and the runtime behavior (loop_test.go)
+  - When testing COMPLETE signal rejection, ensure the test starts with a story that needs to be marked as passing
+---

@@ -18,6 +18,23 @@ const (
 	iterationDelay       = 2 * time.Second
 )
 
+// invokeOpts holds parameters for Claude invocation (used for testability).
+type invokeOpts struct {
+	prompt           string
+	dir              string
+	isQAVerification bool
+	isQAFix          bool
+}
+
+// invokeClaudeFn is the function used to invoke Claude. Package-level var for testability.
+var invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+	return claude.Invoke(ctx, claude.InvokeOpts{
+		Prompt: opts.prompt,
+		Dir:    opts.dir,
+		Print:  true,
+	})
+}
+
 // Config holds the parameters for a Ralph execution loop.
 type Config struct {
 	MaxIterations int
@@ -29,7 +46,8 @@ type Config struct {
 
 // Run executes the Ralph loop: for each iteration, it reads the PRD, picks
 // the next unfinished story, invokes Claude to implement it, and checks for
-// the completion signal. Returns nil when all stories are done or an error
+// the completion signal. When all stories pass, it invokes QA verification.
+// Returns nil when all stories and integration tests are done or an error
 // if max iterations are reached.
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.MaxIterations <= 0 {
@@ -51,8 +69,46 @@ func Run(ctx context.Context, cfg Config) error {
 
 		story := prd.NextUnfinished(currentPRD)
 		if story == nil {
-			log.Println("[loop] all stories pass — done")
-			return nil
+			// All user stories pass — check if QA verification is needed
+			if len(currentPRD.IntegrationTests) == 0 {
+				log.Println("[loop] all stories pass, no integration tests — done")
+				return nil
+			}
+
+			if prd.AllIntegrationTestsPass(currentPRD) {
+				log.Println("[loop] all stories and integration tests pass — done")
+				return nil
+			}
+
+			// Run QA verification phase
+			log.Println("[loop] all stories pass — running QA verification")
+			if err := runQAVerification(ctx, cfg); err != nil {
+				log.Printf("[loop] QA verification error: %v", err)
+			}
+
+			// Re-read PRD after QA verification and check if all tests pass
+			verifyPRD, err := prd.Read(cfg.PRDPath)
+			if err != nil {
+				log.Printf("[loop] failed to read PRD after QA: %v — continuing loop", err)
+			} else if prd.AllIntegrationTestsPass(verifyPRD) {
+				log.Println("[loop] QA verification complete — all integration tests pass")
+				return nil
+			}
+
+			// Get failed tests and invoke fix agent
+			failedTests := prd.FailedIntegrationTests(verifyPRD)
+			if len(failedTests) > 0 {
+				log.Printf("[loop] %d integration tests failed — running QA fix agent", len(failedTests))
+				if err := runQAFix(ctx, cfg, failedTests); err != nil {
+					log.Printf("[loop] QA fix error: %v", err)
+				}
+			}
+
+			// Continue loop to allow re-verification after fix
+			if i < cfg.MaxIterations {
+				time.Sleep(iterationDelay)
+			}
+			continue
 		}
 
 		log.Printf("[loop] working on %s: %s", story.ID, story.Title)
@@ -62,10 +118,9 @@ func Run(ctx context.Context, cfg Config) error {
 			return fmt.Errorf("rendering prompt for %s: %w", story.ID, err)
 		}
 
-		output, err := claude.Invoke(ctx, claude.InvokeOpts{
-			Prompt: prompt,
-			Dir:    cfg.WorkDir,
-			Print:  true,
+		output, err := invokeClaudeFn(ctx, invokeOpts{
+			prompt: prompt,
+			dir:    cfg.WorkDir,
 		})
 		if err != nil {
 			log.Printf("[loop] Claude returned error on %s: %v", story.ID, err)
@@ -74,7 +129,32 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 
 		if claude.ContainsComplete(output) {
-			log.Println("[loop] Ralph signaled COMPLETE")
+			log.Println("[loop] Ralph signaled COMPLETE — verifying PRD state")
+
+			// Re-read PRD to verify all stories and integration tests actually pass.
+			// This guards against Claude hallucinating completion or stale data.
+			verifyPRD, err := prd.Read(cfg.PRDPath)
+			if err != nil {
+				log.Printf("[loop] failed to verify PRD: %v — continuing loop", err)
+				continue
+			}
+
+			if !prd.AllPass(verifyPRD) {
+				log.Println("[loop] COMPLETE signal received but not all user stories pass — continuing loop")
+				continue
+			}
+
+			if len(verifyPRD.IntegrationTests) == 0 {
+				log.Println("[loop] verified: all stories pass, no integration tests — done")
+				return nil
+			}
+
+			if !prd.AllIntegrationTestsPass(verifyPRD) {
+				log.Println("[loop] COMPLETE signal received but not all integration tests pass — continuing loop")
+				continue
+			}
+
+			log.Println("[loop] verified: all stories and integration tests pass — done")
 			return nil
 		}
 
@@ -84,6 +164,45 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	return fmt.Errorf("max iterations (%d) reached without completing all stories", cfg.MaxIterations)
+}
+
+// runQAVerification invokes the QA verification agent with the qa_verification.md prompt.
+func runQAVerification(ctx context.Context, cfg Config) error {
+	prompt, err := prompts.RenderQAVerification(prompts.QAVerificationData{
+		PRDPath:       cfg.PRDPath,
+		ProgressPath:  cfg.ProgressPath,
+		QualityChecks: cfg.QualityChecks,
+	})
+	if err != nil {
+		return fmt.Errorf("rendering QA verification prompt: %w", err)
+	}
+
+	_, err = invokeClaudeFn(ctx, invokeOpts{
+		prompt:           prompt,
+		dir:              cfg.WorkDir,
+		isQAVerification: true,
+	})
+	return err
+}
+
+// runQAFix invokes the QA fix agent with the qa_fix.md prompt to resolve failing integration tests.
+func runQAFix(ctx context.Context, cfg Config, failedTests []prd.IntegrationTest) error {
+	prompt, err := prompts.RenderQAFix(prompts.QAFixData{
+		PRDPath:       cfg.PRDPath,
+		ProgressPath:  cfg.ProgressPath,
+		QualityChecks: cfg.QualityChecks,
+		FailedTests:   failedTests,
+	})
+	if err != nil {
+		return fmt.Errorf("rendering QA fix prompt: %w", err)
+	}
+
+	_, err = invokeClaudeFn(ctx, invokeOpts{
+		prompt:  prompt,
+		dir:     cfg.WorkDir,
+		isQAFix: true,
+	})
+	return err
 }
 
 func ensureProgressFile(path string) {
