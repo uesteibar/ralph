@@ -22,7 +22,7 @@ func Run(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	configPath := AddProjectConfigFlag(fs)
 	maxIter := fs.Int("max-iterations", loop.DefaultMaxIterations, "Maximum loop iterations")
-	verbose := fs.Bool("verbose", true, "Stream Claude's output in real-time")
+	verbose := fs.Bool("verbose", false, "Enable verbose debug logging")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

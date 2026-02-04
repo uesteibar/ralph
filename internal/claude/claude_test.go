@@ -47,6 +47,30 @@ func TestBuildArgs_InteractiveWithPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_Verbose(t *testing.T) {
+	args := buildArgs(InvokeOpts{Print: true, Verbose: true})
+	assertContains(t, args, "--verbose")
+}
+
+func TestBuildArgs_VerboseFalse(t *testing.T) {
+	args := buildArgs(InvokeOpts{Print: true, Verbose: false})
+	for _, a := range args {
+		if a == "--verbose" {
+			t.Error("--verbose should not be present when Verbose is false")
+		}
+	}
+}
+
+func TestBuildArgs_PrintWithPrompt_PromptNotInArgs(t *testing.T) {
+	args := buildArgs(InvokeOpts{Print: true, Prompt: "test prompt"})
+	// Prompt is passed via stdin, not as CLI argument
+	for _, a := range args {
+		if a == "test prompt" {
+			t.Error("prompt should not be in args (uses stdin)")
+		}
+	}
+}
+
 func assertContains(t *testing.T, args []string, want string) {
 	t.Helper()
 	for _, a := range args {

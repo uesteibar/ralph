@@ -105,3 +105,26 @@ func TestRunWithStdinStreaming_WorkingDirectory(t *testing.T) {
 		t.Errorf("pwd = %q, want /tmp or /private/tmp", got)
 	}
 }
+
+func TestRunWithPTY_ReturnsOutput(t *testing.T) {
+	r := &Runner{}
+	out, err := r.RunWithPTY(context.Background(), "echo", "hello pty")
+	if err != nil {
+		t.Fatalf("RunWithPTY failed: %v", err)
+	}
+	if !strings.Contains(out, "hello pty") {
+		t.Errorf("output = %q, want to contain %q", out, "hello pty")
+	}
+}
+
+func TestRunWithPTY_WorkingDirectory(t *testing.T) {
+	r := &Runner{Dir: "/tmp"}
+	out, err := r.RunWithPTY(context.Background(), "pwd")
+	if err != nil {
+		t.Fatalf("RunWithPTY failed: %v", err)
+	}
+	got := strings.TrimSpace(out)
+	if got != "/tmp" && got != "/private/tmp" {
+		t.Errorf("pwd = %q, want /tmp or /private/tmp", got)
+	}
+}

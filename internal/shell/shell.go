@@ -125,6 +125,11 @@ func (r *Runner) RunWithStdinStreaming(ctx context.Context, stdin string, name s
 	return stdout.String(), nil
 }
 
+// RunWithPTY is deprecated - use RunWithStreamJSON for Claude CLI.
+func (r *Runner) RunWithPTY(ctx context.Context, name string, args ...string) (string, error) {
+	return r.RunWithStdin(ctx, "", name, args...)
+}
+
 func (r *Runner) environ() []string {
 	if len(r.Env) == 0 {
 		return nil // inherit parent
