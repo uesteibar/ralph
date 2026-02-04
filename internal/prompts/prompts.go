@@ -20,10 +20,11 @@ type LoopIterationData struct {
 	AcceptanceCriteria []string
 	QualityChecks      []string
 	ProgressPath       string
+	PRDPath            string
 }
 
 // RenderLoopIteration renders the prompt for a single Ralph loop iteration.
-func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath string) (string, error) {
+func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath, prdPath string) (string, error) {
 	data := LoopIterationData{
 		StoryID:            story.ID,
 		StoryTitle:         story.Title,
@@ -31,18 +32,21 @@ func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath 
 		AcceptanceCriteria: story.AcceptanceCriteria,
 		QualityChecks:      qualityChecks,
 		ProgressPath:       progressPath,
+		PRDPath:            prdPath,
 	}
 	return render("templates/loop_iteration.md", data)
 }
 
 // PRDNewData holds the context for the interactive PRD creation prompt.
 type PRDNewData struct {
-	ProjectName string
+	ProjectName     string
+	PRDPath         string
+	WorkspaceBranch string
 }
 
 // RenderPRDNew renders the prompt for interactive PRD creation.
-func RenderPRDNew(projectName string) (string, error) {
-	return render("templates/prd_new.md", PRDNewData{ProjectName: projectName})
+func RenderPRDNew(data PRDNewData) (string, error) {
+	return render("templates/prd_new.md", data)
 }
 
 // ChatSystemData holds the context for the chat system prompt.
@@ -51,6 +55,7 @@ type ChatSystemData struct {
 	Config        string
 	Progress      string
 	RecentCommits string
+	PRDContext    string
 }
 
 // RenderChatSystem renders the system prompt for a free-form chat session.

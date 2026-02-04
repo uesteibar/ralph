@@ -28,48 +28,6 @@ func DeleteBranch(ctx context.Context, r *shell.Runner, branch string) error {
 	return nil
 }
 
-// WorktreePath returns the path where a worktree for the given branch would live.
-func WorktreePath(repoPath, branch string) string {
-	return filepath.Join(repoPath, ".ralph", "worktrees", sanitizeBranch(branch))
-}
-
-// CreateWorktree creates a git worktree for the given branch. If the branch
-// already exists locally or on remote, it is checked out directly. Otherwise
-// a new branch is created from base. Returns the worktree path.
-func CreateWorktree(ctx context.Context, r *shell.Runner, repoPath, branch, base string) (string, error) {
-	worktreeRoot := filepath.Join(repoPath, ".ralph", "worktrees")
-	if err := os.MkdirAll(worktreeRoot, 0755); err != nil {
-		return "", fmt.Errorf("creating worktree root: %w", err)
-	}
-
-	worktreePath := filepath.Join(worktreeRoot, sanitizeBranch(branch))
-
-	repoRunner := &shell.Runner{Dir: repoPath}
-
-	// Fetch latest from origin
-	_, _ = repoRunner.Run(ctx, "git", "fetch", "origin", base)
-
-	// Check if branch exists locally or on remote
-	existsLocally := BranchExistsLocally(ctx, repoRunner, branch)
-
-	_, err := repoRunner.Run(ctx, "git", "rev-parse", "--verify", "refs/remotes/origin/"+branch)
-	existsRemote := err == nil
-
-	var worktreeErr error
-	if existsLocally || existsRemote {
-		// Branch already exists — check it out directly
-		_, worktreeErr = repoRunner.Run(ctx, "git", "worktree", "add", worktreePath, branch)
-	} else {
-		// New branch — create from origin/<base>
-		_, worktreeErr = repoRunner.Run(ctx, "git", "worktree", "add", "-b", branch, worktreePath, "origin/"+base)
-	}
-	if worktreeErr != nil {
-		return "", fmt.Errorf("creating worktree for %s: %w", branch, worktreeErr)
-	}
-
-	return worktreePath, nil
-}
-
 // RemoveWorktree removes a git worktree.
 func RemoveWorktree(ctx context.Context, r *shell.Runner, repoPath, worktreePath string) error {
 	repoRunner := &shell.Runner{Dir: repoPath}
@@ -100,8 +58,17 @@ func CopyDotRalph(repoPath, worktreePath string) error {
 	// Directories to skip — these are gitignored ephemeral data that should
 	// not be copied into worktrees (and worktrees/ would recurse infinitely).
 	skipDirs := map[string]bool{
-		"worktrees": true,
-		"state":     true,
+		"worktrees":  true,
+		"state":      true,
+		"workspaces": true,
+	}
+
+	// Files to skip — ralph.yaml must not be copied into workspace trees
+	// because config.Discover() would find it there and derive Repo.Path as
+	// the tree path instead of the real repo root, causing doubled paths in
+	// workspace resolution.
+	skipFiles := map[string]bool{
+		"ralph.yaml": true,
 	}
 
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
@@ -116,6 +83,10 @@ func CopyDotRalph(repoPath, worktreePath string) error {
 
 		if d.IsDir() && skipDirs[rel] {
 			return fs.SkipDir
+		}
+
+		if !d.IsDir() && skipFiles[rel] {
+			return nil
 		}
 
 		target := filepath.Join(dst, rel)
@@ -355,11 +326,6 @@ func MainRepoPath(ctx context.Context, r *shell.Runner) (string, error) {
 	// main repo itself. The parent of .git is the repo root.
 	gitCommonDir := strings.TrimSpace(out)
 	return filepath.Dir(gitCommonDir), nil
-}
-
-// sanitizeBranch replaces path separators in branch names for safe directory names.
-func sanitizeBranch(branch string) string {
-	return strings.ReplaceAll(branch, "/", "__")
 }
 
 // CopyGlobPatterns copies files matching glob patterns from srcDir to dstDir.

@@ -18,6 +18,9 @@ func Validate(args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	wc, _ := resolveWorkContextFromFlags("", cfg.Repo.Path)
+	printWorkspaceHeader(wc, cfg.Repo.Path)
+
 	issues := cfg.Validate()
 	if len(issues) == 0 {
 		fmt.Println("Config is valid.")

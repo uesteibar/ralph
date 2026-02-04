@@ -4,138 +4,53 @@ An autonomous coding agent loop. Ralph takes a feature description, breaks
 it into right-sized user stories, and implements them one by one -- running
 quality checks and committing after each step -- until the feature is done.
 
-You work from your terminal. Ralph works in an isolated git worktree.
+You work from your terminal. Ralph works in an isolated workspace.
 
 ## How It Works
 
-1. You describe a feature interactively with Claude
-2. When you're happy, type `/finish` -- Claude generates a structured PRD
+1. You create a **workspace** -- an isolated git worktree with its own branch
+2. You describe a feature interactively with Claude
+3. When you're happy, type `/finish` -- Claude generates a structured PRD
    with user stories and integration tests
-3. Ralph creates an isolated worktree and loops through stories:
+4. Ralph loops through stories in your workspace:
    - Pick next unfinished story
    - Implement and test it
    - Run quality checks
    - Commit
    - Repeat until all stories are done
-4. QA verification phase:
+5. QA verification phase:
    - QA agent runs integration tests defined in the PRD
    - If tests fail, QA fix agent resolves the issues
    - Loop continues until all integration tests pass
 
+## Workspaces
+
+A **workspace** is an isolated environment for a single feature. Each
+workspace gets its own git worktree (branch), PRD, and working directory.
+You can have multiple workspaces active at once and switch between them.
+
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           SETUP (once per project)                          │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│   $ ralph init              Create .ralph/ directory and config             │
-│         │                                                                   │
-│         ▼                                                                   │
-│   $ $EDITOR .ralph/ralph.yaml    Configure quality checks, branch pattern   │
-│         │                                                                   │
-│         ▼                                                                   │
-│   $ ralph validate          Verify configuration is valid                   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         FEATURE WORKFLOW (per feature)                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│   $ ralph prd new           Start interactive Claude session                │
-│         │                                                                   │
-│         │  ┌────────────────────────────────────────┐                       │
-│         │  │  Discuss feature with Claude           │                       │
-│         │  │  Refine scope, answer questions        │                       │
-│         │  │  Type /finish when ready               │                       │
-│         │  └────────────────────────────────────────┘                       │
-│         │                                                                   │
-│         ▼                                                                   │
-│   .ralph/state/prd.json     PRD saved with user stories + integration tests │
-│         │                                                                   │
-│         ▼                                                                   │
-│   $ ralph run               Start the autonomous loop                       │
-│         │                                                                   │
-│         │  ┌────────────────────────────────────────────────────────────┐   │
-│         │  │  Creates isolated git worktree                             │   │
-│         │  │           │                                                │   │
-│         │  │           ▼                                                │   │
-│         │  │  ┌─────────────────────────────┐                           │   │
-│         │  │  │  Pick next unfinished story │◄──┐                       │   │
-│         │  │  └─────────────────────────────┘   │                       │   │
-│         │  │           │                        │                       │   │
-│         │  │           ▼                        │                       │   │
-│         │  │  ┌─────────────────────────────┐   │                       │   │
-│         │  │  │  Claude implements + tests  │   │                       │   │
-│         │  │  └─────────────────────────────┘   │                       │   │
-│         │  │           │                        │                       │   │
-│         │  │           ▼                        │                       │   │
-│         │  │  ┌─────────────────────────────┐   │                       │   │
-│         │  │  │  Run quality checks         │   │                       │   │
-│         │  │  └─────────────────────────────┘   │                       │   │
-│         │  │           │                        │                       │   │
-│         │  │           ▼                        │                       │   │
-│         │  │  ┌─────────────────────────────┐   │                       │   │
-│         │  │  │  Commit changes             │   │                       │   │
-│         │  │  └─────────────────────────────┘   │                       │   │
-│         │  │           │                        │                       │   │
-│         │  │           ▼                        │                       │   │
-│         │  │     More stories? ─── yes ─────────┘                       │   │
-│         │  │           │                                                │   │
-│         │  │          no                                                │   │
-│         │  │           │                                                │   │
-│         │  │           ▼                                                │   │
-│         │  │  ┌─────────────────────────────────────────────────────┐   │   │
-│         │  │  │              QA VERIFICATION PHASE                  │   │   │
-│         │  │  ├─────────────────────────────────────────────────────┤   │   │
-│         │  │  │                                                     │   │   │
-│         │  │  │  ┌───────────────────────────────┐                  │   │   │
-│         │  │  │  │  QA agent runs integration    │◄─────────┐       │   │   │
-│         │  │  │  │  tests from PRD               │          │       │   │   │
-│         │  │  │  └───────────────────────────────┘          │       │   │   │
-│         │  │  │           │                                 │       │   │   │
-│         │  │  │           ▼                                 │       │   │   │
-│         │  │  │     All tests pass?                         │       │   │   │
-│         │  │  │        │       │                            │       │   │   │
-│         │  │  │       yes      no                           │       │   │   │
-│         │  │  │        │       │                            │       │   │   │
-│         │  │  │        │       ▼                            │       │   │   │
-│         │  │  │        │  ┌───────────────────────────┐     │       │   │   │
-│         │  │  │        │  │  QA fix agent resolves    │     │       │   │   │
-│         │  │  │        │  │  failing tests            │─────┘       │   │   │
-│         │  │  │        │  └───────────────────────────┘             │   │   │
-│         │  │  │        │                                            │   │   │
-│         │  │  │        ▼                                            │   │   │
-│         │  │  │     COMPLETE                                        │   │   │
-│         │  │  │                                                     │   │   │
-│         │  │  └─────────────────────────────────────────────────────┘   │   │
-│         │  │                                                            │   │
-│         │  └────────────────────────────────────────────────────────────┘   │
-│         │                                                                   │
-│         ▼                                                                   │
-│   Feature branch ready with all commits                                     │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              OPTIONAL COMMANDS                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│   $ ralph switch            Jump into a worktree (select interactively)     │
-│                             └─► Opens shell in worktree, exit to return     │
-│                                                                             │
-│   $ ralph chat              Ad-hoc Claude session in worktree context       │
-│                             └─► Debug, explore, or make manual changes      │
-│                                                                             │
-│   $ ralph rebase            Rebase worktree branch onto latest main         │
-│                             └─► Keeps feature branch up to date             │
-│                                                                             │
-│   $ ralph done              Squash-merge feature branch into base branch    │
-│                             └─► Optionally cleans up worktree after merge   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+.ralph/workspaces/
+  login-page/              # workspace directory
+    tree/                  # git worktree (checked out code)
+    workspace.json         # metadata (name, branch, createdAt)
+    prd.json               # workspace-specific PRD
+  dark-mode/
+    tree/
+    workspace.json
+    prd.json
 ```
+
+**Why workspaces?**
+
+- Each feature is fully isolated -- no conflicts between parallel work
+- Shell integration tracks which workspace you're in
+- `ralph run`, `ralph chat`, `ralph rebase` automatically use the right
+  branch and PRD based on your current workspace
+- When you're done, `ralph done` squash-merges and cleans up
+
+You can also run commands in **base** mode (the main repo) without a
+workspace, but workspaces are the recommended workflow.
 
 ## Prerequisites
 
@@ -166,26 +81,46 @@ cd ~/code/my-project
 # 2. Initialize Ralph
 ralph init
 
-# 3. Edit the generated config (set quality checks, etc.)
+# 3. Set up shell integration (add to ~/.bashrc or ~/.zshrc)
+eval "$(ralph shell-init)"
+
+# 4. Edit the generated config (set quality checks, etc.)
 $EDITOR .ralph/ralph.yaml
 
-# 4. Validate the config
-ralph validate
+# 5. Create a workspace for your feature
+ralph workspaces new login-page
 
-# 5. Create a PRD interactively (use /finish when ready)
+# 6. Create a PRD interactively (use /finish when ready)
 ralph prd new
 
-# 6. Run the loop from the staged PRD
+# 7. Run the autonomous loop
 ralph run
+
+# 8. When all stories pass, merge and clean up
+ralph done
 ```
+
+## Shell Integration
+
+Ralph requires shell integration for workspace switching. Add this to your
+`~/.bashrc` or `~/.zshrc`:
+
+```bash
+eval "$(ralph shell-init)"
+```
+
+This wraps the `ralph` command so that workspace operations (`workspaces new`,
+`workspaces switch`, `switch`, `done`) automatically change your working
+directory to the correct workspace tree.
+
+Currently supports **bash** and **zsh**.
 
 ## Commands
 
 ### `ralph init`
 
 Scaffolds the `.ralph/` directory in the current project. Idempotent --
-safe to run multiple times. Existing files are skipped, skills are
-always updated.
+safe to run multiple times.
 
 ```bash
 ralph init
@@ -193,51 +128,137 @@ ralph init
 
 **What it does:**
 
-1. Creates `.ralph/` directory with subdirectories `tasks/` and `skills/`
+1. Creates `.ralph/` directory with subdirectories `tasks/`, `skills/`, `workspaces/`
 2. Generates `.ralph/ralph.yaml` with sensible defaults (skipped if it exists)
-3. Creates `.ralph/progress.txt` (shared progress log, committed to git)
-4. Creates `.ralph/state/` with `archive/` (gitignored staging area for PRDs)
+3. Creates `.ralph/progress.txt` (shared progress log)
+4. Creates `.ralph/state/` with `archive/` and `workspaces.json`
 5. Installs `.claude/commands/finish.md` (the `/finish` skill for PRD creation)
-6. Adds `.ralph/worktrees/` and `.ralph/state/` to `.gitignore`
+6. Adds `.ralph/workspaces/` and `.ralph/state/` to `.gitignore`
+7. Prints shell integration instructions
 
 **Generated structure:**
 
 ```
 .ralph/                     # committed to git
   ralph.yaml                # project configuration (edit this)
-  progress.txt              # shared progress log, persists across all runs
-  tasks/                    # PRD markdown files
+  progress.txt              # shared progress log
+  tasks/                    # task markdown files
   skills/                   # project-specific skills for the agent
+  workspaces/               # gitignored -- workspace directories
 
 .ralph/state/               # gitignored -- local working state
-  prd.json                  # current PRD (staging area)
+  workspaces.json           # registry of all workspaces
+  prd.json                  # base PRD (when not using workspaces)
   archive/                  # completed PRDs
-    2026-01-15-ralph__dark-mode/
-      prd.json
 
 .claude/commands/           # Claude CLI skills
   finish.md                 # /finish skill -- structures conversation into PRD
 ```
 
-After running `init`, edit `.ralph/ralph.yaml` to configure your quality
-checks and other settings.
+---
+
+### `ralph workspaces new <name>`
+
+Creates a new workspace with an isolated git worktree and branch.
+
+```bash
+ralph workspaces new login-page
+ralph workspaces new dark-mode --project-config /path/to/config.yaml
+```
+
+The branch name is derived from `repo.branch_prefix` + workspace name
+(e.g., `ralph/login-page`). After creation, your shell changes directory
+into the workspace's `tree/` folder and `ralph prd new` is launched
+automatically if no PRD exists.
+
+---
+
+### `ralph workspaces list`
+
+Lists all registered workspaces, showing the current one.
+
+```bash
+ralph workspaces list
+```
+
+Example output:
+
+```
+* login-page [current]
+  dark-mode
+  base
+```
+
+---
+
+### `ralph workspaces switch <name>`
+
+Switches to an existing workspace (or `base` for the main repo).
+
+```bash
+ralph workspaces switch dark-mode
+ralph workspaces switch base
+```
+
+---
+
+### `ralph workspaces remove <name>`
+
+Removes a workspace: deletes the git worktree, branch, and registry entry.
+
+```bash
+ralph workspaces remove login-page
+```
+
+---
+
+### `ralph switch`
+
+Interactive workspace picker. Shows all workspaces and lets you select
+one with arrow keys.
+
+```bash
+ralph switch
+```
+
+Requires shell integration (`eval "$(ralph shell-init)"`).
+
+---
+
+### `ralph status`
+
+Shows workspace and story progress.
+
+```bash
+ralph status
+ralph status --short
+```
+
+**Full output** shows workspace name, branch, and story/test progress.
+**Short output** (`--short`) prints a single line suitable for shell
+prompts: `workspace-name N/M` or `base`.
+
+---
+
+### `ralph shell-init`
+
+Prints the shell function for workspace integration. Not called directly --
+use `eval "$(ralph shell-init)"` in your shell config.
+
+```bash
+eval "$(ralph shell-init)"
+```
 
 ---
 
 ### `ralph validate`
 
-Validates the project configuration and reports any issues.
+Validates the project configuration.
 
 ```bash
 ralph validate
 ralph validate --project-config /path/to/config.yaml
 ```
-
-**Flags:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--project-config` | auto-discover | Path to project config YAML |
 
 **What it checks:**
 
@@ -249,122 +270,95 @@ ralph validate --project-config /path/to/config.yaml
 
 ### `ralph prd new`
 
-Starts an interactive conversation with Claude to create a PRD from
-scratch. This is the starting point for a new feature.
+Starts an interactive Claude session to create a PRD.
 
 ```bash
 ralph prd new
-ralph prd new --project-config /path/to/config.yaml
+ralph prd new --workspace login-page
 ```
-
-**Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--project-config` | auto-discover | Path to project config YAML |
+| `--workspace` | auto-detect | Workspace name |
 
-**Behavior:**
-
-- Opens an interactive Claude session in your terminal
 - Discuss the feature, refine scope, answer clarifying questions
-- When you're happy with the plan, type `/finish`
-- Claude structures the conversation into a PRD and writes it to
-  `.ralph/state/prd.json`
+- Type `/finish` when ready -- Claude writes the PRD
 - Then run `ralph run` to execute the loop
 
 ---
 
 ### `ralph run`
 
-Runs the execution loop from a staged PRD.
+Runs the autonomous execution loop.
 
 ```bash
 ralph run
 ralph run --max-iterations 10
-ralph run --project-config /path/to/config.yaml
+ralph run --workspace login-page
 ```
-
-**Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--project-config` | auto-discover | Path to project config YAML |
-| `--max-iterations` | `20` | Maximum number of loop iterations |
-| `--verbose` | `true` | Stream Claude's output in real-time |
+| `--max-iterations` | `20` | Maximum loop iterations |
+| `--workspace` | auto-detect | Workspace name |
 
-**Step-by-step behavior:**
-
-1. **Read staged PRD** -- Loads `.ralph/state/prd.json` (created by
-   `ralph prd new`).
-
-2. **Validate** -- Checks that the PRD has a branch name and at least one
-   user story. Validates the branch name against the configured pattern.
-
-3. **Create worktree** -- Creates an isolated git worktree for the PRD's
-   branch name.
-
-4. **Copy .ralph/** -- Copies config, skills, and tasks into the worktree.
-
-5. **Write PRD** -- Writes `prd.json` into the worktree's `.ralph/state/`
-   directory.
-
-6. **Run the loop** -- For each iteration (up to `--max-iterations`):
-   - Reads `prd.json` and finds the highest-priority story with
-     `passes: false`
-   - Renders a prompt instructing Claude to implement that single story
-   - Invokes Claude in `--print` mode
-   - Claude implements the story, runs quality checks, commits, and
-     updates `prd.json`
-   - If Claude signals `COMPLETE`, all stories are done
-   - Waits 2 seconds between iterations (context cooldown)
-
-**Exit conditions:**
-
-- All stories pass (success)
-- Max iterations reached without completing all stories (error)
+For each iteration, Ralph reads the PRD, finds the next unfinished story,
+invokes Claude to implement it, and checks if all stories are complete.
 
 ---
 
 ### `ralph chat`
 
-Opens a free-form interactive Claude session in the project context.
-Useful for ad-hoc coding, debugging, or exploring the codebase.
+Opens a free-form interactive Claude session in the workspace context.
 
 ```bash
 ralph chat
-ralph chat --project-config /path/to/config.yaml
+ralph chat --continue
+ralph chat --workspace login-page
 ```
-
-**Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--project-config` | auto-discover | Path to project config YAML |
-
-**Behavior:**
-
-- Must be run from inside a worktree (use `ralph run` first)
-- Claude is given the project name, config, progress log, and recent
-  git history as context
-- stdin/stdout are connected directly to your terminal
+| `--workspace` | auto-detect | Workspace name |
+| `--continue` | `false` | Resume the most recent conversation |
 
 ---
 
-### `ralph switch`
+### `ralph rebase`
 
-Interactively select a worktree and open a new shell session inside it.
-Type `exit` to return to where you were.
+Rebases the workspace branch onto the latest base branch. If conflicts
+occur, Claude is invoked to resolve them.
 
 ```bash
-ralph switch
-ralph switch --project-config /path/to/config.yaml
+ralph rebase
+ralph rebase develop
+ralph rebase --workspace login-page
 ```
-
-**Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--project-config` | auto-discover | Path to project config YAML |
+| `--workspace` | auto-detect | Workspace name |
+
+---
+
+### `ralph done`
+
+Squash-merges the workspace branch into the base branch, archives the PRD,
+and removes the workspace.
+
+```bash
+ralph done
+ralph done --workspace login-page
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-config` | auto-discover | Path to project config YAML |
+| `--workspace` | auto-detect | Workspace name |
 
 ---
 
@@ -386,8 +380,12 @@ commands from any subdirectory within your project.
 project: MyProject
 
 repo:
-  # Branch that worktrees are created from
+  # Branch that workspaces are created from
   default_base: main
+
+  # Prefix prepended to workspace names to form branch names
+  # e.g., "ralph/" + "login-page" = "ralph/login-page"
+  branch_prefix: "ralph/"
 
   # Regex that generated branch names must match
   branch_pattern: "^ralph/[a-zA-Z0-9._-]+$"
@@ -398,11 +396,16 @@ paths:
   skills_dir: ".ralph/skills"
 
 # Commands that must pass before committing
-# Each command runs via `sh -c` in the repo root
+# Each command runs via `sh -c` in the workspace working directory
 quality_checks:
   - "npm test"
   - "npm run lint"
   - "npm run typecheck"
+
+# Files/patterns to copy from repo root into workspace worktrees
+copy_to_worktree:
+  - ".env"
+  - "scripts/**"
 ```
 
 ### Required Fields
@@ -463,6 +466,7 @@ internal/
   shell/                       Subprocess runner (exec.Command wrapper)
   prd/                         PRD JSON types + read/write
   gitops/                      Git operations (worktrees, branches)
+  workspace/                   Workspace management (create, remove, resolve)
   claude/                      Claude CLI invocation + output parsing
   prompts/                     Embedded prompt templates (go:embed)
   loop/                        The Ralph execution loop
@@ -471,13 +475,15 @@ internal/
 
 ### Design Decisions
 
-- **Single dependency**: `gopkg.in/yaml.v3`. Everything else is stdlib.
+- **Minimal dependencies**: `gopkg.in/yaml.v3` for config, `lipgloss` and
+  `huh` for terminal UI. Everything else is stdlib.
 - **Shell out to CLIs**: `git` and `claude` are invoked as subprocesses.
   No API client libraries.
 - **Prompts embedded in binary**: Markdown templates are compiled into the
   binary via `go:embed`. No external prompt files needed at runtime.
-- **Worktree isolation**: Each feature runs in a separate git worktree,
-  keeping the main branch clean and enabling parallel agents.
+- **Workspace isolation**: Each feature runs in a separate git worktree
+  managed as a workspace, keeping the main branch clean and enabling
+  parallel agents.
 
 ## Development
 

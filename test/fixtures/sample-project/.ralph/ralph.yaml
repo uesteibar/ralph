@@ -1,0 +1,9 @@
+project: sample-project
+
+repo:
+  default_base: main
+  branch_pattern: "^ralph/[a-zA-Z0-9._-]+$"
+
+quality_checks:
+  - "go test ./..."
+  - "go vet ./..."

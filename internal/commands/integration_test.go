@@ -321,18 +321,18 @@ func TestIntegration_CopyToWorktree_NoMatchWarnsButSucceeds(t *testing.T) {
 	}
 }
 
-// IT-006: Verify ralph run --local executes without creating worktree
-func TestIntegration_RunLocal_NoWorktreeCreated(t *testing.T) {
+// IT-006: Verify ralph run from base executes without creating worktree
+func TestIntegration_RunBase_NoWorktreeCreated(t *testing.T) {
 	tmpDir := t.TempDir()
 	initTestRepo(t, tmpDir)
 	createRalphConfig(t, tmpDir, "")
 	createMinimalPRD(t, tmpDir)
 
-	// Record existing worktrees directory state
-	worktreesDir := filepath.Join(tmpDir, ".ralph", "worktrees")
+	// Record existing workspaces directory state
+	workspacesDir := filepath.Join(tmpDir, ".ralph", "workspaces")
 	initialEntries := []string{}
-	if _, err := os.Stat(worktreesDir); err == nil {
-		entries, _ := os.ReadDir(worktreesDir)
+	if _, err := os.Stat(workspacesDir); err == nil {
+		entries, _ := os.ReadDir(workspacesDir)
 		for _, e := range entries {
 			initialEntries = append(initialEntries, e.Name())
 		}
@@ -349,23 +349,23 @@ func TestIntegration_RunLocal_NoWorktreeCreated(t *testing.T) {
 		t.Fatalf("failed to chdir: %v", err)
 	}
 
-	// Run with --local --max-iterations=0 to avoid actually invoking Claude
-	err = Run([]string{"--local", "--max-iterations=0"})
+	// Run with --max-iterations=0 to avoid actually invoking Claude
+	err = Run([]string{"--max-iterations=0"})
 	// We expect this to succeed (or fail later due to loop ending)
 	// The important thing is it shouldn't create a worktree
 
-	// Verify no new worktree directory was created
-	if _, err := os.Stat(worktreesDir); err == nil {
-		entries, _ := os.ReadDir(worktreesDir)
+	// Verify no new workspace directory was created
+	if _, err := os.Stat(workspacesDir); err == nil {
+		entries, _ := os.ReadDir(workspacesDir)
 		if len(entries) != len(initialEntries) {
-			t.Fatalf("expected no new worktrees to be created, but found: %d -> %d",
+			t.Fatalf("expected no new workspaces to be created, but found: %d -> %d",
 				len(initialEntries), len(entries))
 		}
 	}
 }
 
-// IT-007: Verify ralph run --local fails when no PRD exists
-func TestIntegration_RunLocal_FailsWithoutPRD(t *testing.T) {
+// IT-007: Verify ralph run from base fails when no PRD exists
+func TestIntegration_RunBase_FailsWithoutPRD(t *testing.T) {
 	tmpDir := t.TempDir()
 	initTestRepo(t, tmpDir)
 	createRalphConfig(t, tmpDir, "")
@@ -382,8 +382,8 @@ func TestIntegration_RunLocal_FailsWithoutPRD(t *testing.T) {
 		t.Fatalf("failed to chdir: %v", err)
 	}
 
-	// Run with --local flag
-	err = Run([]string{"--local"})
+	// Run from base (no workspace flag)
+	err = Run([]string{"--max-iterations=1"})
 
 	// Should fail because PRD doesn't exist
 	if err == nil {
@@ -397,8 +397,8 @@ func TestIntegration_RunLocal_FailsWithoutPRD(t *testing.T) {
 	}
 }
 
-// IT-008: Verify ralph run --local updates PRD in current directory
-func TestIntegration_RunLocal_UpdatesPRDInCwd(t *testing.T) {
+// IT-008: Verify ralph run from base updates PRD in current directory
+func TestIntegration_RunBase_UpdatesPRDInCwd(t *testing.T) {
 	tmpDir := t.TempDir()
 	initTestRepo(t, tmpDir)
 	createRalphConfig(t, tmpDir, "")
@@ -423,9 +423,9 @@ func TestIntegration_RunLocal_UpdatesPRDInCwd(t *testing.T) {
 		t.Fatalf("failed to chdir: %v", err)
 	}
 
-	// Run with --local --max-iterations=0
+	// Run with --max-iterations=0
 	// This will read the PRD but not complete any iterations
-	_ = Run([]string{"--local", "--max-iterations=0"})
+	_ = Run([]string{"--max-iterations=0"})
 
 	// The PRD should exist in current directory (not in a worktree)
 	afterPRD, err := os.ReadFile(prdPath)

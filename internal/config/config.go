@@ -21,6 +21,7 @@ type RepoConfig struct {
 	Path          string `yaml:"-"` // derived from config file location, not from YAML
 	DefaultBase   string `yaml:"default_base"`
 	BranchPattern string `yaml:"branch_pattern"`
+	BranchPrefix  string `yaml:"branch_prefix"`
 }
 
 type PathsConfig struct {
@@ -41,6 +42,11 @@ func (c *Config) StateArchiveDir() string {
 // ProgressPath returns the path to the shared progress file.
 func (c *Config) ProgressPath() string {
 	return filepath.Join(c.Repo.Path, ".ralph", "progress.txt")
+}
+
+// WorkspacesDir returns the path to the workspaces directory.
+func (c *Config) WorkspacesDir() string {
+	return filepath.Join(c.Repo.Path, ".ralph", "workspaces")
 }
 
 // Load reads and parses a config file at the given path.
@@ -64,6 +70,10 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Repo.Path = filepath.Dir(filepath.Dir(absPath))
 
+	if cfg.Repo.BranchPrefix == "" {
+		cfg.Repo.BranchPrefix = "ralph/"
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
@@ -72,6 +82,8 @@ func Load(path string) (*Config, error) {
 }
 
 // Discover walks up from the current directory looking for .ralph/ralph.yaml.
+// It skips configs found inside workspace trees (where a workspace.json exists
+// in the parent directory) to ensure Repo.Path always points to the real repo root.
 func Discover() (*Config, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -81,7 +93,9 @@ func Discover() (*Config, error) {
 	for {
 		candidate := filepath.Join(dir, ".ralph", "ralph.yaml")
 		if _, err := os.Stat(candidate); err == nil {
-			return Load(candidate)
+			if !isInsideWorkspaceTree(dir) {
+				return Load(candidate)
+			}
 		}
 
 		parent := filepath.Dir(dir)
@@ -92,6 +106,14 @@ func Discover() (*Config, error) {
 	}
 
 	return nil, fmt.Errorf("no .ralph/ralph.yaml found in current directory or parents")
+}
+
+// isInsideWorkspaceTree checks whether dir is a workspace tree directory.
+// Workspace trees live at .ralph/workspaces/<name>/tree/, with a workspace.json
+// in the parent directory. If dir/../workspace.json exists, dir is a tree.
+func isInsideWorkspaceTree(dir string) bool {
+	_, err := os.Stat(filepath.Join(filepath.Dir(dir), "workspace.json"))
+	return err == nil
 }
 
 // Resolve tries the explicit path first, then falls back to Discover.

@@ -1,0 +1,9 @@
+# Sample project tasks
+
+# Run tests
+test:
+    go test ./...
+
+# Run go vet
+vet:
+    go vet ./...

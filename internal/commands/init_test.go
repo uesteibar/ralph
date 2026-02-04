@@ -11,7 +11,7 @@ import (
 	"github.com/uesteibar/ralph/internal/claude"
 )
 
-func TestInit_GitTrackingOption1_GitignoresWorktreesAndState(t *testing.T) {
+func TestInit_GitTrackingOption1_GitignoresWorkspacesAndState(t *testing.T) {
 	dir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
@@ -29,8 +29,8 @@ func TestInit_GitTrackingOption1_GitignoresWorktreesAndState(t *testing.T) {
 	}
 
 	content := string(gitignore)
-	if !containsLine(content, ".ralph/worktrees/") {
-		t.Error(".gitignore should contain .ralph/worktrees/")
+	if !containsLine(content, ".ralph/workspaces/") {
+		t.Error(".gitignore should contain .ralph/workspaces/")
 	}
 	if !containsLine(content, ".ralph/state/") {
 		t.Error(".gitignore should contain .ralph/state/")
@@ -38,7 +38,7 @@ func TestInit_GitTrackingOption1_GitignoresWorktreesAndState(t *testing.T) {
 	if containsLine(content, ".ralph/") {
 		// ".ralph/" alone should NOT be present when tracking in git
 		// (only the specific subdirs)
-		// But we need to be careful: ".ralph/worktrees/" contains ".ralph/"
+		// But we need to be careful: ".ralph/workspaces/" contains ".ralph/"
 		// so check for exact line match
 		for _, l := range splitLines(content) {
 			if trimSpace(l) == ".ralph/" {
@@ -215,8 +215,8 @@ func TestInit_InvalidGitTrackingChoice_RetriesUntilValid(t *testing.T) {
 	// Should succeed with option 1 behavior
 	gitignore, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
 	content := string(gitignore)
-	if !containsLine(content, ".ralph/worktrees/") {
-		t.Error(".gitignore should contain .ralph/worktrees/")
+	if !containsLine(content, ".ralph/workspaces/") {
+		t.Error(".gitignore should contain .ralph/workspaces/")
 	}
 }
 
@@ -266,5 +266,37 @@ func TestInit_LLMDefaultYes_AcceptsEmptyInput(t *testing.T) {
 	configPath := filepath.Join(dir, ".ralph", "ralph.yaml")
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatal("ralph.yaml should exist")
+	}
+}
+
+func TestInit_CreatesWorkspaceInfrastructure(t *testing.T) {
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	in := strings.NewReader("1\nn\n")
+	if err := Init(nil, in); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Check .ralph/workspaces/ directory exists
+	wsDir := filepath.Join(dir, ".ralph", "workspaces")
+	info, err := os.Stat(wsDir)
+	if err != nil {
+		t.Fatalf("workspaces directory should exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("workspaces should be a directory")
+	}
+
+	// Check .ralph/state/workspaces.json exists with empty array
+	wsJSON := filepath.Join(dir, ".ralph", "state", "workspaces.json")
+	data, err := os.ReadFile(wsJSON)
+	if err != nil {
+		t.Fatalf("workspaces.json should exist: %v", err)
+	}
+	if string(data) != "[]" {
+		t.Errorf("workspaces.json should contain empty array, got %q", string(data))
 	}
 }

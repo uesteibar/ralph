@@ -20,4 +20,9 @@ The following is a shared progress log from previous Ralph runs. Use it to under
 
 ```
 {{.RecentCommits}}```
+{{end}}{{if .PRDContext}}
+## PRD Context
+
+```
+{{.PRDContext}}```
 {{end}}

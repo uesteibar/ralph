@@ -10,13 +10,33 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/uesteibar/ralph/internal/config"
 	"github.com/uesteibar/ralph/internal/prd"
+	"github.com/uesteibar/ralph/internal/workspace"
 )
+
+var headerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 
 // AddProjectConfigFlag adds the --project-config flag to a FlagSet.
 func AddProjectConfigFlag(fs *flag.FlagSet) *string {
 	return fs.String("project-config", "", "Path to project config YAML (default: discover .ralph/ralph.yaml)")
+}
+
+// AddWorkspaceFlag adds the --workspace flag to a FlagSet.
+func AddWorkspaceFlag(fs *flag.FlagSet) *string {
+	return fs.String("workspace", "", "Workspace name")
+}
+
+// resolveWorkContextFromFlags resolves workspace context from the --workspace
+// flag value, RALPH_WORKSPACE env var, cwd, and repo path.
+func resolveWorkContextFromFlags(workspaceFlag string, repoPath string) (workspace.WorkContext, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return workspace.WorkContext{}, fmt.Errorf("getting current directory: %w", err)
+	}
+	envWS := os.Getenv("RALPH_WORKSPACE")
+	return workspace.ResolveWorkContext(workspaceFlag, envWS, cwd, repoPath)
 }
 
 // ResolveConfig loads the project config from the explicit flag value or by discovery.
@@ -78,4 +98,40 @@ func sanitizeBranchForArchive(branch string) string {
 		}
 	}
 	return string(result)
+}
+
+// printWorkspaceHeader prints a muted workspace context header to stderr.
+// Format: [workspace: login-page | ralph/login-page] or [workspace: base]
+func printWorkspaceHeader(wc workspace.WorkContext, repoPath string) {
+	var header string
+	if wc.Name == "base" {
+		header = "[workspace: base]"
+	} else {
+		ws, err := workspace.RegistryGet(repoPath, wc.Name)
+		if err == nil {
+			header = fmt.Sprintf("[workspace: %s | %s]", wc.Name, ws.Branch)
+		} else {
+			header = fmt.Sprintf("[workspace: %s]", wc.Name)
+		}
+	}
+	fmt.Fprintln(os.Stderr, headerStyle.Render(header))
+}
+
+// CheckLegacyWorktrees prints a migration warning to stderr if the legacy
+// .ralph/worktrees/ directory exists. Tries to discover the repo path from config;
+// silently does nothing if config is not available.
+func CheckLegacyWorktrees() {
+	cfg, err := config.Resolve("")
+	if err != nil {
+		return
+	}
+	checkLegacyWorktreesInDir(cfg.Repo.Path)
+}
+
+// checkLegacyWorktreesInDir prints a migration warning for a specific repo path.
+func checkLegacyWorktreesInDir(repoPath string) {
+	legacyDir := filepath.Join(repoPath, ".ralph", "worktrees")
+	if info, err := os.Stat(legacyDir); err == nil && info.IsDir() {
+		fmt.Fprintln(os.Stderr, "Legacy worktrees directory at .ralph/worktrees/ is no longer used. Consider removing it.")
+	}
 }

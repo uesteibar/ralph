@@ -14,14 +14,16 @@ import (
 	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/prompts"
 	"github.com/uesteibar/ralph/internal/shell"
+	"github.com/uesteibar/ralph/internal/workspace"
 )
 
-// Rebase rebases the current worktree branch onto the latest changes from a
+// Rebase rebases the current workspace branch onto the latest changes from a
 // target branch (defaulting to the configured default_base). If conflicts
 // occur, Claude is invoked interactively to resolve them.
 func Rebase(args []string) error {
 	fs := flag.NewFlagSet("rebase", flag.ExitOnError)
 	configPath := AddProjectConfigFlag(fs)
+	workspaceFlag := AddWorkspaceFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -31,16 +33,19 @@ func Rebase(args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	ctx := context.Background()
-	r := &shell.Runner{}
-
-	isWt, err := gitops.IsWorktree(ctx, r)
+	wc, err := resolveWorkContextFromFlags(*workspaceFlag, cfg.Repo.Path)
 	if err != nil {
-		return fmt.Errorf("checking worktree: %w", err)
+		return fmt.Errorf("resolving workspace context: %w", err)
 	}
-	if !isWt {
-		return fmt.Errorf("ralph rebase must be run inside a worktree, not the main repo")
+
+	printWorkspaceHeader(wc, cfg.Repo.Path)
+
+	if wc.Name == "base" {
+		return fmt.Errorf("Rebase requires workspace context. Use --workspace <name> or switch to a workspace.")
 	}
+
+	ctx := context.Background()
+	r := &shell.Runner{Dir: wc.WorkDir}
 
 	targetBranch := cfg.Repo.DefaultBase
 	if fs.NArg() > 0 {
@@ -64,7 +69,7 @@ func Rebase(args []string) error {
 	}
 
 	for result.HasConflicts {
-		if err := resolveConflicts(ctx, r, cfg, targetBranch); err != nil {
+		if err := resolveConflicts(ctx, r, cfg, wc, targetBranch); err != nil {
 			return err
 		}
 
@@ -73,15 +78,10 @@ func Rebase(args []string) error {
 			return fmt.Errorf("checking rebase status: %w", err)
 		}
 		if !inProgress {
-			// Claude (or the user) either completed or aborted the rebase.
-			// Check if we're back on the original branch (abort restores it)
-			// vs. on the rebased branch (success).
 			log.Println("[rebase] rebase is no longer in progress after conflict resolution")
 			return nil
 		}
 
-		// Rebase is still in progress — Claude resolved the current conflict
-		// but didn't continue, or there are more commits to replay.
 		result, err = gitops.ContinueRebase(ctx, r)
 		if err != nil {
 			return err
@@ -92,7 +92,7 @@ func Rebase(args []string) error {
 	return nil
 }
 
-func resolveConflicts(ctx context.Context, r *shell.Runner, cfg *config.Config, targetBranch string) error {
+func resolveConflicts(ctx context.Context, r *shell.Runner, cfg *config.Config, wc workspace.WorkContext, targetBranch string) error {
 	conflictFiles, err := gitops.ConflictFiles(ctx, r)
 	if err != nil {
 		return fmt.Errorf("listing conflict files: %w", err)
@@ -100,7 +100,7 @@ func resolveConflicts(ctx context.Context, r *shell.Runner, cfg *config.Config, 
 
 	log.Printf("[rebase] conflicts detected in %d file(s): %s", len(conflictFiles), strings.Join(conflictFiles, ", "))
 
-	prompt, err := buildConflictPrompt(ctx, r, cfg, targetBranch, conflictFiles)
+	prompt, err := buildConflictPrompt(ctx, r, cfg, wc, targetBranch, conflictFiles)
 	if err != nil {
 		return fmt.Errorf("building conflict prompt: %w", err)
 	}
@@ -118,12 +118,13 @@ func resolveConflicts(ctx context.Context, r *shell.Runner, cfg *config.Config, 
 	return nil
 }
 
-func buildConflictPrompt(ctx context.Context, r *shell.Runner, cfg *config.Config, targetBranch string, conflictFiles []string) (string, error) {
+func buildConflictPrompt(ctx context.Context, r *shell.Runner, cfg *config.Config, wc workspace.WorkContext, targetBranch string, conflictFiles []string) (string, error) {
 	data := prompts.RebaseConflictData{
 		ConflictFiles: strings.Join(conflictFiles, "\n"),
 	}
 
-	prdData, err := prd.Read(cfg.StatePRDPath())
+	// Read PRD from workspace-level path for conflict resolution context.
+	prdData, err := prd.Read(wc.PRDPath)
 	if err == nil {
 		data.PRDDescription = prdData.Description
 		data.Stories = formatStories(prdData.UserStories)

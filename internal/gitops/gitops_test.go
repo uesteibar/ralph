@@ -551,6 +551,54 @@ func TestConflictFiles_NoConflicts(t *testing.T) {
 	}
 }
 
+func TestCopyDotRalph_SkipsRalphYaml(t *testing.T) {
+	repoDir := t.TempDir()
+	worktreeDir := t.TempDir()
+
+	// Create .ralph directory with ralph.yaml and other files.
+	ralphDir := filepath.Join(repoDir, ".ralph")
+	if err := os.MkdirAll(ralphDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ralphDir, "ralph.yaml"), []byte("project: test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ralphDir, "progress.txt"), []byte("some progress"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a subdirectory with a file.
+	skillsDir := filepath.Join(ralphDir, "skills")
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, "test.md"), []byte("# Skill"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CopyDotRalph(repoDir, worktreeDir); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// ralph.yaml must NOT be copied (would cause config.Discover to resolve
+	// wrong Repo.Path inside workspace trees).
+	yamlPath := filepath.Join(worktreeDir, ".ralph", "ralph.yaml")
+	if _, err := os.Stat(yamlPath); !os.IsNotExist(err) {
+		t.Fatal("expected ralph.yaml NOT to be copied into worktree")
+	}
+
+	// Other files should still be copied.
+	progressPath := filepath.Join(worktreeDir, ".ralph", "progress.txt")
+	if _, err := os.Stat(progressPath); err != nil {
+		t.Fatalf("expected progress.txt to be copied: %v", err)
+	}
+
+	skillPath := filepath.Join(worktreeDir, ".ralph", "skills", "test.md")
+	if _, err := os.Stat(skillPath); err != nil {
+		t.Fatalf("expected skills/test.md to be copied: %v", err)
+	}
+}
+
 func TestCopyDotClaude_CopiesDirectory(t *testing.T) {
 	repoDir := t.TempDir()
 	worktreeDir := t.TempDir()

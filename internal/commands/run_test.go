@@ -1,206 +1,292 @@
 package commands
 
 import (
+	"bytes"
 	"flag"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/uesteibar/ralph/internal/workspace"
 )
 
-func TestRun_LocalFlagParsing(t *testing.T) {
+func TestRun_WorkspaceFlagParsing(t *testing.T) {
 	tests := []struct {
 		name     string
 		args     []string
-		expected bool
+		expected string
 	}{
 		{
-			name:     "no flag defaults to false",
+			name:     "no flag defaults to empty",
 			args:     []string{},
-			expected: false,
+			expected: "",
 		},
 		{
-			name:     "--local sets to true",
-			args:     []string{"--local"},
-			expected: true,
+			name:     "--workspace sets name",
+			args:     []string{"--workspace", "my-feature"},
+			expected: "my-feature",
 		},
 		{
-			name:     "--local=true sets to true",
-			args:     []string{"--local=true"},
-			expected: true,
-		},
-		{
-			name:     "--local=false sets to false",
-			args:     []string{"--local=false"},
-			expected: false,
+			name:     "--workspace=value sets name",
+			args:     []string{"--workspace=my-feature"},
+			expected: "my-feature",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fs := flag.NewFlagSet("run", flag.ContinueOnError)
-			local := fs.Bool("local", false, "Run loop in current directory without creating a worktree")
+			ws := fs.String("workspace", "", "Workspace name to run in")
 
 			err := fs.Parse(tt.args)
 			if err != nil {
 				t.Fatalf("unexpected parse error: %v", err)
 			}
 
-			if *local != tt.expected {
-				t.Errorf("expected local=%v, got %v", tt.expected, *local)
+			if *ws != tt.expected {
+				t.Errorf("expected workspace=%q, got %q", tt.expected, *ws)
 			}
 		})
 	}
 }
 
-func TestWorktreeRoot_DetectsWorktreePath(t *testing.T) {
-	tests := []struct {
-		name     string
-		path     string
-		expected bool
-		root     string
-	}{
-		{
-			name:     "not in worktree",
-			path:     "/home/user/project",
-			expected: false,
-			root:     "",
-		},
-		{
-			name:     "inside worktree",
-			path:     "/home/user/project/.ralph/worktrees/my-branch",
-			expected: true,
-			root:     "/home/user/project/.ralph/worktrees/my-branch",
-		},
-		{
-			name:     "deep inside worktree",
-			path:     "/home/user/project/.ralph/worktrees/my-branch/src/pkg",
-			expected: true,
-			root:     "/home/user/project/.ralph/worktrees/my-branch",
-		},
+func TestRun_InWorkspace_CorrectWorkDirAndPRDPath(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	// Create a workspace structure
+	wsName := "my-feature"
+	ws := workspace.Workspace{Name: wsName, Branch: "ralph/" + wsName}
+
+	// Create workspace directory structure manually
+	wsDir := filepath.Join(dir, ".ralph", "workspaces", wsName)
+	treeDir := filepath.Join(wsDir, "tree")
+	if err := os.MkdirAll(treeDir, 0755); err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root, ok := worktreeRoot(tt.path)
-			if ok != tt.expected {
-				t.Errorf("worktreeRoot(%q): expected ok=%v, got %v", tt.path, tt.expected, ok)
-			}
-			if ok && root != tt.root {
-				t.Errorf("worktreeRoot(%q): expected root=%q, got %q", tt.path, tt.root, root)
-			}
-		})
-	}
-}
-
-func TestRunLocal_FailsWhenPRDDoesNotExist(t *testing.T) {
-	// Create a temp directory with a valid config but no PRD
-	tmpDir := t.TempDir()
-
-	// Create .ralph/ralph.yaml
-	ralphDir := filepath.Join(tmpDir, ".ralph")
-	if err := os.MkdirAll(ralphDir, 0755); err != nil {
-		t.Fatalf("failed to create .ralph dir: %v", err)
+	// Write workspace.json
+	if err := workspace.WriteWorkspaceJSON(dir, wsName, ws); err != nil {
+		t.Fatal(err)
 	}
 
-	configContent := `project: test-project
-repo:
-  path: .
-  default_base: main
-`
-	if err := os.WriteFile(filepath.Join(ralphDir, "ralph.yaml"), []byte(configContent), 0644); err != nil {
-		t.Fatalf("failed to write config: %v", err)
+	// Register workspace
+	if err := workspace.RegistryCreate(dir, ws); err != nil {
+		t.Fatal(err)
 	}
 
-	// Change to temp directory
-	oldWd, err := os.Getwd()
+	// Write PRD at workspace level
+	prdContent := `{
+  "project": "test",
+  "branchName": "ralph/my-feature",
+  "description": "Test PRD",
+  "userStories": [
+    {"id": "US-001", "title": "Test", "description": "Test", "acceptanceCriteria": ["Works"], "priority": 1, "passes": true}
+  ]
+}`
+	prdPath := filepath.Join(wsDir, "prd.json")
+	if err := os.WriteFile(prdPath, []byte(prdContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve workspace context and verify paths
+	wc, err := workspace.ResolveWorkContext(wsName, "", dir, dir)
 	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
-	}
-	defer os.Chdir(oldWd)
-
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("failed to chdir: %v", err)
+		t.Fatalf("ResolveWorkContext failed: %v", err)
 	}
 
-	// Run with --local flag
-	err = Run([]string{"--local"})
-
-	// Should fail because PRD doesn't exist
-	if err == nil {
-		t.Fatal("expected error when PRD does not exist, got nil")
+	if wc.WorkDir != treeDir {
+		t.Errorf("expected WorkDir=%s, got %s", treeDir, wc.WorkDir)
 	}
-
-	// Error message should mention PRD not found
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "PRD not found") {
-		t.Errorf("expected error to mention 'PRD not found', got: %v", errMsg)
+	if wc.PRDPath != prdPath {
+		t.Errorf("expected PRDPath=%s, got %s", prdPath, wc.PRDPath)
+	}
+	if wc.Name != wsName {
+		t.Errorf("expected Name=%s, got %s", wsName, wc.Name)
 	}
 }
 
-func TestRunLocal_PRDExistenceCheck(t *testing.T) {
-	// Create temp directory with config and PRD
-	tmpDir := t.TempDir()
+func TestRun_InBase_WarningPrinted(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
 
-	// Create .ralph/ralph.yaml
-	ralphDir := filepath.Join(tmpDir, ".ralph")
-	stateDir := filepath.Join(ralphDir, "state")
+	// Write PRD at base level
+	stateDir := filepath.Join(dir, ".ralph", "state")
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
-		t.Fatalf("failed to create state dir: %v", err)
+		t.Fatal(err)
 	}
-
-	configContent := `project: test-project
-repo:
-  path: .
-  default_base: main
-`
-	if err := os.WriteFile(filepath.Join(ralphDir, "ralph.yaml"), []byte(configContent), 0644); err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
-
-	// Create a valid PRD
 	prdContent := `{
   "project": "test",
   "branchName": "test/feature",
   "description": "Test PRD",
   "userStories": [
-    {
-      "id": "US-001",
-      "title": "Test story",
-      "description": "As a user, I want something",
-      "acceptanceCriteria": ["Works"],
-      "priority": 1,
-      "passes": false,
-      "notes": ""
-    }
+    {"id": "US-001", "title": "Test", "description": "Test", "acceptanceCriteria": ["Works"], "priority": 1, "passes": false}
   ]
 }`
 	if err := os.WriteFile(filepath.Join(stateDir, "prd.json"), []byte(prdContent), 0644); err != nil {
-		t.Fatalf("failed to write PRD: %v", err)
+		t.Fatal(err)
 	}
 
-	// Change to temp directory
+	// Change to the repo directory (base mode)
 	oldWd, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
+		t.Fatal(err)
 	}
 	defer os.Chdir(oldWd)
-
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("failed to chdir: %v", err)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
 	}
 
-	// Run with --local flag - it should NOT fail with "PRD not found"
-	// It may fail later (e.g., when trying to invoke Claude) but that's OK for this test
-	err = Run([]string{"--local", "--max-iterations=0"})
+	// Capture stderr
+	oldStderr := os.Stderr
+	rPipe, wPipe, _ := os.Pipe()
+	os.Stderr = wPipe
 
-	// If there's an error, it should NOT be about PRD not found
+	// Run with --max-iterations=0 to avoid invoking Claude
+	runErr := Run([]string{"--max-iterations=1"})
+
+	wPipe.Close()
+	os.Stderr = oldStderr
+
+	var buf bytes.Buffer
+	buf.ReadFrom(rPipe)
+	stderr := buf.String()
+
+	// The error from the loop (max iterations) is expected
+	_ = runErr
+
+	// Verify base mode warning was printed
+	if !strings.Contains(stderr, "Running in base") {
+		t.Errorf("expected stderr to contain 'Running in base', got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "Consider: ralph workspaces new") {
+		t.Errorf("expected stderr to contain workspace hint, got: %s", stderr)
+	}
+}
+
+func TestRun_MissingPRD_Error(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	// Don't create any PRD file
+
+	// Change to repo directory
+	oldWd, err := os.Getwd()
 	if err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "PRD not found") {
-			t.Errorf("unexpected 'PRD not found' error when PRD exists: %v", errMsg)
-		}
-		// Other errors are expected (e.g., claude not available)
-		// This test just verifies the PRD existence check works
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Run([]string{"--max-iterations=1"})
+	if err == nil {
+		t.Fatal("expected error when PRD does not exist, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "PRD not found") {
+		t.Errorf("expected error to contain 'PRD not found', got: %v", err)
+	}
+}
+
+func TestRun_WithWorkspaceFlag(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	// Create workspace structure
+	wsName := "test-ws"
+	ws := workspace.Workspace{Name: wsName, Branch: "ralph/" + wsName}
+	wsDir := filepath.Join(dir, ".ralph", "workspaces", wsName)
+	treeDir := filepath.Join(wsDir, "tree")
+	if err := os.MkdirAll(treeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.WriteWorkspaceJSON(dir, wsName, ws); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.RegistryCreate(dir, ws); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write PRD at workspace level (with all stories passing so loop exits)
+	prdContent := `{
+  "project": "test",
+  "branchName": "ralph/test-ws",
+  "description": "Test PRD",
+  "userStories": [
+    {"id": "US-001", "title": "Test", "description": "Test", "acceptanceCriteria": ["Works"], "priority": 1, "passes": false}
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(wsDir, "prd.json"), []byte(prdContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Change to repo root (not inside workspace tree)
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the workspace context resolves correctly with --workspace flag
+	wc, err := workspace.ResolveWorkContext(wsName, "", dir, dir)
+	if err != nil {
+		t.Fatalf("ResolveWorkContext failed: %v", err)
+	}
+
+	if wc.Name != wsName {
+		t.Errorf("expected workspace name=%q, got %q", wsName, wc.Name)
+	}
+	expectedWorkDir := treeDir
+	if wc.WorkDir != expectedWorkDir {
+		t.Errorf("expected WorkDir=%s, got %s", expectedWorkDir, wc.WorkDir)
+	}
+	expectedPRD := filepath.Join(wsDir, "prd.json")
+	if wc.PRDPath != expectedPRD {
+		t.Errorf("expected PRDPath=%s, got %s", expectedPRD, wc.PRDPath)
+	}
+}
+
+func TestRun_WorkspaceMissingPRD_Error(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	// Create workspace structure without PRD
+	wsName := "no-prd-ws"
+	ws := workspace.Workspace{Name: wsName, Branch: "ralph/" + wsName}
+	wsDir := filepath.Join(dir, ".ralph", "workspaces", wsName)
+	treeDir := filepath.Join(wsDir, "tree")
+	if err := os.MkdirAll(treeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.WriteWorkspaceJSON(dir, wsName, ws); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.RegistryCreate(dir, ws); err != nil {
+		t.Fatal(err)
+	}
+
+	// Change to repo root
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Run([]string{"--workspace", wsName, "--max-iterations=1"})
+	if err == nil {
+		t.Fatal("expected error when workspace PRD does not exist")
+	}
+
+	if !strings.Contains(err.Error(), "PRD not found") {
+		t.Errorf("expected error to contain 'PRD not found', got: %v", err)
 	}
 }

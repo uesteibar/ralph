@@ -15,12 +15,12 @@ func TestRenderLoopIteration_ContainsStoryDetails(t *testing.T) {
 		AcceptanceCriteria: []string{"Login form renders", "Tests pass"},
 	}
 
-	out, err := RenderLoopIteration(story, []string{"npm test", "npm run lint"}, ".ralph/progress.txt")
+	out, err := RenderLoopIteration(story, []string{"npm test", "npm run lint"}, ".ralph/progress.txt", "/abs/path/to/prd.json")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration failed: %v", err)
 	}
 
-	checks := []string{"US-001", "Add user login", "npm test", "npm run lint", "<promise>COMPLETE</promise>", ".ralph/progress.txt"}
+	checks := []string{"US-001", "Add user login", "npm test", "npm run lint", "<promise>COMPLETE</promise>", ".ralph/progress.txt", "/abs/path/to/prd.json"}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {
 			t.Errorf("output should contain %q", want)
@@ -35,7 +35,7 @@ func TestRenderLoopIteration_CompletionRequiresBothStoriesAndIntegrationTests(t 
 		Description: "Test",
 	}
 
-	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt")
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration failed: %v", err)
 	}
@@ -54,12 +54,54 @@ func TestRenderLoopIteration_CompletionRequiresBothStoriesAndIntegrationTests(t 
 }
 
 func TestRenderPRDNew_ContainsProjectName(t *testing.T) {
-	out, err := RenderPRDNew("MyProject")
+	out, err := RenderPRDNew(PRDNewData{
+		ProjectName: "MyProject",
+		PRDPath:     ".ralph/state/prd.json",
+	})
 	if err != nil {
 		t.Fatalf("RenderPRDNew failed: %v", err)
 	}
 	if !strings.Contains(out, "MyProject") {
 		t.Error("output should contain project name")
+	}
+	if !strings.Contains(out, ".ralph/state/prd.json") {
+		t.Error("output should contain PRD path")
+	}
+}
+
+func TestRenderPRDNew_WithWorkspaceContext(t *testing.T) {
+	out, err := RenderPRDNew(PRDNewData{
+		ProjectName:     "MyProject",
+		PRDPath:         "/repo/.ralph/workspaces/my-feature/prd.json",
+		WorkspaceBranch: "ralph/my-feature",
+	})
+	if err != nil {
+		t.Fatalf("RenderPRDNew failed: %v", err)
+	}
+
+	checks := []string{
+		"MyProject",
+		"/repo/.ralph/workspaces/my-feature/prd.json",
+		"ralph/my-feature",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderPRDNew_BaseMode_NoBranch(t *testing.T) {
+	out, err := RenderPRDNew(PRDNewData{
+		ProjectName: "MyProject",
+		PRDPath:     ".ralph/state/prd.json",
+	})
+	if err != nil {
+		t.Fatalf("RenderPRDNew failed: %v", err)
+	}
+	// Should not contain branch instruction when WorkspaceBranch is empty.
+	if strings.Contains(out, "Use branch name") {
+		t.Error("output should not contain branch instruction in base mode")
 	}
 }
 
@@ -70,6 +112,36 @@ func TestRenderChatSystem_ContainsProjectName(t *testing.T) {
 	}
 	if !strings.Contains(out, "ChatProject") {
 		t.Error("output should contain project name")
+	}
+}
+
+func TestRenderChatSystem_IncludesPRDContext(t *testing.T) {
+	data := ChatSystemData{
+		ProjectName: "TestProject",
+		PRDContext:  "Project: test\nDescription: Build a login system\nStories:\n- US-001: Add login form [done]\n",
+	}
+	out, err := RenderChatSystem(data)
+	if err != nil {
+		t.Fatalf("RenderChatSystem failed: %v", err)
+	}
+	checks := []string{"PRD Context", "Build a login system", "US-001: Add login form"}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderChatSystem_NoPRDContext_OmitsSection(t *testing.T) {
+	data := ChatSystemData{
+		ProjectName: "TestProject",
+	}
+	out, err := RenderChatSystem(data)
+	if err != nil {
+		t.Fatalf("RenderChatSystem failed: %v", err)
+	}
+	if strings.Contains(out, "PRD Context") {
+		t.Error("output should not contain PRD Context section when PRDContext is empty")
 	}
 }
 

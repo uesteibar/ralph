@@ -196,6 +196,110 @@ copy_to_worktree: []
 	}
 }
 
+func TestLoad_BranchPrefix_DefaultValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ralph.yaml")
+	content := "project: Test\nrepo:\n  default_base: main\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.Repo.BranchPrefix != "ralph/" {
+		t.Errorf("BranchPrefix = %q, want %q", cfg.Repo.BranchPrefix, "ralph/")
+	}
+}
+
+func TestLoad_BranchPrefix_CustomValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ralph.yaml")
+	content := "project: Test\nrepo:\n  default_base: main\n  branch_prefix: feature/\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.Repo.BranchPrefix != "feature/" {
+		t.Errorf("BranchPrefix = %q, want %q", cfg.Repo.BranchPrefix, "feature/")
+	}
+}
+
+func TestDiscover_SkipsConfigInsideWorkspaceTree(t *testing.T) {
+	// Simulate the real workspace structure:
+	// <repo>/.ralph/ralph.yaml            ← real config (should be found)
+	// <repo>/.ralph/workspaces/<name>/workspace.json
+	// <repo>/.ralph/workspaces/<name>/tree/.ralph/ralph.yaml ← git checkout (should be skipped)
+	repoDir := t.TempDir()
+
+	// Create the real config at the repo root.
+	realRalphDir := filepath.Join(repoDir, ".ralph")
+	if err := os.MkdirAll(realRalphDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	configContent := "project: RealRepo\nrepo:\n  default_base: main\n"
+	if err := os.WriteFile(filepath.Join(realRalphDir, "ralph.yaml"), []byte(configContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create workspace structure with workspace.json.
+	wsName := "my-feature"
+	wsDir := filepath.Join(repoDir, ".ralph", "workspaces", wsName)
+	if err := os.MkdirAll(wsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "workspace.json"), []byte(`{"name":"my-feature"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create tree with a ralph.yaml (as if checked out by git).
+	treeDir := filepath.Join(wsDir, "tree")
+	treeRalphDir := filepath.Join(treeDir, ".ralph")
+	if err := os.MkdirAll(treeRalphDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	treeConfigContent := "project: TreeConfig\nrepo:\n  default_base: main\n"
+	if err := os.WriteFile(filepath.Join(treeRalphDir, "ralph.yaml"), []byte(treeConfigContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Discover from inside the tree should skip the tree config and find the real one.
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(treeDir)
+
+	cfg, err := Discover()
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if cfg.Project != "RealRepo" {
+		t.Errorf("Project = %q, want %q (should have skipped tree config)", cfg.Project, "RealRepo")
+	}
+
+	// Verify Repo.Path points to the real repo, not the tree.
+	// Use EvalSymlinks to handle macOS /private/var symlinks.
+	absRepoDir, _ := filepath.EvalSymlinks(repoDir)
+	if cfg.Repo.Path != absRepoDir {
+		t.Errorf("Repo.Path = %q, want %q", cfg.Repo.Path, absRepoDir)
+	}
+}
+
+func TestConfig_WorkspacesDir(t *testing.T) {
+	cfg := &Config{Repo: RepoConfig{Path: "/my/repo"}}
+	got := cfg.WorkspacesDir()
+	want := filepath.Join("/my/repo", ".ralph", "workspaces")
+	if got != want {
+		t.Errorf("WorkspacesDir() = %q, want %q", got, want)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
 }

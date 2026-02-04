@@ -173,7 +173,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 		log.Printf("[loop] working on %s: %s", story.ID, story.Title)
 
-		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath)
+		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath, cfg.PRDPath)
 		if err != nil {
 			return fmt.Errorf("rendering prompt for %s: %w", story.ID, err)
 		}

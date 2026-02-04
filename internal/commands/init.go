@@ -46,7 +46,9 @@ const finishSkillContent = `Take the plan we have discussed and agreed upon in t
 
 ## Output Format
 
-Write a valid JSON file to ` + "`.ralph/state/prd.json`" + ` with this exact schema:
+Write to the PRD path specified in the system prompt. If none specified write to ` + "`.ralph/state/prd.json`" + `.
+
+Use this exact schema:
 
 ` + "```json" + `
 {
@@ -142,6 +144,7 @@ func Init(args []string, in io.Reader) error {
 		ralphDir,
 		filepath.Join(ralphDir, "tasks"),
 		filepath.Join(ralphDir, "skills"),
+		filepath.Join(ralphDir, "workspaces"),
 		stateDir,
 		filepath.Join(stateDir, "archive"),
 		filepath.Join(cwd, ".claude", "commands"),
@@ -150,6 +153,15 @@ func Init(args []string, in io.Reader) error {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("creating directory %s: %w", dir, err)
 		}
+	}
+
+	// Initialize workspaces.json (only if it doesn't exist)
+	workspacesJSONPath := filepath.Join(stateDir, "workspaces.json")
+	if _, err := os.Stat(workspacesJSONPath); err != nil {
+		if err := os.WriteFile(workspacesJSONPath, []byte("[]"), 0644); err != nil {
+			return fmt.Errorf("writing workspaces.json: %w", err)
+		}
+		created = append(created, ".ralph/state/workspaces.json")
 	}
 
 	// Write config (only if it doesn't exist)
@@ -230,10 +242,15 @@ func Init(args []string, in io.Reader) error {
 		}
 	}
 	fmt.Println()
+	fmt.Println("Shell integration (add to your ~/.bashrc or ~/.zshrc):")
+	fmt.Println()
+	fmt.Println("  eval \"$(ralph shell-init)\"")
+	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  1. Edit .ralph/ralph.yaml (set quality checks, project details)")
-	fmt.Println("  2. ralph prd new        (interactive PRD creation)")
-	fmt.Println("  3. ralph run            (execute the loop from staged PRD)")
+	fmt.Println("  2. Create your first workspace: ralph workspaces new <name>")
+	fmt.Println("  3. ralph prd new        (interactive PRD creation)")
+	fmt.Println("  4. ralph run            (execute the loop from staged PRD)")
 
 	return nil
 }
@@ -285,7 +302,7 @@ func ensureGitignoreEntries(dir string, gitTrackChoice int) {
 	if gitTrackChoice == 2 {
 		entries = []string{".ralph/"}
 	} else {
-		entries = []string{".ralph/worktrees/", ".ralph/state/"}
+		entries = []string{".ralph/workspaces/", ".ralph/state/"}
 	}
 
 	var toAdd []string

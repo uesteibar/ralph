@@ -9,6 +9,11 @@
 - **No external test deps**: Only stdlib + `gopkg.in/yaml.v3`.
 - **Testable external calls**: Use package-level function variables (e.g. `invokeClaudeFn`) to mock external CLI calls in tests.
 - **shell.Runner for git**: All git operations use `*shell.Runner` with `Dir` set to the target directory. Non-zero exits produce `*shell.ExitError` with Code and Stderr.
+- **workspace package**: `internal/workspace/` provides data model (Workspace, WorkContext), path helpers, name validation, registry CRUD at `.ralph/state/workspaces.json`, per-workspace `workspace.json` read/write, `DetectCurrent` for cwd parsing, `ResolveWorkContext` for 4-level priority resolution (flag > env > cwd > base), and `DeriveBranch` for branch name derivation with pattern validation.
+- **Config.BranchPrefix**: `RepoConfig.BranchPrefix` defaults to `"ralph/"` if not set in YAML. Used by workspace creation for branch derivation.
+- **Config.WorkspacesDir()**: Returns `<repoPath>/.ralph/workspaces` for workspace directory management.
+- **workspace.CreateWorkspace**: Creates full workspace structure (dir, workspace.json, git worktree at tree/, copies .ralph/.claude/patterns, registry). Cleans up git-checked-out state/workspaces/worktrees dirs from tree.
+- **workspace.RemoveWorkspace**: Full cleanup (worktree, directory, registry, branch). Branch deletion is best-effort. Reads branch from registry directly if directory is missing.
 - **gitops package**: Pure functions taking `(ctx, runner, ...)`. Worktree operations use a `repoRunner` with `Dir: repoPath`.
 - **RebaseResult struct**: `StartRebase` and `ContinueRebase` return `RebaseResult{Success, HasConflicts}` for structured results.
 - **Absolute git dir**: Use `git rev-parse --absolute-git-dir` (not `--git-dir`) when checking filesystem paths derived from git dir.
@@ -20,6 +25,9 @@
 - **Command pattern**: All commands in `internal/commands/` follow: parse flags with `flag.NewFlagSet`, call `AddProjectConfigFlag(fs)`, load config via `ResolveConfig(*configPath)`, then business logic. Wire into `cmd/ralph/main.go` switch + usage text.
 - **Worktree validation**: Use `gitops.IsWorktree(ctx, r)` to check if running in a worktree. Return clear error if not.
 - **Claude interactive invocation**: Use `claude.Invoke(ctx, claude.InvokeOpts{Prompt: ..., Interactive: true})` — prompt becomes `--system-prompt`.
+- **Shared workspace helpers**: `AddWorkspaceFlag(fs)` registers `--workspace` flag. `resolveWorkContextFromFlags(flag, repoPath)` encapsulates cwd+env+ResolveWorkContext into a single call. All commands use these for consistency.
+- **E2e test pattern**: `test/e2e/workspace_e2e_test.go` uses `TestMain` to build the binary, `runRalph`/`runRalphWithStdin` helpers for controlled subprocess execution with clean env, `setupTestRepo` copies fixtures + inits git with bare remote. Agent evaluation via Claude CLI is conditional (`t.Skip` when not available). Reports collected as `cmdReport` structs with command, args, exitCode, stdout, stderr.
+- **Error output in main.go**: Use `fmt.Fprintf(os.Stderr, ...)` not `log.Fatalf` for user-facing errors to avoid timestamps.
 
 ---
 
@@ -402,4 +410,396 @@
   - Local mode is a simple early-return pattern: check flag, validate PRD exists, run loop, return
   - Tests need complete config (including `project` field) to avoid config validation errors
   - Testing with `--max-iterations=0` allows verifying setup without invoking Claude
+---
+
+## 2026-02-04 - US-001 (workspace-management)
+- Created `internal/workspace/` package with complete data model and persistence layer
+- Structs: `Workspace` (Name, Branch, CreatedAt), `WorkContext` (Name, WorkDir, PRDPath)
+- Path helpers: `WorkspacePath`, `TreePath`, `PRDPathForWorkspace`
+- Name validation: `ValidateName` enforces `^[a-zA-Z0-9._-]+$` pattern
+- Branch derivation: `DeriveBranch(prefix, name, branchPattern)` with optional regex validation
+- Current detection: `DetectCurrent(cwd)` parses cwd for `.ralph/workspaces/<name>/tree` segment
+- Registry CRUD at `.ralph/state/workspaces.json`: `RegistryCreate`, `RegistryList`, `RegistryGet`, `RegistryRemove`, `RegistryListWithMissing`
+- Per-workspace metadata: `ReadWorkspaceJSON`, `WriteWorkspaceJSON` at `.ralph/workspaces/<name>/workspace.json`
+- Work context resolution: `ResolveWorkContext(flag, env, cwd, repoPath)` with 4-level priority
+- Config changes: added `BranchPrefix` field to `RepoConfig` (default: `"ralph/"`, YAML tag `branch_prefix`), added `WorkspacesDir()` method
+- Files changed:
+  - `internal/workspace/workspace.go` — new file with full workspace package
+  - `internal/workspace/workspace_test.go` — new file with 30 tests
+  - `internal/config/config.go` — added BranchPrefix field, default, WorkspacesDir method
+  - `internal/config/config_test.go` — added 3 tests for BranchPrefix and WorkspacesDir
+- **Learnings for future iterations:**
+  - `strings.Cut` preferred over `strings.Index` (stringscut lint rule)
+  - Registry uses `[]registryEntry` not map — preserves insertion order and is simpler for small lists
+  - `RegistryListWithMissing` returns raw entries with Missing flag; `RegistryList` returns clean `[]Workspace`
+  - `ResolveWorkContext` does NOT verify workspace existence — callers handle that when needed
+  - Config defaults (like BranchPrefix) are set in `Load()` after unmarshal, before validate
+---
+
+## 2026-02-04 - US-002 (workspace-management)
+- Implemented `CreateWorkspace` and `RemoveWorkspace` functions in `internal/workspace/gitops.go`
+- `CreateWorkspace(ctx, runner, repoPath, ws, base, copyPatterns)` creates full workspace structure:
+  - Creates `.ralph/workspaces/<name>/` directory and writes `workspace.json`
+  - Creates git worktree at `.ralph/workspaces/<name>/tree/` (handles existing branch resume scenario)
+  - Removes `.ralph/state/`, `.ralph/workspaces/`, `.ralph/worktrees/` from tree if checked out by git
+  - Copies `.ralph/` (skipping worktrees/, state/, workspaces/), `.claude/` if exists, and copy_to_worktree patterns
+  - Updates workspace registry
+- `RemoveWorkspace(ctx, runner, repoPath, name)` performs full cleanup:
+  - Removes git worktree, deletes workspace directory recursively, removes registry entry, deletes git branch
+  - Handles missing directory gracefully (reads branch from registry directly)
+- Updated `CopyDotRalph` in `internal/gitops/gitops.go` to skip `workspaces/` directory (in addition to `worktrees/` and `state/`)
+- Files changed:
+  - `internal/workspace/gitops.go` — new file with `CreateWorkspace` and `RemoveWorkspace` functions
+  - `internal/workspace/gitops_test.go` — new file with 6 tests covering all scenarios
+  - `internal/gitops/gitops.go` — added `workspaces` to `skipDirs` in `CopyDotRalph`
+- **Learnings for future iterations:**
+  - When git worktree checks out committed files (e.g., `.ralph/state/`), they need to be explicitly removed after worktree creation — `CopyDotRalph` skip logic only prevents copying, not removes existing checkout
+  - `CreateWorkspace` falls back to local base if `origin/<base>` doesn't exist (supports local-only repos without remotes)
+  - `RemoveWorkspace` reads branch from registry entries directly when `RegistryGet` fails (e.g., missing directory), avoiding chicken-and-egg problem
+  - Branch deletion in `RemoveWorkspace` is best-effort (may already be gone or checked out elsewhere)
+  - Tests use `realPath(t, t.TempDir())` via `filepath.EvalSymlinks` to handle macOS `/private/var/...` symlinks for temp dirs
+---
+
+## 2026-02-04 - US-003 (workspace-management)
+- Implemented `ralph shell-init` command that outputs a shell function wrapping the ralph binary
+- Shell function intercepts workspace commands (workspaces new/switch/remove, switch, done) to handle `cd` and `RALPH_WORKSPACE` env var natively
+- Detects shell from `$SHELL` env var via `filepath.Base`; supports bash and zsh (any path)
+- Unsupported shells produce descriptive error with detected shell path
+- Shell function uses `command ralph` to prevent recursion, captures stdout for path, lets stderr pass through
+- Sets `RALPH_SHELL_INIT=1` on function definition for detection by other commands
+- `workspaces new` handler checks for `../prd.json` (workspace-level) and chains `command ralph prd new` if missing
+- `workspaces switch` handles `base` specially (unset RALPH_WORKSPACE) vs named workspace (export)
+- `workspaces remove` and `done` cd to stdout path and unset RALPH_WORKSPACE when applicable
+- Files changed:
+  - `internal/commands/shell_init.go` — new file with `ShellInit`, `shellInit`, `shellFunction` functions
+  - `internal/commands/shell_init_test.go` — new file with 8 tests: function declaration checks, env exports, case statements, syntax validation (bash -n, zsh -n), various shell paths, stdout capture pattern
+  - `cmd/ralph/main.go` — added `shell-init` case in dispatch and usage text
+- **Learnings for future iterations:**
+  - `filepath.Base(shellPath)` extracts shell name from any path (e.g., `/usr/local/bin/zsh` → `zsh`)
+  - Same shell function works for both bash and zsh — POSIX-compatible case/esac with `$()` substitution
+  - `bash -n` and `zsh -n` provide reliable syntax validation in tests via `exec.Command`
+  - Shell function uses `__output` and `__exit` prefixed with `__` to avoid polluting user's namespace
+  - The `shellInit` helper accepting `io.Writer` makes the function easily testable without environment dependency
+---
+
+## 2026-02-04 - US-004 (workspace-management)
+- Implemented `ralph workspaces` command with sub-routing in `internal/commands/workspaces.go`
+- Sub-routing dispatches: new, list, switch, remove; no subcommand defaults to list
+- `workspacesNew` implementation:
+  - Validates workspace name via `workspace.ValidateName`
+  - Checks `RALPH_SHELL_INIT` env var with descriptive error + eval command
+  - Checks for duplicate workspace via `workspace.RegistryGet`; error message suggests `ralph workspaces switch`
+  - Derives branch via `workspace.DeriveBranch` with config prefix/pattern
+  - Checks if branch exists locally via `gitops.BranchExistsLocally`; prompts fresh/resume
+  - Fresh: deletes existing branch, lets `CreateWorkspace` create new one
+  - Resume: lets `CreateWorkspace` detect existing branch and use it
+  - Calls `workspace.CreateWorkspace` with full config (base, copy patterns)
+  - stderr: `✓ Created workspace '<name>' (branch: <branch>)`
+  - stdout: absolute path to `tree/` directory for shell function cd
+- List, switch, remove are stubbed with "not yet implemented" errors (US-005, US-006)
+- Registered `workspaces` command in `cmd/ralph/main.go` dispatch and usage text
+- Comprehensive tests in `internal/commands/workspaces_test.go`:
+  - `TestWorkspacesNew_SuccessfulCreation` — verifies stdout path, registry entry, directory structure, workspace.json
+  - `TestWorkspacesNew_DuplicateNameError` — verifies "already exists" error with switch suggestion
+  - `TestWorkspacesNew_InvalidNameError` — table-driven: empty name, spaces, slashes
+  - `TestWorkspacesNew_MissingShellInitError` — verifies shell-init error message + eval command
+  - `TestWorkspacesNew_ExistingBranch_Resume` — verifies resume with existing commit preserved
+  - `TestWorkspacesNew_ExistingBranch_Fresh` — verifies fresh start without old files
+  - `TestWorkspaces_SubRouting` — verifies all sub-routing paths (default to list, explicit list, switch, remove, unknown)
+  - `TestPromptBranchChoice_ValidChoices` — table-driven: fresh, resume
+  - `TestPromptBranchChoice_InvalidChoice` — verifies error for invalid input
+- Files changed:
+  - `internal/commands/workspaces.go` — new file with Workspaces dispatch, workspacesNew, promptBranchChoice, stubs
+  - `internal/commands/workspaces_test.go` — new file with 9 test functions
+  - `cmd/ralph/main.go` — added workspaces case in dispatch and usage text
+- **Learnings for future iterations:**
+  - `workspacesDispatch` accepts `io.Reader` for testable stdin (branch choice prompt)
+  - `captureStdout` test helper uses `os.Pipe()` to capture stdout from functions that use `fmt.Println`
+  - The `RegistryGet` function returns an error for both "not found" and "missing directory" — use the err==nil check to detect "already exists"
+  - Tests use `initTestRepo` helper that creates repo with `main` branch and `.ralph/ralph.yaml` config
+  - Config discovery via `os.Chdir` in tests requires save/restore of original dir
+  - `realPath` via `filepath.EvalSymlinks` needed for macOS `/private/var/...` temp dir symlinks
+---
+
+## 2026-02-05 - US-005 (workspace-management)
+- Implemented `ralph workspaces list` and `ralph workspaces switch` commands
+- `workspacesList` implementation:
+  - Accepts `--project-config` flag
+  - Reads registry via `RegistryListWithMissing`, resolves current workspace via `ResolveWorkContext`
+  - Always shows `base` first, marks current workspace with `*` prefix and `[current]` tag
+  - Shows `[missing]` for workspaces whose directories no longer exist
+  - When no workspaces registered, shows hint: `Create a workspace: ralph workspaces new <name>`
+- `workspacesSwitch` implementation:
+  - Accepts `--project-config` flag and workspace name as positional arg
+  - Checks `RALPH_SHELL_INIT` env var with descriptive error + eval command
+  - Special handling for `base`: outputs repo root path
+  - Validates workspace exists via `RegistryGet`; maps error types to user-friendly messages
+  - Not found: `Workspace "<name>" not found. Run ralph workspaces list to see available.`
+  - Missing directory: `Workspace "<name>" directory is missing. Remove it: ralph workspaces remove <name>`
+  - stdout: absolute path (tree/ or repo root) for shell function to cd into
+  - stderr: `Switched to workspace <name>`
+- Exported `WorkspaceEntry` struct from workspace package (replaces unexported `registryEntry` in `RegistryListWithMissing` return type)
+- Updated sub-routing tests: removed stale "not yet implemented" entries for list and switch
+- Tests added: `TestWorkspacesList_EmptyRegistry`, `TestWorkspacesList_WithWorkspaces`, `TestWorkspacesList_CurrentMarked`, `TestWorkspacesList_MissingDir`, `TestWorkspacesSwitch_OutputsCorrectPath`, `TestWorkspacesSwitch_ToBase`, `TestWorkspacesSwitch_Nonexistent`, `TestWorkspacesSwitch_MissingDirectory`, `TestWorkspacesSwitch_MissingShellInit`
+- Files changed:
+  - `internal/commands/workspaces.go` — replaced list/switch stubs with full implementations, added `strings` import
+  - `internal/commands/workspaces_test.go` — added 9 new test functions, updated sub-routing tests
+  - `internal/workspace/workspace.go` — added exported `WorkspaceEntry` struct, updated `RegistryListWithMissing` return type
+- **Learnings for future iterations:**
+  - `RegistryListWithMissing` originally returned unexported `registryEntry` — needed to export as `WorkspaceEntry` for cross-package use
+  - `RegistryGet` returns different error messages for "not found" vs "directory is missing" — use `strings.Contains` to dispatch appropriate user-facing errors
+  - Switch to `base` is handled as a special case before registry lookup (base is not in registry)
+  - List output is human-facing stdout (not intercepted by shell function); switch stdout is machine output (captured by shell function for cd)
+  - `ResolveWorkContext` with empty flag/env and repo root cwd returns "base" — used to detect current context for list marking
+---
+
+## 2026-02-05 - US-006 (workspace-management)
+- Implemented `ralph workspaces remove <name>` command in `internal/commands/workspaces.go`
+  - Accepts `--project-config` flag
+  - Validates workspace exists in registry via `RegistryListWithMissing` (handles both existing and missing-dir cases)
+  - Calls `workspace.RemoveWorkspace` for full cleanup (worktree, directory, registry, branch)
+  - Detects if removing current workspace via `ResolveWorkContext` (env/cwd detection)
+  - If removing current: stdout outputs base repo path for shell function cd + RALPH_WORKSPACE unset
+  - If removing non-current: no stdout
+  - stderr: `✓ Removed workspace '<name>'`
+- Replaced `ralph switch` (old worktree-based subshell spawner) with interactive workspace picker
+  - Uses `huh.NewSelect` with `huh.NewForm().WithOutput(os.Stderr)` so stdout is free for path
+  - Reads registry via `RegistryListWithMissing`, includes `base` as first option, skips missing workspaces
+  - Checks `RALPH_SHELL_INIT` env var; error if not set
+  - stdout: selected workspace tree/ path (or repo root for base)
+  - Cancelled selection: non-zero exit code, no stdout
+  - `switchPickerFn` package-level variable for testability (mock picker in tests)
+- Updated `cmd/ralph/main.go` usage text for switch command
+- Tests added:
+  - `TestWorkspacesRemove_VerifyCleanup` — creates workspace, removes it, verifies directory and registry cleaned
+  - `TestWorkspacesRemove_CurrentWorkspace_OutputsBasePath` — sets RALPH_WORKSPACE, removes, verifies stdout has repo root
+  - `TestWorkspacesRemove_Nonexistent_Error` — verifies "not found" error for nonexistent workspace
+  - `TestSwitch_MissingShellInit` — verifies shell integration required error
+  - `TestSwitch_SelectsWorkspace_OutputsTreePath` — mocked picker returns workspace, verifies stdout path
+  - `TestSwitch_SelectsBase_OutputsRepoRoot` — mocked picker returns base, verifies stdout is repo root
+  - `TestSwitch_CancelledSelection_Error` — mocked picker cancels, verifies non-zero exit
+- Updated sub-routing test: removed stale "not yet implemented" entry for remove
+- Files changed:
+  - `internal/commands/workspaces.go` — replaced remove stub with full implementation
+  - `internal/commands/workspaces_test.go` — added 3 remove tests, updated sub-routing test
+  - `internal/commands/switch.go` — replaced entirely with interactive workspace picker
+  - `internal/commands/switch_test.go` — new file with 4 tests for interactive switch
+  - `cmd/ralph/main.go` — updated usage text
+- **Learnings for future iterations:**
+  - `switchPickerFn` package-level variable pattern (same as `invokeClaudeFn`) works well for mocking `huh` interactive pickers
+  - `huh.NewForm(huh.NewGroup(sel)).WithOutput(os.Stderr)` renders the TUI to stderr, keeping stdout clean for machine output
+  - For remove: use `RegistryListWithMissing` (not `RegistryGet`) to validate existence — this handles both existing and missing-dir workspaces uniformly
+  - Current workspace detection before removal uses `ResolveWorkContext` with env/cwd — the shell function handles unsetting RALPH_WORKSPACE after cd
+  - Old switch.go used `worktreeRoot` + `shell.RunInteractive` to spawn subshells — new switch just outputs a path for the shell function wrapper
+---
+
+## 2026-02-05 - US-007 (workspace-management)
+- Implemented `ralph status` command in `internal/commands/status.go`
+- Full output mode with lipgloss styling:
+  - Shows workspace name and branch (from registry for workspaces, from git for base)
+  - If PRD exists: shows `Stories: N/M passing` and `Tests: X/Y passing` (integration tests)
+  - If no PRD: shows `No PRD`
+  - In base: includes hint `Tip: ralph workspaces new <name>`
+  - Pass/fail coloring: green for all passing, red otherwise
+- Short output mode (`--short`): single line, no colors
+  - Base: `base`
+  - Workspace with PRD: `<name> N/M` (e.g., `login-page 3/5`)
+  - Workspace without PRD: `<name> (no prd)`
+  - Suitable for `PS1="$(ralph status --short 2>/dev/null) $ "`
+- Accepts `--project-config` and `--short` flags
+- Registered in `cmd/ralph/main.go` dispatch and usage text
+- Tests: `TestStatus_InBase`, `TestStatus_InWorkspaceWithPRD`, `TestStatus_Short_InBase`, `TestStatus_Short_InWorkspaceWithPRD`, `TestStatus_Short_WorkspaceWithoutPRD`, `TestStatus_WorkspaceWithoutPRD`, `TestStatus_IntegrationTestProgress`
+- Helper `containsText` with `stripANSI` for testing lipgloss-styled output
+- Files changed:
+  - `internal/commands/status.go` — new file with Status command implementation
+  - `internal/commands/status_test.go` — new file with 7 tests
+  - `cmd/ralph/main.go` — added status case in dispatch and usage text
+- **Learnings for future iterations:**
+  - Lipgloss output embeds ANSI escape codes — tests need `stripANSI` helper to check text content
+  - `statusRun(args, w io.Writer)` pattern allows directing output to a buffer for testing
+  - `workspace.RegistryGet` returns branch info for workspace context; for base, use `gitops.CurrentBranch`
+  - Short mode returns no newline — suitable for shell prompt embedding
+---
+
+## 2026-02-05 - US-008 (workspace-management)
+- Refactored `ralph run` to use workspace context instead of worktree creation
+- Removed ALL worktree creation logic: CreateWorktree, CopyDotRalph, CopyDotClaude, CopyGlobPatterns, PRD copy into worktree
+- Removed `--local` flag entirely
+- Removed `worktreeRoot()` helper function
+- Added `--workspace <name>` flag
+- New behavior uses `workspace.ResolveWorkContext`: workspace mode sets workDir to tree/ and prdPath to workspace-level prd.json; base mode sets workDir to cwd and prdPath to .ralph/state/prd.json with warning to stderr
+- Removed BranchName validation from PRD (branch is workspace concern not PRD concern)
+- Added `PRDPath` field to `LoopIterationData` struct in prompts package
+- Updated `RenderLoopIteration` signature to accept prdPath parameter
+- Updated `loop_iteration.md` template: explicitly tells Claude the PRD location via `{{.PRDPath}}` and instructs to read/update at that absolute path
+- Updated `loop.go` to pass `cfg.PRDPath` when rendering prompt
+- Removed worktree check from `chat.go` (was already broken for workspace model)
+- Updated `cmd/ralph/main.go` usage text: replaced `--local` with `--workspace`
+- Files changed:
+  - `internal/commands/run.go` — complete rewrite: removed worktree logic, added --workspace flag, uses ResolveWorkContext
+  - `internal/commands/run_test.go` — replaced old tests with new: workspace flag parsing, workspace workDir/prdPath resolution, base warning, missing PRD error, --workspace flag integration, workspace missing PRD
+  - `internal/commands/chat.go` — removed worktreeRoot check (incompatible with workspace model)
+  - `internal/prompts/prompts.go` — added PRDPath to LoopIterationData, updated RenderLoopIteration signature
+  - `internal/prompts/prompts_test.go` — updated callers with new prdPath arg
+  - `internal/prompts/templates/loop_iteration.md` — added PRD Location section, replaced hardcoded paths with {{.PRDPath}}
+  - `internal/loop/loop.go` — updated RenderLoopIteration call with cfg.PRDPath
+  - `cmd/ralph/main.go` — updated usage text
+- **Learnings for future iterations:**
+  - `ResolveWorkContext` handles all 4 priority levels (flag > env > cwd > base) — commands just call it and use the result
+  - The `runLoop` helper now accepts separate `workDir` and `prdPath` params since they're different for workspace mode (prdPath is outside tree/)
+  - `gitops.CurrentBranch` takes `*shell.Runner`, not a string path — need to create runner first
+  - Removing `worktreeRoot()` required also fixing `chat.go` which depended on it — the worktree check was already broken for the workspace model anyway
+  - Progress path comes from `cfg.Repo.Path` (repo root), not from the workspace, since progress is shared
+---
+
+## 2026-02-05 - US-009 (workspace-management)
+- Refactored `ralph done` to support workspace-aware auto-cleanup and updated PRD creation flow
+- `done.go` changes:
+  - Added `--workspace <name>` flag
+  - Uses `workspace.ResolveWorkContext` to detect workspace vs base mode
+  - Workspace mode: after squash-merge, archives PRD from `WorkContext.PRDPath` to `.ralph/state/archive/`, then auto-removes workspace via `workspace.RemoveWorkspace`, stdout outputs base repo path, stderr shows merge confirmation
+  - Base mode: unchanged behavior (squash-merge + optional cleanup prompt via `shouldCleanup`)
+  - Added `archivePRDFromPath(sourcePath, cfg)` function for archiving from any PRD location
+  - `generateCommitMessage` now accepts `prdPath string` instead of `*config.Config`
+  - Added `doneNowFn` package-level var for testable time in archive paths
+- `prompts.go` changes:
+  - Added `PRDPath` and `WorkspaceBranch` fields to `PRDNewData` struct
+  - `RenderPRDNew` now accepts `PRDNewData` struct instead of string
+- `prd_new.md` changes:
+  - Template now includes `Write the PRD JSON to {{.PRDPath}}`
+  - Conditionally includes `Use branch name {{.WorkspaceBranch}}` when in workspace
+- `prd.go` changes:
+  - Added `--workspace <name>` flag
+  - Uses `workspace.ResolveWorkContext` to resolve PRDPath and WorkDir
+  - Looks up branch from registry when in workspace to populate `WorkspaceBranch`
+  - Passes `PRDNewData` struct to `RenderPRDNew`
+- `init.go` changes:
+  - Updated `finishSkillContent`: replaced hardcoded `.ralph/state/prd.json` with dynamic instruction
+- `main.go` usage text updated for `ralph done` and `ralph prd new` with `--workspace` flag
+- Files changed:
+  - `internal/commands/done.go` — refactored with workspace support, added archivePRDFromPath
+  - `internal/commands/done_test.go` — updated tests, added archive and workspace-path tests
+  - `internal/commands/prd.go` — added workspace resolution and PRDNewData struct usage
+  - `internal/prompts/prompts.go` — updated PRDNewData struct and RenderPRDNew signature
+  - `internal/prompts/prompts_test.go` — updated and added tests for new PRDNewData fields
+  - `internal/prompts/templates/prd_new.md` — added PRDPath and WorkspaceBranch template fields
+  - `internal/commands/init.go` — updated finishSkillContent constant
+  - `cmd/ralph/main.go` — updated usage text
+- **Learnings for future iterations:**
+  - `archivePRDFromPath` is separate from `archiveStagedPRD` (in common.go) since it archives from any path, not just the staged PRD
+  - `doneNowFn` package-level var pattern (like `invokeClaudeFn`) enables deterministic archive directory names in tests
+  - `generateCommitMessage` taking a path string is more flexible than taking config — works for both workspace and base PRD locations
+  - Template conditional `{{- if .WorkspaceBranch}}` with dash trims whitespace to avoid blank lines when field is empty
+  - `workspace.RegistryGet` provides branch info for workspace context; branch lookup failure is non-fatal for PRD creation
+---
+
+## 2026-02-05 - US-010
+- Added `--workspace <name>` flag to `ralph chat` and `ralph rebase` commands
+- Created shared `resolveWorkContextFromFlags` helper in `common.go` and `AddWorkspaceFlag` for consistent flag registration
+- Refactored all workspace-using commands (`run`, `done`, `prd`, `chat`, `rebase`) to use the shared helpers
+- `chat.go` changes:
+  - Added `--workspace` flag via `AddWorkspaceFlag(fs)`
+  - Removed hardcoded `cfg.Repo.Path` for context reading; now uses `wc.WorkDir` from `ResolveWorkContext`
+  - Added PRD context loading: reads PRD from `wc.PRDPath` and includes it in chat system prompt via new `PRDContext` field
+  - Added `formatPRDContext` helper that formats PRD as project/description/stories summary
+  - Works from base without error (no IsWorktree check)
+- `rebase.go` changes:
+  - Added `--workspace` flag via `AddWorkspaceFlag(fs)`
+  - Replaced `gitops.IsWorktree` check with `resolveWorkContextFromFlags`
+  - Base without `--workspace` returns clear error: `Rebase requires workspace context. Use --workspace <name> or switch to a workspace.`
+  - Reads PRD for conflict resolution from `wc.PRDPath`
+  - `shell.Runner` uses `wc.WorkDir` for all git operations
+  - `resolveConflicts` and `buildConflictPrompt` now accept `workspace.WorkContext` instead of using `cfg.StatePRDPath()`
+- `prompts.go` changes:
+  - Added `PRDContext` field to `ChatSystemData` struct
+- `chat_system.md` template updated with conditional `{{if .PRDContext}}` section
+- `main.go` usage text updated with `--workspace` flag for chat and rebase
+- Fixed integration_test.go: removed references to removed `--local` flag
+- Files changed:
+  - `internal/commands/common.go` — added `AddWorkspaceFlag`, `resolveWorkContextFromFlags`, workspace import
+  - `internal/commands/chat.go` — refactored to use workspace context and PRD loading
+  - `internal/commands/chat_test.go` — added 4 new tests: workspace flag parsing, base context resolution, workspace context with PRD, PRD context formatting
+  - `internal/commands/rebase.go` — refactored to use workspace context, removed IsWorktree check
+  - `internal/commands/rebase_test.go` — added 3 new tests: base error without workspace, workspace context resolution, PRD from workspace path
+  - `internal/commands/run.go` — refactored to use `AddWorkspaceFlag` and `resolveWorkContextFromFlags`
+  - `internal/commands/done.go` — refactored to use `AddWorkspaceFlag` and `resolveWorkContextFromFlags`
+  - `internal/commands/prd.go` — refactored to use `AddWorkspaceFlag` and `resolveWorkContextFromFlags`, removed `os` import
+  - `internal/prompts/prompts.go` — added `PRDContext` field to `ChatSystemData`
+  - `internal/prompts/prompts_test.go` — added 2 tests for PRD context in chat template
+  - `internal/prompts/templates/chat_system.md` — added PRD Context section
+  - `internal/commands/integration_test.go` — removed `--local` flag references
+  - `cmd/ralph/main.go` — updated usage text
+- **Learnings for future iterations:**
+  - Shared helper `resolveWorkContextFromFlags` encapsulates `os.Getwd()` + `os.Getenv("RALPH_WORKSPACE")` + `workspace.ResolveWorkContext` into a single call — all commands now use it consistently
+  - `AddWorkspaceFlag` centralizes the `--workspace` flag definition for consistency across commands
+  - When refactoring internal function signatures (like `resolveConflicts`, `buildConflictPrompt`), pass `workspace.WorkContext` instead of individual paths for cleaner API
+  - PRD context in chat prompt is optional (gracefully degrades when PRD doesn't exist)
+  - `formatPRDContext` reuses `formatStories` from rebase.go since both are in the same package
+---
+
+## 2026-02-05 - US-011 (workspace-management)
+- Added `printWorkspaceHeader(wc WorkContext, repoPath string)` helper in `internal/commands/common.go`
+  - Styled with lipgloss (color "8" muted), prints to stderr
+  - Format: `[workspace: <name> | <branch>]` for workspaces, `[workspace: base]` for base
+  - Looks up branch from registry via `workspace.RegistryGet`
+- Added `CheckLegacyWorktrees()` (exported) and `checkLegacyWorktreesInDir(repoPath)` (internal, testable) in common.go
+  - Prints warning to stderr when `.ralph/worktrees/` directory exists
+  - Called in `main.go` for all commands except init, shell-init, help
+- Added workspace header to all commands: run, chat, rebase, done, prd, status (full mode only), validate, workspaces (list, new, switch, remove), switch
+  - Excluded from: shell-init, status --short, init
+- Updated `ralph init` in `init.go`:
+  - Creates `.ralph/workspaces/` directory
+  - Initializes `.ralph/state/workspaces.json` with `[]`
+  - Changed gitignore entry from `.ralph/worktrees/` to `.ralph/workspaces/`
+  - Added shell-init instructions and getting started hint to output
+- Removed legacy code from `internal/gitops/gitops.go`:
+  - Removed `WorktreePath` function
+  - Removed `CreateWorktree` function
+  - Removed `sanitizeBranch` helper (became unused)
+- Updated `.gitignore`: changed `.ralph/worktrees/` to `.ralph/workspaces/`
+- Rewrote `README.md` documenting workspace concept, all CLI commands, workflow, shell integration, config, PRD format, architecture
+- Updated `cmd/ralph/main.go` usage text with all commands and flags
+- Tests:
+  - Created `internal/commands/common_test.go` with 4 tests: header for base, header for workspace, legacy warning when present, silent when absent
+  - Updated `internal/commands/init_test.go`: renamed worktrees→workspaces references, added `TestInit_CreatesWorkspaceInfrastructure`
+- Files changed:
+  - `internal/commands/common.go` — added lipgloss import, headerStyle, printWorkspaceHeader, CheckLegacyWorktrees, checkLegacyWorktreesInDir
+  - `internal/commands/common_test.go` — new file with 4 tests
+  - `internal/commands/init.go` — workspaces dir, workspaces.json, gitignore, output updates
+  - `internal/commands/init_test.go` — renamed test, added workspace infrastructure test
+  - `internal/commands/run.go`, `chat.go`, `rebase.go`, `done.go`, `prd.go`, `status.go`, `validate.go`, `switch.go`, `workspaces.go` — added printWorkspaceHeader calls
+  - `internal/gitops/gitops.go` — removed WorktreePath, CreateWorktree, sanitizeBranch
+  - `cmd/ralph/main.go` — added CheckLegacyWorktrees call, updated usage text
+  - `.gitignore` — .ralph/worktrees/ → .ralph/workspaces/
+  - `README.md` — complete rewrite
+- **Learnings for future iterations:**
+  - `RegistryGet` checks workspace directory existence — tests creating registry entries must also create the workspace directory
+  - `checkLegacyWorktreesInDir(repoPath)` is the internal testable version; `CheckLegacyWorktrees()` is the exported version that resolves config
+  - Lipgloss color "8" provides a muted gray suitable for context headers that don't distract from main output
+---
+
+## 2026-02-05 - US-012
+- Implemented comprehensive end-to-end integration test for the full workspace system
+- Created test fixture at `test/fixtures/sample-project/` with realistic Go project files (main.go, main_test.go, go.mod, Justfile, .ralph/ralph.yaml)
+- Created `test/e2e/workspace_e2e_test.go` with TestMain that builds the ralph binary, and 8 test functions covering:
+  - `TestE2E_Init`: ralph init verification (workspaces/, workspaces.json created)
+  - `TestE2E_ShellInit`: shell function syntax validation via bash -n and zsh -n
+  - `TestE2E_WorkspaceLifecycle`: full lifecycle (new, list, switch, remove) with all verifications
+  - `TestE2E_Status`: status in workspace context with PRD and --short format
+  - `TestE2E_ErrorCases`: duplicate name, invalid name, switch/remove nonexistent
+  - `TestE2E_MissingDirectory`: [missing] marker detection after manual directory removal
+  - `TestE2E_ShellInitDetection`: RALPH_SHELL_INIT error when not set
+  - `TestE2E_AgentEvaluation`: feeds structured report to Claude for UX scoring (Clarity, Consistency, Discoverability, Edge case handling, Completeness >= 4/5)
+- Fixed `cmd/ralph/main.go`: replaced `log.Fatalf` with `fmt.Fprintf` for cleaner error output (no timestamps), improving UX consistency
+- Files changed:
+  - `test/fixtures/sample-project/` — new fixture directory with main.go, main_test.go, go.mod, Justfile, .ralph/ralph.yaml
+  - `test/e2e/workspace_e2e_test.go` — new e2e test file (704 lines)
+  - `cmd/ralph/main.go` — replaced log.Fatalf with fmt.Fprintf for error output
+  - `.ralph/state/prd.json` — marked US-012 passes: true
+- **Learnings for future iterations:**
+  - E2e tests using exec.Command need controlled environments — use clean baseEnv with only essential vars (PATH, HOME, USER, git config) to avoid inheriting RALPH_SHELL_INIT or RALPH_WORKSPACE from the test runner
+  - `ralph init` requires stdin for interactive prompts (git tracking choice, LLM analysis opt-in) — pipe "1\nn\n" for non-interactive testing
+  - macOS temp dirs go through /private/var symlinks — use filepath.EvalSymlinks (realPath helper) for path comparisons
+  - Agent evaluation via Claude is non-deterministic — ratings can vary between runs, but consistently >= 4/5 after fixing timestamp formatting in error messages
+  - The `log.Fatalf` in main.go was causing timestamp-prefixed error messages which Claude's UX eval flagged as inconsistent with the rest of the stderr output
 ---

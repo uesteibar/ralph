@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/uesteibar/ralph/internal/claude"
+	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/prompts"
 	"github.com/uesteibar/ralph/internal/shell"
 )
@@ -16,6 +17,7 @@ import (
 func Chat(args []string) error {
 	fs := flag.NewFlagSet("chat", flag.ExitOnError)
 	configPath := AddProjectConfigFlag(fs)
+	workspaceFlag := AddWorkspaceFlag(fs)
 	continueFlag := fs.Bool("continue", false, "Resume the most recent conversation")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -26,9 +28,12 @@ func Chat(args []string) error {
 		return fmt.Errorf("resolving config: %w", err)
 	}
 
-	if _, ok := worktreeRoot(cfg.Repo.Path); !ok {
-		return fmt.Errorf("ralph chat must be run from inside a worktree\n\nUse 'ralph run' first to create a worktree, then cd into it.")
+	wc, err := resolveWorkContextFromFlags(*workspaceFlag, cfg.Repo.Path)
+	if err != nil {
+		return fmt.Errorf("resolving workspace context: %w", err)
 	}
+
+	printWorkspaceHeader(wc, cfg.Repo.Path)
 
 	data := prompts.ChatSystemData{
 		ProjectName: cfg.Project,
@@ -46,11 +51,17 @@ func Chat(args []string) error {
 		data.Progress = string(progress)
 	}
 
-	// Read recent git commits
-	r := &shell.Runner{Dir: cfg.Repo.Path}
+	// Read recent git commits from workspace workDir
+	r := &shell.Runner{Dir: wc.WorkDir}
 	commits, err := r.Run(context.Background(), "git", "log", "--oneline", "-20")
 	if err == nil {
 		data.RecentCommits = commits
+	}
+
+	// Read PRD from workspace-level path for context if exists
+	p, err := prd.Read(wc.PRDPath)
+	if err == nil {
+		data.PRDContext = formatPRDContext(p)
 	}
 
 	prompt, err := prompts.RenderChatSystem(data)
@@ -60,9 +71,19 @@ func Chat(args []string) error {
 
 	_, err = claude.Invoke(context.Background(), claude.InvokeOpts{
 		Prompt:      prompt,
-		Dir:         cfg.Repo.Path,
+		Dir:         wc.WorkDir,
 		Interactive: true,
 		Continue:    *continueFlag,
 	})
 	return err
+}
+
+// formatPRDContext formats PRD data as a brief context summary.
+func formatPRDContext(p *prd.PRD) string {
+	summary := fmt.Sprintf("Project: %s\nDescription: %s\n", p.Project, p.Description)
+	if len(p.UserStories) > 0 {
+		summary += "Stories:\n"
+		summary += formatStories(p.UserStories)
+	}
+	return summary
 }
