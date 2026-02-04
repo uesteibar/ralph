@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -91,6 +92,31 @@ func (r *Runner) RunWithStdin(ctx context.Context, stdin string, name string, ar
 				Code:   exitErr.ExitCode(),
 				Stderr: strings.TrimSpace(stderr.String()),
 				Cmd:    name + " " + strings.Join(args, " "),
+			}
+		}
+		return "", fmt.Errorf("running %s: %w", name, err)
+	}
+
+	return stdout.String(), nil
+}
+
+// RunWithStdinStreaming executes a command, piping the given string to stdin,
+// streams stdout to the terminal in real-time, and also returns the full output.
+func (r *Runner) RunWithStdinStreaming(ctx context.Context, stdin string, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = r.Dir
+	cmd.Env = r.environ()
+	cmd.Stdin = strings.NewReader(stdin)
+
+	var stdout bytes.Buffer
+	cmd.Stdout = io.MultiWriter(&stdout, os.Stdout)
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return stdout.String(), &ExitError{
+				Code: exitErr.ExitCode(),
+				Cmd:  name + " " + strings.Join(args, " "),
 			}
 		}
 		return "", fmt.Errorf("running %s: %w", name, err)

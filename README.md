@@ -290,6 +290,7 @@ ralph run --project-config /path/to/config.yaml
 |------|---------|-------------|
 | `--project-config` | auto-discover | Path to project config YAML |
 | `--max-iterations` | `20` | Maximum number of loop iterations |
+| `--verbose` | `true` | Stream Claude's output in real-time |
 
 **Step-by-step behavior:**
 

@@ -651,3 +651,157 @@ func containsAt(s, substr string) bool {
 	}
 	return false
 }
+
+func TestRun_VerboseFlagPassedToInvoke(t *testing.T) {
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var capturedVerbose bool
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		capturedVerbose = opts.verbose
+		// Mark story as passed to exit loop
+		testPRD.UserStories[0].Passes = true
+		prd.Write(prdPath, testPRD)
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		Verbose:       true,
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	if !capturedVerbose {
+		t.Error("expected verbose flag to be passed through to invoke")
+	}
+}
+
+func TestRun_VerboseFlagPassedToQAVerification(t *testing.T) {
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+		IntegrationTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var qaVerbose bool
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		if opts.isQAVerification {
+			qaVerbose = opts.verbose
+			// Mark test as passed to exit loop
+			testPRD.IntegrationTests[0].Passes = true
+			prd.Write(prdPath, testPRD)
+		}
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		Verbose:       true,
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	if !qaVerbose {
+		t.Error("expected verbose flag to be passed through to QA verification")
+	}
+}
+
+func TestRun_VerboseFlagPassedToQAFix(t *testing.T) {
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+		IntegrationTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var fixVerbose bool
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		if opts.isQAFix {
+			fixVerbose = opts.verbose
+			// Mark test as passed to exit loop
+			testPRD.IntegrationTests[0].Passes = true
+			prd.Write(prdPath, testPRD)
+		}
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		Verbose:       true,
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	if !fixVerbose {
+		t.Error("expected verbose flag to be passed through to QA fix")
+	}
+}

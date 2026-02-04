@@ -22,6 +22,7 @@ func Run(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	configPath := AddProjectConfigFlag(fs)
 	maxIter := fs.Int("max-iterations", loop.DefaultMaxIterations, "Maximum loop iterations")
+	verbose := fs.Bool("verbose", true, "Stream Claude's output in real-time")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -36,7 +37,7 @@ func Run(args []string) error {
 	// Check if we're already inside a worktree — if so, run the loop here directly.
 	if wtRoot, ok := worktreeRoot(cfg.Repo.Path); ok {
 		log.Printf("[run] detected worktree at %s, resuming", wtRoot)
-		return runLoop(ctx, wtRoot, *maxIter, cfg.QualityChecks)
+		return runLoop(ctx, wtRoot, *maxIter, cfg.QualityChecks, *verbose)
 	}
 
 	// 1. Read staged PRD
@@ -116,10 +117,10 @@ func Run(args []string) error {
 		}
 	}
 
-	return runLoop(ctx, worktreePath, *maxIter, cfg.QualityChecks)
+	return runLoop(ctx, worktreePath, *maxIter, cfg.QualityChecks, *verbose)
 }
 
-func runLoop(ctx context.Context, workDir string, maxIter int, qualityChecks []string) error {
+func runLoop(ctx context.Context, workDir string, maxIter int, qualityChecks []string, verbose bool) error {
 	worktreePRDPath := filepath.Join(workDir, ".ralph", "state", "prd.json")
 	err := loop.Run(ctx, loop.Config{
 		MaxIterations: maxIter,
@@ -127,6 +128,7 @@ func runLoop(ctx context.Context, workDir string, maxIter int, qualityChecks []s
 		PRDPath:       worktreePRDPath,
 		ProgressPath:  filepath.Join(workDir, ".ralph", "progress.txt"),
 		QualityChecks: qualityChecks,
+		Verbose:       verbose,
 	})
 	if err != nil {
 		log.Printf("[run] loop ended: %v", err)

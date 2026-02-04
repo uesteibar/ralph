@@ -26,6 +26,10 @@ type InvokeOpts struct {
 
 	// MaxTurns limits the number of agentic turns (--max-turns flag).
 	MaxTurns int
+
+	// Verbose streams Claude's output to stdout in real-time while also
+	// capturing it for return. Only applies when Print is true.
+	Verbose bool
 }
 
 // Invoke runs the Claude CLI with the given options.
@@ -38,6 +42,10 @@ func Invoke(ctx context.Context, opts InvokeOpts) (string, error) {
 
 	if opts.Interactive {
 		return "", r.RunInteractive(ctx, "claude", args...)
+	}
+
+	if opts.Verbose {
+		return r.RunWithStdinStreaming(ctx, opts.Prompt, "claude", args...)
 	}
 
 	return r.RunWithStdin(ctx, opts.Prompt, "claude", args...)

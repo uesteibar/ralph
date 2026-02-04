@@ -22,6 +22,7 @@ const (
 type invokeOpts struct {
 	prompt           string
 	dir              string
+	verbose          bool
 	isQAVerification bool
 	isQAFix          bool
 }
@@ -29,9 +30,10 @@ type invokeOpts struct {
 // invokeClaudeFn is the function used to invoke Claude. Package-level var for testability.
 var invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
 	return claude.Invoke(ctx, claude.InvokeOpts{
-		Prompt: opts.prompt,
-		Dir:    opts.dir,
-		Print:  true,
+		Prompt:  opts.prompt,
+		Dir:     opts.dir,
+		Print:   true,
+		Verbose: opts.verbose,
 	})
 }
 
@@ -42,6 +44,7 @@ type Config struct {
 	PRDPath       string
 	ProgressPath  string
 	QualityChecks []string
+	Verbose       bool
 }
 
 // Run executes the Ralph loop: for each iteration, it reads the PRD, picks
@@ -119,8 +122,9 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 
 		output, err := invokeClaudeFn(ctx, invokeOpts{
-			prompt: prompt,
-			dir:    cfg.WorkDir,
+			prompt:  prompt,
+			dir:     cfg.WorkDir,
+			verbose: cfg.Verbose,
 		})
 		if err != nil {
 			log.Printf("[loop] Claude returned error on %s: %v", story.ID, err)
@@ -180,6 +184,7 @@ func runQAVerification(ctx context.Context, cfg Config) error {
 	_, err = invokeClaudeFn(ctx, invokeOpts{
 		prompt:           prompt,
 		dir:              cfg.WorkDir,
+		verbose:          cfg.Verbose,
 		isQAVerification: true,
 	})
 	return err
@@ -200,6 +205,7 @@ func runQAFix(ctx context.Context, cfg Config, failedTests []prd.IntegrationTest
 	_, err = invokeClaudeFn(ctx, invokeOpts{
 		prompt:  prompt,
 		dir:     cfg.WorkDir,
+		verbose: cfg.Verbose,
 		isQAFix: true,
 	})
 	return err
