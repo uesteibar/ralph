@@ -15,8 +15,8 @@ Usage:
   ralph init
   ralph validate [--project-config path]
   ralph prd new [--project-config path]
-  ralph run [--project-config path] [--max-iterations n]
-  ralph chat [--project-config path]
+  ralph run [--project-config path] [--max-iterations n] [--local]
+  ralph chat [--project-config path] [--continue]
   ralph switch [--project-config path]
   ralph rebase [branch] [--project-config path]
   ralph done [--project-config path]
@@ -24,6 +24,8 @@ Usage:
 Flags:
   --project-config    Path to project config YAML (default: discover .ralph/ralph.yaml)
   --max-iterations    Maximum loop iterations for run command (default: 20)
+  --local             Skip worktree creation and run loop in current directory
+  --continue          Resume the most recent conversation (chat command only)
 `)
 }
 

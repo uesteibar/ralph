@@ -10,10 +10,11 @@ import (
 )
 
 type Config struct {
-	Project       string      `yaml:"project"`
-	Repo          RepoConfig  `yaml:"repo"`
-	Paths         PathsConfig `yaml:"paths"`
-	QualityChecks []string    `yaml:"quality_checks"`
+	Project        string      `yaml:"project"`
+	Repo           RepoConfig  `yaml:"repo"`
+	Paths          PathsConfig `yaml:"paths"`
+	QualityChecks  []string    `yaml:"quality_checks"`
+	CopyToWorktree []string    `yaml:"copy_to_worktree,omitempty"`
 }
 
 type RepoConfig struct {

@@ -550,3 +550,339 @@ func TestConflictFiles_NoConflicts(t *testing.T) {
 		t.Fatalf("expected no conflict files, got %v", files)
 	}
 }
+
+func TestCopyDotClaude_CopiesDirectory(t *testing.T) {
+	repoDir := t.TempDir()
+	worktreeDir := t.TempDir()
+
+	// Create .claude directory with files in the repo.
+	claudeDir := filepath.Join(repoDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.local.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"key": "value"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a subdirectory with another file.
+	commandsDir := filepath.Join(claudeDir, "commands")
+	if err := os.MkdirAll(commandsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	commandPath := filepath.Join(commandsDir, "test.md")
+	if err := os.WriteFile(commandPath, []byte("# Test Command"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Copy .claude to worktree.
+	if err := CopyDotClaude(repoDir, worktreeDir); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify files were copied.
+	dstSettings := filepath.Join(worktreeDir, ".claude", "settings.local.json")
+	data, err := os.ReadFile(dstSettings)
+	if err != nil {
+		t.Fatalf("expected settings file to exist: %v", err)
+	}
+	if string(data) != `{"key": "value"}` {
+		t.Fatalf("expected settings content to match, got: %s", data)
+	}
+
+	dstCommand := filepath.Join(worktreeDir, ".claude", "commands", "test.md")
+	data, err = os.ReadFile(dstCommand)
+	if err != nil {
+		t.Fatalf("expected command file to exist: %v", err)
+	}
+	if string(data) != "# Test Command" {
+		t.Fatalf("expected command content to match, got: %s", data)
+	}
+}
+
+func TestCopyDotClaude_NoErrorWhenMissing(t *testing.T) {
+	repoDir := t.TempDir()
+	worktreeDir := t.TempDir()
+
+	// No .claude directory in repo — should not error.
+	if err := CopyDotClaude(repoDir, worktreeDir); err != nil {
+		t.Fatalf("unexpected error when .claude does not exist: %v", err)
+	}
+
+	// Verify nothing was created.
+	claudePath := filepath.Join(worktreeDir, ".claude")
+	if _, err := os.Stat(claudePath); !os.IsNotExist(err) {
+		t.Fatalf("expected .claude not to exist in worktree, got: %v", err)
+	}
+}
+
+func TestCopyGlobPatterns_LiteralPath(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a literal file to copy.
+	scriptsDir := filepath.Join(srcDir, "scripts")
+	if err := os.MkdirAll(scriptsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	setupPath := filepath.Join(scriptsDir, "setup.sh")
+	if err := os.WriteFile(setupPath, []byte("#!/bin/bash\necho setup"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warnings []string
+	warn := func(msg string) { warnings = append(warnings, msg) }
+
+	patterns := []string{"scripts/setup.sh"}
+	if err := CopyGlobPatterns(srcDir, dstDir, patterns, warn); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify file was copied with correct path structure.
+	dstPath := filepath.Join(dstDir, "scripts", "setup.sh")
+	data, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("expected file to exist: %v", err)
+	}
+	if string(data) != "#!/bin/bash\necho setup" {
+		t.Fatalf("expected content to match, got: %s", data)
+	}
+
+	if len(warnings) > 0 {
+		t.Fatalf("expected no warnings, got: %v", warnings)
+	}
+}
+
+func TestCopyGlobPatterns_SingleLevelWildcard(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create configs/*.json files.
+	configsDir := filepath.Join(srcDir, "configs")
+	if err := os.MkdirAll(configsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configsDir, "dev.json"), []byte(`{"env":"dev"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configsDir, "prod.json"), []byte(`{"env":"prod"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Also create a non-matching file.
+	if err := os.WriteFile(filepath.Join(configsDir, "readme.txt"), []byte("ignore"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warnings []string
+	warn := func(msg string) { warnings = append(warnings, msg) }
+
+	patterns := []string{"configs/*.json"}
+	if err := CopyGlobPatterns(srcDir, dstDir, patterns, warn); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify both JSON files were copied.
+	for _, name := range []string{"dev.json", "prod.json"} {
+		dstPath := filepath.Join(dstDir, "configs", name)
+		if _, err := os.Stat(dstPath); err != nil {
+			t.Fatalf("expected %s to exist: %v", name, err)
+		}
+	}
+
+	// Verify non-matching file was NOT copied.
+	txtPath := filepath.Join(dstDir, "configs", "readme.txt")
+	if _, err := os.Stat(txtPath); !os.IsNotExist(err) {
+		t.Fatalf("expected readme.txt NOT to be copied")
+	}
+
+	if len(warnings) > 0 {
+		t.Fatalf("expected no warnings, got: %v", warnings)
+	}
+}
+
+func TestCopyGlobPatterns_RecursiveWildcard(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create fixtures/**/*.txt files at various depths.
+	fixturesDir := filepath.Join(srcDir, "fixtures")
+	if err := os.MkdirAll(fixturesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixturesDir, "a.txt"), []byte("a"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	subDir := filepath.Join(fixturesDir, "sub")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "b.txt"), []byte("b"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deepDir := filepath.Join(subDir, "deep")
+	if err := os.MkdirAll(deepDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deepDir, "c.txt"), []byte("c"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Also create a non-matching file.
+	if err := os.WriteFile(filepath.Join(fixturesDir, "ignore.md"), []byte("ignore"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warnings []string
+	warn := func(msg string) { warnings = append(warnings, msg) }
+
+	patterns := []string{"fixtures/**/*.txt"}
+	if err := CopyGlobPatterns(srcDir, dstDir, patterns, warn); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify all three txt files were copied with correct paths.
+	expected := []string{
+		filepath.Join("fixtures", "a.txt"),
+		filepath.Join("fixtures", "sub", "b.txt"),
+		filepath.Join("fixtures", "sub", "deep", "c.txt"),
+	}
+	for _, relPath := range expected {
+		dstPath := filepath.Join(dstDir, relPath)
+		if _, err := os.Stat(dstPath); err != nil {
+			t.Fatalf("expected %s to exist: %v", relPath, err)
+		}
+	}
+
+	// Verify non-matching file was NOT copied.
+	mdPath := filepath.Join(dstDir, "fixtures", "ignore.md")
+	if _, err := os.Stat(mdPath); !os.IsNotExist(err) {
+		t.Fatalf("expected ignore.md NOT to be copied")
+	}
+
+	if len(warnings) > 0 {
+		t.Fatalf("expected no warnings, got: %v", warnings)
+	}
+}
+
+func TestCopyGlobPatterns_DirectoryPath(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a directory with multiple files.
+	dataDir := filepath.Join(srcDir, "data")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "file1.txt"), []byte("one"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "file2.txt"), []byte("two"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	subDataDir := filepath.Join(dataDir, "sub")
+	if err := os.MkdirAll(subDataDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDataDir, "nested.txt"), []byte("nested"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warnings []string
+	warn := func(msg string) { warnings = append(warnings, msg) }
+
+	// Specify directory path (not a glob) — should copy recursively.
+	patterns := []string{"data"}
+	if err := CopyGlobPatterns(srcDir, dstDir, patterns, warn); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify all files were copied with correct structure.
+	expected := []string{
+		filepath.Join("data", "file1.txt"),
+		filepath.Join("data", "file2.txt"),
+		filepath.Join("data", "sub", "nested.txt"),
+	}
+	for _, relPath := range expected {
+		dstPath := filepath.Join(dstDir, relPath)
+		if _, err := os.Stat(dstPath); err != nil {
+			t.Fatalf("expected %s to exist: %v", relPath, err)
+		}
+	}
+
+	if len(warnings) > 0 {
+		t.Fatalf("expected no warnings, got: %v", warnings)
+	}
+}
+
+func TestCopyGlobPatterns_NoMatchesWarns(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	var warnings []string
+	warn := func(msg string) { warnings = append(warnings, msg) }
+
+	patterns := []string{"nonexistent/*.xyz"}
+	if err := CopyGlobPatterns(srcDir, dstDir, patterns, warn); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have warned about no matches.
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got: %v", warnings)
+	}
+	if !strings.Contains(warnings[0], "nonexistent/*.xyz") {
+		t.Fatalf("expected warning to mention pattern, got: %s", warnings[0])
+	}
+}
+
+func TestCopyGlobPatterns_EmptyPatterns(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	var warnings []string
+	warn := func(msg string) { warnings = append(warnings, msg) }
+
+	// Empty patterns list should do nothing and not error.
+	if err := CopyGlobPatterns(srcDir, dstDir, nil, warn); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(warnings) > 0 {
+		t.Fatalf("expected no warnings, got: %v", warnings)
+	}
+}
+
+func TestCopyGlobPatterns_PreservesRelativePath(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create deeply nested file.
+	deepPath := filepath.Join(srcDir, "a", "b", "c", "file.txt")
+	if err := os.MkdirAll(filepath.Dir(deepPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(deepPath, []byte("deep content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warnings []string
+	warn := func(msg string) { warnings = append(warnings, msg) }
+
+	patterns := []string{"a/b/c/file.txt"}
+	if err := CopyGlobPatterns(srcDir, dstDir, patterns, warn); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify exact path structure is preserved.
+	dstPath := filepath.Join(dstDir, "a", "b", "c", "file.txt")
+	data, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("expected file to exist at exact path: %v", err)
+	}
+	if string(data) != "deep content" {
+		t.Fatalf("expected content to match, got: %s", data)
+	}
+}

@@ -71,6 +71,20 @@ func TestBuildArgs_PrintWithPrompt_PromptNotInArgs(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_Continue(t *testing.T) {
+	args := buildArgs(InvokeOpts{Interactive: true, Continue: true})
+	assertContains(t, args, "--continue")
+}
+
+func TestBuildArgs_ContinueFalse(t *testing.T) {
+	args := buildArgs(InvokeOpts{Interactive: true, Continue: false})
+	for _, a := range args {
+		if a == "--continue" {
+			t.Error("--continue should not be present when Continue is false")
+		}
+	}
+}
+
 func assertContains(t *testing.T, args []string, want string) {
 	t.Helper()
 	for _, a := range args {

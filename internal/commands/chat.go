@@ -16,6 +16,7 @@ import (
 func Chat(args []string) error {
 	fs := flag.NewFlagSet("chat", flag.ExitOnError)
 	configPath := AddProjectConfigFlag(fs)
+	continueFlag := fs.Bool("continue", false, "Resume the most recent conversation")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -61,6 +62,7 @@ func Chat(args []string) error {
 		Prompt:      prompt,
 		Dir:         cfg.Repo.Path,
 		Interactive: true,
+		Continue:    *continueFlag,
 	})
 	return err
 }

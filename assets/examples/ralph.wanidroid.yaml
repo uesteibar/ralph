@@ -13,3 +13,9 @@ quality_checks:
   - "npm run lint"
   - "npm run typecheck"
   - "cd android && ./gradlew test"
+
+# Optional: additional files/folders to copy to worktrees (supports glob patterns)
+# copy_to_worktree:
+#   - ".env.example"
+#   - "configs/*.json"
+#   - "fixtures/**/*.txt"

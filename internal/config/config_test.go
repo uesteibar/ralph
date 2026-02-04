@@ -122,6 +122,80 @@ func TestResolve_ExplicitPathTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestLoad_CopyToWorktree_ParsesField(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ralph.yaml")
+	content := `project: Test
+repo:
+  default_base: main
+copy_to_worktree:
+  - ".env.example"
+  - "configs/*.json"
+  - "fixtures/**/*.txt"
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if len(cfg.CopyToWorktree) != 3 {
+		t.Fatalf("CopyToWorktree length = %d, want 3", len(cfg.CopyToWorktree))
+	}
+	expected := []string{".env.example", "configs/*.json", "fixtures/**/*.txt"}
+	for i, want := range expected {
+		if cfg.CopyToWorktree[i] != want {
+			t.Errorf("CopyToWorktree[%d] = %q, want %q", i, cfg.CopyToWorktree[i], want)
+		}
+	}
+}
+
+func TestLoad_CopyToWorktree_OptionalField(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ralph.yaml")
+	content := `project: Test
+repo:
+  default_base: main
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.CopyToWorktree != nil {
+		t.Errorf("CopyToWorktree = %v, want nil", cfg.CopyToWorktree)
+	}
+}
+
+func TestLoad_CopyToWorktree_EmptyList(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ralph.yaml")
+	content := `project: Test
+repo:
+  default_base: main
+copy_to_worktree: []
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if len(cfg.CopyToWorktree) != 0 {
+		t.Errorf("CopyToWorktree length = %d, want 0", len(cfg.CopyToWorktree))
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
 }

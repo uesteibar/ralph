@@ -284,3 +284,122 @@
   - Tests verify both the template content (prompts_test.go) and the runtime behavior (loop_test.go)
   - When testing COMPLETE signal rejection, ensure the test starts with a story that needs to be marked as passing
 ---
+
+## 2026-02-04 - US-001 (worktree-copy-and-local-mode)
+- Added `CopyDotClaude` function to `internal/gitops/gitops.go` to copy `.claude` directory to worktrees
+- Function follows same pattern as `CopyDotRalph`: checks if directory exists, recursively copies all files
+- Unlike `CopyDotRalph`, no directories are skipped (`.claude` has no ephemeral directories like worktrees/state)
+- Integrated call to `CopyDotClaude` in `internal/commands/run.go` after `CopyDotRalph` call (step 6)
+- Added two tests to `internal/gitops/gitops_test.go`:
+  - `TestCopyDotClaude_CopiesDirectory` — verifies files and subdirectories are copied correctly
+  - `TestCopyDotClaude_NoErrorWhenMissing` — verifies no error when `.claude` doesn't exist
+- Files changed:
+  - `internal/gitops/gitops.go` — added `CopyDotClaude` function
+  - `internal/gitops/gitops_test.go` — added two tests for new function
+  - `internal/commands/run.go` — added call to `CopyDotClaude` after `CopyDotRalph`
+- **Learnings for future iterations:**
+  - Follow existing patterns (`CopyDotRalph`) when adding similar functionality
+  - The `.claude` directory is simpler than `.ralph` — no directories need to be skipped
+  - Tests use `t.TempDir()` for isolated filesystem tests without needing git repos
+---
+
+## 2026-02-04 - US-002 (worktree-copy-and-local-mode)
+- Added `CopyToWorktree` field to `Config` struct in `internal/config/config.go`
+- Field is `[]string` with YAML tag `copy_to_worktree,omitempty` for optional backwards-compatible support
+- Added three tests in `internal/config/config_test.go`:
+  - `TestLoad_CopyToWorktree_ParsesField` — verifies list of glob patterns is parsed correctly
+  - `TestLoad_CopyToWorktree_OptionalField` — verifies config loads when field is omitted (nil)
+  - `TestLoad_CopyToWorktree_EmptyList` — verifies config loads with empty list
+- Updated example config `assets/examples/ralph.wanidroid.yaml` with commented `copy_to_worktree` example
+- Files changed:
+  - `internal/config/config.go` — added CopyToWorktree field to Config struct
+  - `internal/config/config_test.go` — added 3 tests for new field
+  - `assets/examples/ralph.wanidroid.yaml` — added commented copy_to_worktree example
+- **Learnings for future iterations:**
+  - Use `omitempty` tag for optional slice fields to maintain backwards compatibility
+  - Config field is just []string — validation/expansion of globs happens at copy time (US-003/US-004)
+  - Tests verify both nil (omitted) and empty list cases for optional fields
+---
+
+## 2026-02-04 - US-003 (worktree-copy-and-local-mode)
+- Added `CopyGlobPatterns` function to `internal/gitops/gitops.go` for flexible file copying
+- Added `github.com/bmatcuk/doublestar/v4` dependency for `**` recursive glob support
+- Function supports:
+  - Single-level wildcards (`configs/*.json`)
+  - Recursive wildcards (`fixtures/**/*.txt`)
+  - Literal paths (`scripts/setup.sh`)
+  - Directory paths (copied recursively)
+- Preserves relative path structure in destination
+- Patterns that match nothing invoke a warning callback but don't error
+- Added helper function `copyDir` for recursive directory copying
+- Added 8 comprehensive tests in `internal/gitops/gitops_test.go`:
+  - `TestCopyGlobPatterns_LiteralPath` — verifies literal file paths are copied
+  - `TestCopyGlobPatterns_SingleLevelWildcard` — verifies `*.json` patterns work
+  - `TestCopyGlobPatterns_RecursiveWildcard` — verifies `**/*.txt` patterns work at all depths
+  - `TestCopyGlobPatterns_DirectoryPath` — verifies directory paths are copied recursively
+  - `TestCopyGlobPatterns_NoMatchesWarns` — verifies warning callback is invoked for no-match patterns
+  - `TestCopyGlobPatterns_EmptyPatterns` — verifies empty pattern list does nothing
+  - `TestCopyGlobPatterns_PreservesRelativePath` — verifies exact path structure is preserved
+- Files changed:
+  - `internal/gitops/gitops.go` — added `CopyGlobPatterns` and `copyDir` functions, added doublestar import
+  - `internal/gitops/gitops_test.go` — added 8 tests for CopyGlobPatterns
+  - `go.mod` — added `github.com/bmatcuk/doublestar/v4` dependency
+  - `go.sum` — updated with new dependency
+- **Learnings for future iterations:**
+  - Go's standard `filepath.Glob` doesn't support `**` — use `bmatcuk/doublestar` for full glob support
+  - `doublestar.Glob` takes `fs.FS` as first arg — use `os.DirFS(srcDir)` to create a filesystem rooted at source
+  - Separate handling for directory paths (detected via `os.Stat`) from glob patterns
+  - Warning callback pattern (`func(string)`) allows callers to handle no-match cases flexibly
+---
+
+## 2026-02-04 - US-004 (worktree-copy-and-local-mode)
+- Integrated `CopyGlobPatterns` into worktree creation in `internal/commands/run.go`
+- After copying `.ralph/` and `.claude/`, now calls `gitops.CopyGlobPatterns` with `cfg.CopyToWorktree` patterns
+- Added step 7 between `.claude/` copy and prd.json write (renumbered step 8)
+- Warning callback uses `log.Printf("[run] warning: %s", msg)` to log patterns that match nothing
+- Empty pattern list (nil or `[]string{}`) is handled gracefully — no copy operation occurs
+- Files changed:
+  - `internal/commands/run.go` — added CopyGlobPatterns call after CopyDotClaude
+- **Learnings for future iterations:**
+  - Integration changes are minimal when underlying functions are well-designed (5 lines of code)
+  - `CopyGlobPatterns` is already thoroughly tested in `gitops_test.go` — no new tests needed for the wiring
+  - The warning callback pattern allows consistent logging without tight coupling
+---
+
+## 2026-02-04 - US-005 (worktree-copy-and-local-mode)
+- Added `--local` flag to `ralph run` command in `internal/commands/run.go`
+- Flag is defined with `fs.Bool("local", false, "Run loop in current directory without creating a worktree")`
+- Flag defaults to `false`, preserving existing behavior
+- Updated help text in `cmd/ralph/main.go` to document the `--local` flag
+- Added test file `internal/commands/run_test.go` with:
+  - `TestRun_LocalFlagParsing` — table-driven tests for flag parsing (default, --local, --local=true, --local=false)
+  - `TestWorktreeRoot_DetectsWorktreePath` — tests for worktree detection helper function
+- Files changed:
+  - `internal/commands/run.go` — added `--local` flag definition
+  - `cmd/ralph/main.go` — updated usage text with `--local` flag
+  - `internal/commands/run_test.go` — new file with flag parsing tests
+- **Learnings for future iterations:**
+  - Go's `flag` package allows `--flag`, `--flag=true`, `--flag=false` syntax automatically
+  - Flag definition belongs in the command, but placeholder `_ = local` keeps go vet happy until behavior is implemented (US-006)
+  - Testing flag parsing separately from behavior allows incremental story completion
+---
+
+## 2026-02-04 - US-006 (worktree-copy-and-local-mode)
+- Implemented `--local` flag behavior in `internal/commands/run.go`
+- When `--local` is set:
+  - Gets current working directory via `os.Getwd()`
+  - Checks for PRD at `cwd/.ralph/state/prd.json`, errors if not found
+  - Skips all worktree creation logic (branch checks, worktree creation, file copying)
+  - Runs loop directly in current working directory via `runLoop(ctx, cwd, ...)`
+  - Progress and PRD updates naturally write to cwd since loop.Config.WorkDir is cwd
+- Added two tests in `internal/commands/run_test.go`:
+  - `TestRunLocal_FailsWhenPRDDoesNotExist` — verifies error when PRD missing
+  - `TestRunLocal_PRDExistenceCheck` — verifies no "PRD not found" error when PRD exists (may fail later on Claude invocation, which is expected)
+- Files changed:
+  - `internal/commands/run.go` — added local mode logic at the top of `Run()` function
+  - `internal/commands/run_test.go` — added two new test functions
+- **Learnings for future iterations:**
+  - Local mode is a simple early-return pattern: check flag, validate PRD exists, run loop, return
+  - Tests need complete config (including `project` field) to avoid config validation errors
+  - Testing with `--max-iterations=0` allows verifying setup without invoking Claude
+---

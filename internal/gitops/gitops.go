@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/uesteibar/ralph/internal/shell"
 )
 
@@ -115,6 +116,48 @@ func CopyDotRalph(repoPath, worktreePath string) error {
 
 		if d.IsDir() && skipDirs[rel] {
 			return fs.SkipDir
+		}
+
+		target := filepath.Join(dst, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0644)
+	})
+}
+
+// CopyDotClaude copies the .claude directory from the repo root into the
+// worktree, enabling Claude settings and skills to be available in the
+// isolated environment.
+func CopyDotClaude(repoPath, worktreePath string) error {
+	src := filepath.Join(repoPath, ".claude")
+	dst := filepath.Join(worktreePath, ".claude")
+
+	info, err := os.Stat(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // no .claude dir to copy
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
 		}
 
 		target := filepath.Join(dst, rel)
@@ -317,4 +360,91 @@ func MainRepoPath(ctx context.Context, r *shell.Runner) (string, error) {
 // sanitizeBranch replaces path separators in branch names for safe directory names.
 func sanitizeBranch(branch string) string {
 	return strings.ReplaceAll(branch, "/", "__")
+}
+
+// CopyGlobPatterns copies files matching glob patterns from srcDir to dstDir.
+// Supports single-level wildcards (*.json), recursive wildcards (**/*.json),
+// literal paths (scripts/setup.sh), and directory paths (copied recursively).
+// Preserves relative path structure in the destination.
+// Patterns that match nothing invoke the warn callback but do not error.
+func CopyGlobPatterns(srcDir, dstDir string, patterns []string, warn func(string)) error {
+	for _, pattern := range patterns {
+		srcPath := filepath.Join(srcDir, pattern)
+
+		// Check if the pattern is a literal path to a directory.
+		info, err := os.Stat(srcPath)
+		if err == nil && info.IsDir() {
+			// Copy directory recursively.
+			if err := copyDir(srcPath, filepath.Join(dstDir, pattern)); err != nil {
+				return fmt.Errorf("copying directory %s: %w", pattern, err)
+			}
+			continue
+		}
+
+		// Use doublestar for glob matching (supports **).
+		matches, err := doublestar.Glob(os.DirFS(srcDir), pattern)
+		if err != nil {
+			return fmt.Errorf("invalid glob pattern %q: %w", pattern, err)
+		}
+
+		if len(matches) == 0 {
+			warn(fmt.Sprintf("pattern %q matched no files", pattern))
+			continue
+		}
+
+		for _, match := range matches {
+			src := filepath.Join(srcDir, match)
+			dst := filepath.Join(dstDir, match)
+
+			// Skip directories — we only copy files (directories are created as needed).
+			info, err := os.Stat(src)
+			if err != nil {
+				return fmt.Errorf("stat %s: %w", src, err)
+			}
+			if info.IsDir() {
+				continue
+			}
+
+			// Ensure destination directory exists.
+			if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+				return fmt.Errorf("creating directory for %s: %w", dst, err)
+			}
+
+			// Copy the file.
+			data, err := os.ReadFile(src)
+			if err != nil {
+				return fmt.Errorf("reading %s: %w", src, err)
+			}
+			if err := os.WriteFile(dst, data, 0644); err != nil {
+				return fmt.Errorf("writing %s: %w", dst, err)
+			}
+		}
+	}
+	return nil
+}
+
+// copyDir recursively copies a directory from src to dst.
+func copyDir(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+
+		target := filepath.Join(dst, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0644)
+	})
 }

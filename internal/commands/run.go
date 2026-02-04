@@ -23,6 +23,7 @@ func Run(args []string) error {
 	configPath := AddProjectConfigFlag(fs)
 	maxIter := fs.Int("max-iterations", loop.DefaultMaxIterations, "Maximum loop iterations")
 	verbose := fs.Bool("verbose", false, "Enable verbose debug logging")
+	local := fs.Bool("local", false, "Run loop in current directory without creating a worktree")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -33,6 +34,20 @@ func Run(args []string) error {
 	}
 
 	ctx := context.Background()
+
+	// --local mode: skip worktree creation and run in current directory
+	if *local {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getting current directory: %w", err)
+		}
+		prdPath := filepath.Join(cwd, ".ralph", "state", "prd.json")
+		if _, err := os.Stat(prdPath); os.IsNotExist(err) {
+			return fmt.Errorf("PRD not found at %s\n\nRun 'ralph prd new' first or use 'ralph run' without --local to create a worktree.", prdPath)
+		}
+		log.Printf("[run] running locally in %s", cwd)
+		return runLoop(ctx, cwd, *maxIter, cfg.QualityChecks, *verbose)
+	}
 
 	// Check if we're already inside a worktree — if so, run the loop here directly.
 	if wtRoot, ok := worktreeRoot(cfg.Repo.Path); ok {
@@ -107,7 +122,22 @@ func Run(args []string) error {
 			return fmt.Errorf("copying .ralph: %w", err)
 		}
 
-		// 6. Write prd.json into worktree
+		// 6. Copy .claude into worktree (if it exists)
+		if err := gitops.CopyDotClaude(cfg.Repo.Path, worktreePath); err != nil {
+			return fmt.Errorf("copying .claude: %w", err)
+		}
+
+		// 7. Copy user-specified files via copy_to_worktree patterns
+		if len(cfg.CopyToWorktree) > 0 {
+			warn := func(msg string) {
+				log.Printf("[run] warning: %s", msg)
+			}
+			if err := gitops.CopyGlobPatterns(cfg.Repo.Path, worktreePath, cfg.CopyToWorktree, warn); err != nil {
+				return fmt.Errorf("copying files via copy_to_worktree: %w", err)
+			}
+		}
+
+		// 8. Write prd.json into worktree
 		prdPath := filepath.Join(worktreePath, ".ralph", "state", "prd.json")
 		if err := os.MkdirAll(filepath.Dir(prdPath), 0755); err != nil {
 			return fmt.Errorf("creating worktree state directory: %w", err)

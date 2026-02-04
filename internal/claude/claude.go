@@ -46,6 +46,9 @@ type InvokeOpts struct {
 
 	// Verbose enables debug logging (passes --verbose to Claude CLI).
 	Verbose bool
+
+	// Continue resumes the most recent conversation (passes --continue to Claude CLI).
+	Continue bool
 }
 
 // Invoke runs the Claude CLI with the given options.
@@ -257,6 +260,10 @@ func buildArgs(opts InvokeOpts) []string {
 
 	if opts.Verbose {
 		args = append(args, "--verbose")
+	}
+
+	if opts.Continue {
+		args = append(args, "--continue")
 	}
 
 	if opts.MaxTurns > 0 {
