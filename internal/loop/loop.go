@@ -1,10 +1,12 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -35,6 +37,43 @@ var invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) 
 		Print:   true,
 		Verbose: opts.verbose,
 	})
+}
+
+// gitHasUncommittedChangesFn checks if git working tree has uncommitted changes.
+// Package-level var for testability.
+var gitHasUncommittedChangesFn = func(ctx context.Context, dir string) (bool, error) {
+	runner := &gitRunner{dir: dir}
+	return runner.hasUncommittedChanges(ctx)
+}
+
+// gitRunner wraps git operations for the loop.
+type gitRunner struct {
+	dir string
+}
+
+func (g *gitRunner) hasUncommittedChanges(ctx context.Context) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd.Dir = g.dir
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("checking git status: %w", err)
+	}
+	return len(bytes.TrimSpace(output)) > 0, nil
+}
+
+// checkGitClean verifies the working tree has no uncommitted changes before exit.
+// Returns true if clean (safe to exit), false if dirty (should continue loop).
+func checkGitClean(ctx context.Context, dir string) bool {
+	hasChanges, err := gitHasUncommittedChangesFn(ctx, dir)
+	if err != nil {
+		log.Printf("[loop] WARNING: failed to check git status: %v — continuing loop", err)
+		return false
+	}
+	if hasChanges {
+		log.Println("[loop] WARNING: uncommitted changes detected — continuing loop to allow commit")
+		return false
+	}
+	return true
 }
 
 // Config holds the parameters for a Ralph execution loop.
@@ -74,11 +113,23 @@ func Run(ctx context.Context, cfg Config) error {
 		if story == nil {
 			// All user stories pass — check if QA verification is needed
 			if len(currentPRD.IntegrationTests) == 0 {
+				if !checkGitClean(ctx, cfg.WorkDir) {
+					if i < cfg.MaxIterations {
+						time.Sleep(iterationDelay)
+					}
+					continue
+				}
 				log.Println("[loop] all stories pass, no integration tests — done")
 				return nil
 			}
 
 			if prd.AllIntegrationTestsPass(currentPRD) {
+				if !checkGitClean(ctx, cfg.WorkDir) {
+					if i < cfg.MaxIterations {
+						time.Sleep(iterationDelay)
+					}
+					continue
+				}
 				log.Println("[loop] all stories and integration tests pass — done")
 				return nil
 			}
@@ -94,6 +145,12 @@ func Run(ctx context.Context, cfg Config) error {
 			if err != nil {
 				log.Printf("[loop] failed to read PRD after QA: %v — continuing loop", err)
 			} else if prd.AllIntegrationTestsPass(verifyPRD) {
+				if !checkGitClean(ctx, cfg.WorkDir) {
+					if i < cfg.MaxIterations {
+						time.Sleep(iterationDelay)
+					}
+					continue
+				}
 				log.Println("[loop] QA verification complete — all integration tests pass")
 				return nil
 			}
@@ -149,6 +206,12 @@ func Run(ctx context.Context, cfg Config) error {
 			}
 
 			if len(verifyPRD.IntegrationTests) == 0 {
+				if !checkGitClean(ctx, cfg.WorkDir) {
+					if i < cfg.MaxIterations {
+						time.Sleep(iterationDelay)
+					}
+					continue
+				}
 				log.Println("[loop] verified: all stories pass, no integration tests — done")
 				return nil
 			}
@@ -158,6 +221,12 @@ func Run(ctx context.Context, cfg Config) error {
 				continue
 			}
 
+			if !checkGitClean(ctx, cfg.WorkDir) {
+				if i < cfg.MaxIterations {
+					time.Sleep(iterationDelay)
+				}
+				continue
+			}
 			log.Println("[loop] verified: all stories and integration tests pass — done")
 			return nil
 		}

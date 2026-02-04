@@ -126,9 +126,15 @@ Before completing, ensure:
 
 After verifying ALL integration tests:
 
-1. Ensure all automated tests are committed
+1. **COMMIT all changes** including automated tests, PRD updates, and any files modified
 2. Ensure PRD is updated with results for each integration test
 3. Ensure any reusable skills are saved
+
+Use the commit format: `test(QA): <description of tests added>`
+
+Example commit messages:
+- `test(QA): add Playwright e2e tests for user registration`
+- `test(QA): add API integration tests for checkout flow`
 
 If ALL integration tests have `passes: true`, the QA verification is complete.
 
@@ -142,3 +148,5 @@ If ANY integration test has `passes: false`, a fix agent will be invoked to addr
 - Be thorough — the goal is to catch bugs before users do
 - Update PRD accurately — this is how progress is tracked
 - Save reusable patterns — help future iterations
+- **COMMIT all changes** — the loop cannot exit with uncommitted changes
+- Reusable tests should be built so that they're ran automatically in future runs together with the other tests

@@ -131,3 +131,13 @@ func (r *Runner) environ() []string {
 	}
 	return append(os.Environ(), r.Env...)
 }
+
+// GitHasUncommittedChanges returns true if the git working tree has uncommitted changes.
+// This includes staged, unstaged, and untracked files.
+func (r *Runner) GitHasUncommittedChanges(ctx context.Context) (bool, error) {
+	output, err := r.Run(ctx, "git", "status", "--porcelain")
+	if err != nil {
+		return false, fmt.Errorf("checking git status: %w", err)
+	}
+	return strings.TrimSpace(output) != "", nil
+}

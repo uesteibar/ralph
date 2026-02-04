@@ -97,6 +97,7 @@ Example commit messages:
 - **Run quality checks** — ensure all checks pass before considering a fix complete
 - **Minimal changes** — fix only what's broken, don't refactor
 - **Commit format** — always use `fix(QA): <description>`
+- **COMMIT all changes** — the loop cannot exit with uncommitted changes
 
 ## Completion
 
@@ -104,6 +105,6 @@ After fixing all failed integration tests:
 
 1. All automated tests for the failures should now pass
 2. All quality checks should pass
-3. Each fix should be committed with the proper format
+3. **Each fix MUST be committed** with the proper format — uncommitted changes will block loop exit
 
 The QA verification agent will re-run to confirm all integration tests now pass.
