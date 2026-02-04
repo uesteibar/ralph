@@ -10,21 +10,131 @@ You work from your terminal. Ralph works in an isolated git worktree.
 
 1. You describe a feature interactively with Claude
 2. When you're happy, type `/finish` -- Claude generates a structured PRD
+   with user stories and integration tests
 3. Ralph creates an isolated worktree and loops through stories:
    - Pick next unfinished story
    - Implement and test it
    - Run quality checks
    - Commit
-   - Repeat until done
+   - Repeat until all stories are done
+4. QA verification phase:
+   - QA agent runs integration tests defined in the PRD
+   - If tests fail, QA fix agent resolves the issues
+   - Loop continues until all integration tests pass
 
 ```
-ralph prd new ──> /finish ──> ralph run ──> [ Claude loop ] ──> Done
-                                              │
-                                              ├─ pick next story
-                                              ├─ implement + test
-                                              ├─ run quality checks
-                                              ├─ commit
-                                              └─ repeat until done
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           SETUP (once per project)                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   $ ralph init              Create .ralph/ directory and config             │
+│         │                                                                   │
+│         ▼                                                                   │
+│   $ $EDITOR .ralph/ralph.yaml    Configure quality checks, branch pattern   │
+│         │                                                                   │
+│         ▼                                                                   │
+│   $ ralph validate          Verify configuration is valid                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         FEATURE WORKFLOW (per feature)                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   $ ralph prd new           Start interactive Claude session                │
+│         │                                                                   │
+│         │  ┌────────────────────────────────────────┐                       │
+│         │  │  Discuss feature with Claude           │                       │
+│         │  │  Refine scope, answer questions        │                       │
+│         │  │  Type /finish when ready               │                       │
+│         │  └────────────────────────────────────────┘                       │
+│         │                                                                   │
+│         ▼                                                                   │
+│   .ralph/state/prd.json     PRD saved with user stories + integration tests │
+│         │                                                                   │
+│         ▼                                                                   │
+│   $ ralph run               Start the autonomous loop                       │
+│         │                                                                   │
+│         │  ┌────────────────────────────────────────────────────────────┐   │
+│         │  │  Creates isolated git worktree                             │   │
+│         │  │           │                                                │   │
+│         │  │           ▼                                                │   │
+│         │  │  ┌─────────────────────────────┐                           │   │
+│         │  │  │  Pick next unfinished story │◄──┐                       │   │
+│         │  │  └─────────────────────────────┘   │                       │   │
+│         │  │           │                        │                       │   │
+│         │  │           ▼                        │                       │   │
+│         │  │  ┌─────────────────────────────┐   │                       │   │
+│         │  │  │  Claude implements + tests  │   │                       │   │
+│         │  │  └─────────────────────────────┘   │                       │   │
+│         │  │           │                        │                       │   │
+│         │  │           ▼                        │                       │   │
+│         │  │  ┌─────────────────────────────┐   │                       │   │
+│         │  │  │  Run quality checks         │   │                       │   │
+│         │  │  └─────────────────────────────┘   │                       │   │
+│         │  │           │                        │                       │   │
+│         │  │           ▼                        │                       │   │
+│         │  │  ┌─────────────────────────────┐   │                       │   │
+│         │  │  │  Commit changes             │   │                       │   │
+│         │  │  └─────────────────────────────┘   │                       │   │
+│         │  │           │                        │                       │   │
+│         │  │           ▼                        │                       │   │
+│         │  │     More stories? ─── yes ─────────┘                       │   │
+│         │  │           │                                                │   │
+│         │  │          no                                                │   │
+│         │  │           │                                                │   │
+│         │  │           ▼                                                │   │
+│         │  │  ┌─────────────────────────────────────────────────────┐   │   │
+│         │  │  │              QA VERIFICATION PHASE                  │   │   │
+│         │  │  ├─────────────────────────────────────────────────────┤   │   │
+│         │  │  │                                                     │   │   │
+│         │  │  │  ┌───────────────────────────────┐                  │   │   │
+│         │  │  │  │  QA agent runs integration    │◄─────────┐       │   │   │
+│         │  │  │  │  tests from PRD               │          │       │   │   │
+│         │  │  │  └───────────────────────────────┘          │       │   │   │
+│         │  │  │           │                                 │       │   │   │
+│         │  │  │           ▼                                 │       │   │   │
+│         │  │  │     All tests pass?                         │       │   │   │
+│         │  │  │        │       │                            │       │   │   │
+│         │  │  │       yes      no                           │       │   │   │
+│         │  │  │        │       │                            │       │   │   │
+│         │  │  │        │       ▼                            │       │   │   │
+│         │  │  │        │  ┌───────────────────────────┐     │       │   │   │
+│         │  │  │        │  │  QA fix agent resolves    │     │       │   │   │
+│         │  │  │        │  │  failing tests            │─────┘       │   │   │
+│         │  │  │        │  └───────────────────────────┘             │   │   │
+│         │  │  │        │                                            │   │   │
+│         │  │  │        ▼                                            │   │   │
+│         │  │  │     COMPLETE                                        │   │   │
+│         │  │  │                                                     │   │   │
+│         │  │  └─────────────────────────────────────────────────────┘   │   │
+│         │  │                                                            │   │
+│         │  └────────────────────────────────────────────────────────────┘   │
+│         │                                                                   │
+│         ▼                                                                   │
+│   Feature branch ready with all commits                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              OPTIONAL COMMANDS                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   $ ralph switch            Jump into a worktree (select interactively)     │
+│                             └─► Opens shell in worktree, exit to return     │
+│                                                                             │
+│   $ ralph chat              Ad-hoc Claude session in worktree context       │
+│                             └─► Debug, explore, or make manual changes      │
+│                                                                             │
+│   $ ralph rebase            Rebase worktree branch onto latest main         │
+│                             └─► Keeps feature branch up to date             │
+│                                                                             │
+│   $ ralph done              Squash-merge feature branch into base branch    │
+│                             └─► Optionally cleans up worktree after merge   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Prerequisites

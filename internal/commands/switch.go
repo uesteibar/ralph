@@ -1,14 +1,15 @@
 package commands
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/charmbracelet/huh"
+	"github.com/uesteibar/ralph/internal/shell"
 )
 
 // Switch lists available ralph worktrees, lets the user pick one, and spawns
@@ -70,16 +71,15 @@ func Switch(args []string) error {
 
 	targetDir := filepath.Join(worktreesDir, selected)
 
-	// Change into the selected worktree and exec a new shell.
-	if err := os.Chdir(targetDir); err != nil {
-		return fmt.Errorf("changing directory: %w", err)
-	}
-
 	shellPath := os.Getenv("SHELL")
 	if shellPath == "" {
 		shellPath = "/bin/sh"
 	}
 
 	fmt.Fprintf(os.Stderr, "Switching to %s (exit to return)\n", strings.ReplaceAll(selected, "__", "/"))
-	return syscall.Exec(shellPath, []string{shellPath}, os.Environ())
+
+	// Spawn an interactive shell as a subprocess. Using RunInteractive ensures
+	// proper TTY handling so commands like ls and git status work correctly.
+	r := &shell.Runner{Dir: targetDir}
+	return r.RunInteractive(context.Background(), shellPath, "-i")
 }
