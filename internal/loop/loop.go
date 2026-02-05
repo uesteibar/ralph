@@ -3,16 +3,24 @@ package loop
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/uesteibar/ralph/internal/claude"
 	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/prompts"
+)
+
+var (
+	waitStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
+	infoStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // dim gray
 )
 
 const (
@@ -74,6 +82,47 @@ func checkGitClean(ctx context.Context, dir string) bool {
 		return false
 	}
 	return true
+}
+
+// usageLimitFallbackWait is the minimum wait duration when the reset time
+// cannot be parsed or appears to be in the past (e.g. clock skew).
+var usageLimitFallbackWait = 30 * time.Second
+
+// stderrWriter is the writer used for styled terminal output. Package-level var for testability.
+var stderrWriter io.Writer = os.Stderr
+
+// invokeWithUsageLimitWait calls invokeClaudeFn and, if a usage limit is hit,
+// waits until the reset time before retrying. Non-usage-limit errors and
+// successful results are returned immediately.
+func invokeWithUsageLimitWait(ctx context.Context, opts invokeOpts) (string, error) {
+	for {
+		output, err := invokeClaudeFn(ctx, opts)
+
+		var ulErr *claude.UsageLimitError
+		if !errors.As(err, &ulErr) {
+			return output, err
+		}
+
+		waitDur := time.Until(ulErr.ResetAt)
+		if waitDur <= 0 {
+			waitDur = usageLimitFallbackWait
+		}
+
+		icon := waitStyle.Render("⏳")
+		msg := waitStyle.Render("Usage limit reached")
+		detail := infoStyle.Render(fmt.Sprintf("— waiting %s (until %s)",
+			waitDur.Round(time.Second), ulErr.ResetAt.Format("3:04pm MST")))
+		fmt.Fprintf(stderrWriter, "\n  %s %s %s\n\n", icon, msg, detail)
+		log.Printf("[loop] usage limit reached — waiting %s until %s",
+			waitDur.Round(time.Second), ulErr.ResetAt.Format(time.RFC3339))
+
+		select {
+		case <-time.After(waitDur):
+			continue
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
 }
 
 // Config holds the parameters for a Ralph execution loop.
@@ -178,7 +227,7 @@ func Run(ctx context.Context, cfg Config) error {
 			return fmt.Errorf("rendering prompt for %s: %w", story.ID, err)
 		}
 
-		output, err := invokeClaudeFn(ctx, invokeOpts{
+		output, err := invokeWithUsageLimitWait(ctx, invokeOpts{
 			prompt:  prompt,
 			dir:     cfg.WorkDir,
 			verbose: cfg.Verbose,
@@ -250,7 +299,7 @@ func runQAVerification(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("rendering QA verification prompt: %w", err)
 	}
 
-	_, err = invokeClaudeFn(ctx, invokeOpts{
+	_, err = invokeWithUsageLimitWait(ctx, invokeOpts{
 		prompt:           prompt,
 		dir:              cfg.WorkDir,
 		verbose:          cfg.Verbose,
@@ -271,7 +320,7 @@ func runQAFix(ctx context.Context, cfg Config, failedTests []prd.IntegrationTest
 		return fmt.Errorf("rendering QA fix prompt: %w", err)
 	}
 
-	_, err = invokeClaudeFn(ctx, invokeOpts{
+	_, err = invokeWithUsageLimitWait(ctx, invokeOpts{
 		prompt:  prompt,
 		dir:     cfg.WorkDir,
 		verbose: cfg.Verbose,

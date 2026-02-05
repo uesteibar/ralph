@@ -1,12 +1,16 @@
 package loop
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/uesteibar/ralph/internal/claude"
 	"github.com/uesteibar/ralph/internal/prd"
 )
 
@@ -1074,5 +1078,218 @@ func TestRun_VerboseFlagPassedToQAFix(t *testing.T) {
 
 	if !fixVerbose {
 		t.Error("expected verbose flag to be passed through to QA fix")
+	}
+}
+
+// mockFastUsageLimitWait overrides usageLimitFallbackWait for fast tests.
+func mockFastUsageLimitWait() func() {
+	orig := usageLimitFallbackWait
+	usageLimitFallbackWait = 1 * time.Millisecond
+	return func() { usageLimitFallbackWait = orig }
+}
+
+func TestInvokeWithUsageLimitWait_RetriesOnUsageLimit(t *testing.T) {
+	defer mockFastUsageLimitWait()()
+
+	var calls int
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		calls++
+		if calls == 1 {
+			return "", &claude.UsageLimitError{
+				ResetAt: time.Now().Add(-1 * time.Second), // past → triggers fallback wait
+				Message: "You've hit your limit",
+			}
+		}
+		return "success", nil
+	}
+
+	output, err := invokeWithUsageLimitWait(context.Background(), invokeOpts{
+		prompt: "test",
+	})
+
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if output != "success" {
+		t.Errorf("expected output 'success', got %q", output)
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 calls, got %d", calls)
+	}
+}
+
+func TestInvokeWithUsageLimitWait_PassesThroughNonUsageLimitErrors(t *testing.T) {
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	expectedErr := fmt.Errorf("some other error")
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		return "partial", expectedErr
+	}
+
+	output, err := invokeWithUsageLimitWait(context.Background(), invokeOpts{
+		prompt: "test",
+	})
+
+	if err != expectedErr {
+		t.Errorf("expected error %v, got %v", expectedErr, err)
+	}
+	if output != "partial" {
+		t.Errorf("expected output 'partial', got %q", output)
+	}
+}
+
+func TestInvokeWithUsageLimitWait_PassesThroughSuccess(t *testing.T) {
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		return "done", nil
+	}
+
+	output, err := invokeWithUsageLimitWait(context.Background(), invokeOpts{
+		prompt: "test",
+	})
+
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if output != "done" {
+		t.Errorf("expected output 'done', got %q", output)
+	}
+}
+
+func TestInvokeWithUsageLimitWait_RespectsContext(t *testing.T) {
+	defer mockFastUsageLimitWait()()
+
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		return "", &claude.UsageLimitError{
+			ResetAt: time.Now().Add(1 * time.Hour), // far future
+			Message: "You've hit your limit",
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after a short delay
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := invokeWithUsageLimitWait(ctx, invokeOpts{
+		prompt: "test",
+	})
+
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestRun_UsageLimitDoesNotCountAsIteration(t *testing.T) {
+	defer mockGitClean()()
+	defer mockFastUsageLimitWait()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var calls int
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		calls++
+		// First 3 calls return usage limit, 4th succeeds
+		if calls <= 3 {
+			return "", &claude.UsageLimitError{
+				ResetAt: time.Now().Add(-1 * time.Second),
+				Message: "You've hit your limit",
+			}
+		}
+		// Mark story as passed to exit loop
+		testPRD.UserStories[0].Passes = true
+		prd.Write(prdPath, testPRD)
+		return "", nil
+	}
+
+	// With MaxIterations=2, iteration 1 hits the wrapper (3 retries + success),
+	// iteration 2 sees the story now passes and exits. If usage limit retries
+	// counted as iterations, we'd exhaust MaxIterations before succeeding.
+	err := Run(context.Background(), Config{
+		MaxIterations: 2,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v (usage limit retries should not count as iterations)", err)
+	}
+	if calls != 4 {
+		t.Errorf("expected 4 invokeClaudeFn calls (3 rate limited + 1 success), got %d", calls)
+	}
+}
+
+func TestInvokeWithUsageLimitWait_PrintsStyledOutput(t *testing.T) {
+	defer mockFastUsageLimitWait()()
+
+	var buf bytes.Buffer
+	origWriter := stderrWriter
+	stderrWriter = &buf
+	defer func() { stderrWriter = origWriter }()
+
+	var calls int
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	resetAt := time.Now().Add(-1 * time.Second)
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		calls++
+		if calls == 1 {
+			return "", &claude.UsageLimitError{
+				ResetAt: resetAt,
+				Message: "You've hit your limit",
+			}
+		}
+		return "success", nil
+	}
+
+	output, err := invokeWithUsageLimitWait(context.Background(), invokeOpts{
+		prompt: "test",
+	})
+
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if output != "success" {
+		t.Errorf("expected output 'success', got %q", output)
+	}
+
+	stderrOutput := buf.String()
+	if !strings.Contains(stderrOutput, "Usage limit reached") {
+		t.Errorf("expected stderr to contain 'Usage limit reached', got %q", stderrOutput)
+	}
+	if !strings.Contains(stderrOutput, "waiting") {
+		t.Errorf("expected stderr to contain 'waiting', got %q", stderrOutput)
 	}
 }

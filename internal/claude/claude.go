@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/uesteibar/ralph/internal/shell"
@@ -162,6 +164,12 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 		return result, fmt.Errorf("running claude: %w", err)
 	}
 
+	// Check for usage limit in the result text. The CLI exits with code 0
+	// when hitting the subscription cap, so we detect it from the output.
+	if ulErr := parseUsageLimit(result); ulErr != nil {
+		return result, ulErr
+	}
+
 	return result, nil
 }
 
@@ -247,6 +255,136 @@ func printDone(numTurns int, durationMS int) {
 // ContainsComplete checks whether Claude's output contains the completion signal.
 func ContainsComplete(output string) bool {
 	return strings.Contains(output, completeSignal)
+}
+
+// UsageLimitError indicates Claude CLI exited because the subscription usage cap was reached.
+type UsageLimitError struct {
+	ResetAt time.Time
+	Message string
+}
+
+func (e *UsageLimitError) Error() string {
+	return fmt.Sprintf("usage limit reached (resets %s): %s", e.ResetAt.Format(time.RFC3339), e.Message)
+}
+
+// IsUsageLimitError returns true if the output text contains a Claude usage limit message.
+func IsUsageLimitError(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "you've hit your limit") ||
+		strings.Contains(lower, "usage limit reached")
+}
+
+// resets Jan 2, 2026, 3pm (UTC)
+// resets January 2, 2026, 3:04pm (UTC)
+var resetsPattern = regexp.MustCompile(`resets\s+(\w+\s+\d{1,2},\s+\d{4},\s+\d{1,2}(?::\d{2})?(?:am|pm))\s+\(([^)]+)\)`)
+
+// Your limit will reset at 1pm (Etc/GMT+5)
+// Your limit will reset at 3:30pm (UTC)
+var resetAtPattern = regexp.MustCompile(`reset at\s+(\d{1,2}(?::\d{2})?(?:am|pm))\s+\(([^)]+)\)`)
+
+// parseUsageLimit checks output for a usage limit message and parses the reset time.
+// Returns nil if the output does not contain a usage limit message.
+func parseUsageLimit(output string) *UsageLimitError {
+	if !IsUsageLimitError(output) {
+		return nil
+	}
+
+	resetAt := parseResetTime(output)
+
+	line := extractLimitLine(output)
+	return &UsageLimitError{
+		ResetAt: resetAt,
+		Message: line,
+	}
+}
+
+func parseResetTime(output string) time.Time {
+	// Try "resets Jan 2, 2026, 3pm (UTC)" pattern
+	if m := resetsPattern.FindStringSubmatch(output); m != nil {
+		if t, err := parseDateTime(m[1], m[2]); err == nil {
+			return t
+		}
+	}
+
+	// Try "reset at 1pm (Etc/GMT+5)" pattern — time only, assume today or next occurrence
+	if m := resetAtPattern.FindStringSubmatch(output); m != nil {
+		if t, err := parseTimeOnly(m[1], m[2]); err == nil {
+			return t
+		}
+	}
+
+	// Fallback: could not parse, return 30 minutes from now
+	return time.Now().Add(30 * time.Minute)
+}
+
+func parseDateTime(datetime, tzName string) (time.Time, error) {
+	loc, err := loadLocation(tzName)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	// Try with minutes: "Jan 2, 2026, 3:04pm"
+	if t, err := time.ParseInLocation("Jan 2, 2006, 3:04pm", datetime, loc); err == nil {
+		return t, nil
+	}
+	// Try full month with minutes: "January 2, 2026, 3:04pm"
+	if t, err := time.ParseInLocation("January 2, 2006, 3:04pm", datetime, loc); err == nil {
+		return t, nil
+	}
+	// Try without minutes: "Jan 2, 2026, 3pm"
+	if t, err := time.ParseInLocation("Jan 2, 2006, 3pm", datetime, loc); err == nil {
+		return t, nil
+	}
+	// Try full month without minutes: "January 2, 2026, 3pm"
+	if t, err := time.ParseInLocation("January 2, 2006, 3pm", datetime, loc); err == nil {
+		return t, nil
+	}
+
+	return time.Time{}, fmt.Errorf("cannot parse datetime %q", datetime)
+}
+
+func parseTimeOnly(timeStr, tzName string) (time.Time, error) {
+	loc, err := loadLocation(tzName)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	now := time.Now().In(loc)
+	var parsed time.Time
+
+	// Try with minutes: "3:04pm"
+	if t, err := time.ParseInLocation("3:04pm", timeStr, loc); err == nil {
+		parsed = time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, loc)
+	} else if t, err := time.ParseInLocation("3pm", timeStr, loc); err == nil {
+		// Without minutes: "3pm"
+		parsed = time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), 0, 0, 0, loc)
+	} else {
+		return time.Time{}, fmt.Errorf("cannot parse time %q", timeStr)
+	}
+
+	// If the parsed time is in the past, it means tomorrow
+	if parsed.Before(now) {
+		parsed = parsed.Add(24 * time.Hour)
+	}
+
+	return parsed, nil
+}
+
+func loadLocation(tzName string) (*time.Location, error) {
+	if strings.EqualFold(tzName, "UTC") {
+		return time.UTC, nil
+	}
+	return time.LoadLocation(tzName)
+}
+
+func extractLimitLine(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "hit your limit") || strings.Contains(lower, "usage limit") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return strings.TrimSpace(output)
 }
 
 func buildArgs(opts InvokeOpts) []string {
