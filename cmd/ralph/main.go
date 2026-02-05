@@ -20,6 +20,7 @@ Usage:
   ralph rebase [branch] [--project-config path] [--workspace name]   Rebase onto base branch
   ralph done [--project-config path] [--workspace name]   Squash-merge and clean up
   ralph status [--project-config path] [--short] Show workspace and story progress
+  ralph overview [--project-config path]         Show progress across all workspaces
   ralph workspaces new <name> [--project-config path]   Create a new workspace
   ralph workspaces list [--project-config path]  List all workspaces
   ralph workspaces switch <name>                 Switch to a workspace
@@ -63,6 +64,8 @@ func main() {
 		err = commands.Chat(rest)
 	case "status":
 		err = commands.Status(rest)
+	case "overview":
+		err = commands.Overview(rest)
 	case "switch":
 		err = commands.Switch(rest)
 	case "rebase":
