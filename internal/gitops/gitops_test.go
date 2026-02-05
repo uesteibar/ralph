@@ -903,6 +903,56 @@ func TestCopyGlobPatterns_EmptyPatterns(t *testing.T) {
 	}
 }
 
+func TestCopyGlobPatterns_DirectoryWithSymlinks(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a directory tree that contains a symlink to another directory,
+	// mimicking Elixir deps/ or similar package manager layouts.
+	depsDir := filepath.Join(srcDir, "deps", "mypkg", "_build")
+	if err := os.MkdirAll(depsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "deps", "mypkg", "mix.exs"), []byte("defmodule Mix"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a target directory that the symlink will point to.
+	symlinkTarget := t.TempDir()
+	if err := os.WriteFile(filepath.Join(symlinkTarget, "plugin.beam"), []byte("beam"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a symlink inside the tree pointing to the external directory.
+	if err := os.Symlink(symlinkTarget, filepath.Join(depsDir, "plugins")); err != nil {
+		t.Fatal(err)
+	}
+
+	var warnings []string
+	warn := func(msg string) { warnings = append(warnings, msg) }
+
+	patterns := []string{"deps"}
+	if err := CopyGlobPatterns(srcDir, dstDir, patterns, warn); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the regular file was copied.
+	mixPath := filepath.Join(dstDir, "deps", "mypkg", "mix.exs")
+	if _, err := os.Stat(mixPath); err != nil {
+		t.Fatalf("expected %s to exist: %v", mixPath, err)
+	}
+
+	// Verify the symlinked directory's contents were copied.
+	pluginPath := filepath.Join(dstDir, "deps", "mypkg", "_build", "plugins", "plugin.beam")
+	if _, err := os.Stat(pluginPath); err != nil {
+		t.Fatalf("expected %s to exist: %v", pluginPath, err)
+	}
+
+	if len(warnings) > 0 {
+		t.Fatalf("expected no warnings, got: %v", warnings)
+	}
+}
+
 func TestCopyGlobPatterns_PreservesRelativePath(t *testing.T) {
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()

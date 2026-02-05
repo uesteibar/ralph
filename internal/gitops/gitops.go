@@ -209,8 +209,8 @@ func FetchBranch(ctx context.Context, r *shell.Runner, branch string) error {
 
 // RebaseResult describes the outcome of a rebase operation.
 type RebaseResult struct {
-	Success       bool
-	HasConflicts  bool
+	Success      bool
+	HasConflicts bool
 }
 
 // StartRebase runs git rebase onto the given ref and returns whether conflicts
@@ -405,6 +405,23 @@ func copyDir(src, dst string) error {
 
 		if d.IsDir() {
 			return os.MkdirAll(target, 0755)
+		}
+
+		// filepath.WalkDir does not follow symlinks, so a symlink to a
+		// directory appears as a non-directory entry. Resolve the
+		// symlink and recurse into the real path when it's a directory.
+		if d.Type()&fs.ModeSymlink != 0 {
+			real, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return err
+			}
+			fi, err := os.Stat(real)
+			if err != nil {
+				return err
+			}
+			if fi.IsDir() {
+				return copyDir(real, target)
+			}
 		}
 
 		data, err := os.ReadFile(path)
