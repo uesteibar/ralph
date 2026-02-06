@@ -12,7 +12,7 @@ import (
 	"github.com/uesteibar/ralph/internal/prd"
 )
 
-const sidebarWidth = 38
+const sidebarWidth = 60
 
 // eventMsg wraps an events.Event for delivery as a tea.Msg.
 type eventMsg struct {
