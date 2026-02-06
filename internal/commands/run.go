@@ -2,11 +2,12 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -72,8 +73,6 @@ func Run(args []string) error {
 		return nil
 	}
 
-	log.Printf("[run] workspace=%s workDir=%s prdPath=%s", wc.Name, wc.WorkDir, wc.PRDPath)
-
 	progressPath := filepath.Join(wc.WorkDir, ".ralph", "progress.txt")
 
 	if *noTUI {
@@ -85,7 +84,12 @@ func Run(args []string) error {
 
 func runLoopPlainText(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath string) error {
 	handler := &events.PlainTextHandler{W: os.Stderr}
-	return runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, handler)
+	err := runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, handler)
+	printRunResult(err)
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
 }
 
 func runLoopTUI(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath string, workspaceName string) error {
@@ -98,18 +102,39 @@ func runLoopTUI(ctx context.Context, workDir, prdPath string, maxIter int, quali
 
 	// Run the loop in a background goroutine; the BubbleTea event loop
 	// owns the main goroutine. When the loop finishes, we send tea.Quit.
+	errCh := make(chan error, 1)
 	go func() {
-		err := runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, handler)
-		if err != nil {
-			log.Printf("[run] loop ended: %v", err)
-		} else {
-			log.Println("[run] complete")
-		}
+		errCh <- runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, handler)
 		p.Send(tea.Quit())
 	}()
 
-	_, err := p.Run()
-	return err
+	if _, err := p.Run(); err != nil {
+		return err
+	}
+
+	// The goroutine should have finished before p.Run() returns (it sends
+	// tea.Quit). Use a short timeout as a safety net for Ctrl+C exits
+	// where the goroutine may still be running.
+	select {
+	case loopErr := <-errCh:
+		printRunResult(loopErr)
+		if errors.Is(loopErr, context.Canceled) {
+			return nil
+		}
+		return loopErr
+	case <-time.After(500 * time.Millisecond):
+		return nil
+	}
+}
+
+func printRunResult(err error) {
+	if err == nil {
+		doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
+		fmt.Fprintf(os.Stderr, "\n%s All work complete.\n\n", doneStyle.Render("✓"))
+		fmt.Fprintf(os.Stderr, "Run `ralph done` to squash and merge your changes back to base.\n")
+	} else if errors.Is(err, context.Canceled) {
+		fmt.Fprintln(os.Stderr, "\nStopped.")
+	}
 }
 
 func runLoopWithHandler(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath string, handler events.EventHandler) error {
