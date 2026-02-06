@@ -34,6 +34,7 @@ func TestFormatStories_EmptyList(t *testing.T) {
 }
 
 func TestRebase_FromBase_ErrorsWithoutWorkspace(t *testing.T) {
+	t.Setenv("RALPH_WORKSPACE", "") // Clear env to ensure base context
 	dir := realPath(t, t.TempDir())
 	initTestRepo(t, dir)
 

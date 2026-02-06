@@ -5,22 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/uesteibar/ralph/internal/claude"
+	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/prompts"
-)
-
-var (
-	waitStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
-	infoStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // dim gray
 )
 
 const (
@@ -33,6 +27,7 @@ type invokeOpts struct {
 	prompt           string
 	dir              string
 	verbose          bool
+	eventHandler     events.EventHandler
 	isQAVerification bool
 	isQAFix          bool
 }
@@ -40,10 +35,11 @@ type invokeOpts struct {
 // invokeClaudeFn is the function used to invoke Claude. Package-level var for testability.
 var invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
 	return claude.Invoke(ctx, claude.InvokeOpts{
-		Prompt:  opts.prompt,
-		Dir:     opts.dir,
-		Print:   true,
-		Verbose: opts.verbose,
+		Prompt:       opts.prompt,
+		Dir:          opts.dir,
+		Print:        true,
+		Verbose:      opts.verbose,
+		EventHandler: opts.eventHandler,
 	})
 }
 
@@ -88,9 +84,6 @@ func checkGitClean(ctx context.Context, dir string) bool {
 // cannot be parsed or appears to be in the past (e.g. clock skew).
 var usageLimitFallbackWait = 30 * time.Second
 
-// stderrWriter is the writer used for styled terminal output. Package-level var for testability.
-var stderrWriter io.Writer = os.Stderr
-
 // invokeWithUsageLimitWait calls invokeClaudeFn and, if a usage limit is hit,
 // waits until the reset time before retrying. Non-usage-limit errors and
 // successful results are returned immediately.
@@ -108,11 +101,10 @@ func invokeWithUsageLimitWait(ctx context.Context, opts invokeOpts) (string, err
 			waitDur = usageLimitFallbackWait
 		}
 
-		icon := waitStyle.Render("⏳")
-		msg := waitStyle.Render("Usage limit reached")
-		detail := infoStyle.Render(fmt.Sprintf("— waiting %s (until %s)",
-			waitDur.Round(time.Second), ulErr.ResetAt.Format("3:04pm MST")))
-		fmt.Fprintf(stderrWriter, "\n  %s %s %s\n\n", icon, msg, detail)
+		emitEvent(opts.eventHandler, events.UsageLimitWait{
+			WaitDuration: waitDur.Round(time.Second),
+			ResetAt:      ulErr.ResetAt,
+		})
 		log.Printf("[loop] usage limit reached — waiting %s until %s",
 			waitDur.Round(time.Second), ulErr.ResetAt.Format(time.RFC3339))
 
@@ -125,6 +117,13 @@ func invokeWithUsageLimitWait(ctx context.Context, opts invokeOpts) (string, err
 	}
 }
 
+// emitEvent sends an event to the handler if non-nil.
+func emitEvent(h events.EventHandler, e events.Event) {
+	if h != nil {
+		h.Handle(e)
+	}
+}
+
 // Config holds the parameters for a Ralph execution loop.
 type Config struct {
 	MaxIterations int
@@ -133,6 +132,7 @@ type Config struct {
 	ProgressPath  string
 	QualityChecks []string
 	Verbose       bool
+	EventHandler  events.EventHandler
 }
 
 // Run executes the Ralph loop: for each iteration, it reads the PRD, picks
@@ -151,7 +151,11 @@ func Run(ctx context.Context, cfg Config) error {
 	ensureProgressFile(cfg.ProgressPath)
 
 	for i := 1; i <= cfg.MaxIterations; i++ {
-		log.Printf("[loop] iteration %d/%d", i, cfg.MaxIterations)
+		emitEvent(cfg.EventHandler, events.IterationStart{
+			Iteration:     i,
+			MaxIterations: cfg.MaxIterations,
+		})
+		emitEvent(cfg.EventHandler, events.PRDRefresh{})
 
 		currentPRD, err := prd.Read(cfg.PRDPath)
 		if err != nil {
@@ -184,10 +188,11 @@ func Run(ctx context.Context, cfg Config) error {
 			}
 
 			// Run QA verification phase
-			log.Println("[loop] all stories pass — running QA verification")
+			emitEvent(cfg.EventHandler, events.QAPhaseStarted{Phase: "verification"})
 			if err := runQAVerification(ctx, cfg); err != nil {
 				log.Printf("[loop] QA verification error: %v", err)
 			}
+			emitEvent(cfg.EventHandler, events.PRDRefresh{})
 
 			// Re-read PRD after QA verification and check if all tests pass
 			verifyPRD, err := prd.Read(cfg.PRDPath)
@@ -207,10 +212,11 @@ func Run(ctx context.Context, cfg Config) error {
 			// Get failed tests and invoke fix agent
 			failedTests := prd.FailedIntegrationTests(verifyPRD)
 			if len(failedTests) > 0 {
-				log.Printf("[loop] %d integration tests failed — running QA fix agent", len(failedTests))
+				emitEvent(cfg.EventHandler, events.QAPhaseStarted{Phase: "fix"})
 				if err := runQAFix(ctx, cfg, failedTests); err != nil {
 					log.Printf("[loop] QA fix error: %v", err)
 				}
+				emitEvent(cfg.EventHandler, events.PRDRefresh{})
 			}
 
 			// Continue loop to allow re-verification after fix
@@ -220,7 +226,10 @@ func Run(ctx context.Context, cfg Config) error {
 			continue
 		}
 
-		log.Printf("[loop] working on %s: %s", story.ID, story.Title)
+		emitEvent(cfg.EventHandler, events.StoryStarted{
+			StoryID: story.ID,
+			Title:   story.Title,
+		})
 
 		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath, cfg.PRDPath)
 		if err != nil {
@@ -228,15 +237,18 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 
 		output, err := invokeWithUsageLimitWait(ctx, invokeOpts{
-			prompt:  prompt,
-			dir:     cfg.WorkDir,
-			verbose: cfg.Verbose,
+			prompt:       prompt,
+			dir:          cfg.WorkDir,
+			verbose:      cfg.Verbose,
+			eventHandler: cfg.EventHandler,
 		})
 		if err != nil {
 			log.Printf("[loop] Claude returned error on %s: %v", story.ID, err)
 			// Non-fatal — Claude may have partially succeeded.
 			// The next iteration will re-read prd.json and pick up where we left off.
 		}
+
+		emitEvent(cfg.EventHandler, events.PRDRefresh{})
 
 		if claude.ContainsComplete(output) {
 			log.Println("[loop] Ralph signaled COMPLETE — verifying PRD state")
@@ -303,6 +315,7 @@ func runQAVerification(ctx context.Context, cfg Config) error {
 		prompt:           prompt,
 		dir:              cfg.WorkDir,
 		verbose:          cfg.Verbose,
+		eventHandler:     cfg.EventHandler,
 		isQAVerification: true,
 	})
 	return err
@@ -321,10 +334,11 @@ func runQAFix(ctx context.Context, cfg Config, failedTests []prd.IntegrationTest
 	}
 
 	_, err = invokeWithUsageLimitWait(ctx, invokeOpts{
-		prompt:  prompt,
-		dir:     cfg.WorkDir,
-		verbose: cfg.Verbose,
-		isQAFix: true,
+		prompt:       prompt,
+		dir:          cfg.WorkDir,
+		verbose:      cfg.Verbose,
+		eventHandler: cfg.EventHandler,
+		isQAFix:      true,
 	})
 	return err
 }

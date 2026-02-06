@@ -13,18 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/shell"
-)
-
-var (
-	// Styles for progress output
-	arrowStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))            // cyan
-	toolStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Bold(true) // blue bold
-	pathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))            // gray
-	textStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("7"))            // light gray
-	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))            // green
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))            // dim gray
 )
 
 const completeSignal = "<promise>COMPLETE</promise>"
@@ -51,6 +41,10 @@ type InvokeOpts struct {
 
 	// Continue resumes the most recent conversation (passes --continue to Claude CLI).
 	Continue bool
+
+	// EventHandler receives structured events during stream processing.
+	// If nil, events are silently discarded.
+	EventHandler events.EventHandler
 }
 
 // Invoke runs the Claude CLI with the given options.
@@ -129,29 +123,35 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		var event streamEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
+		var ev streamEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			continue
 		}
 
-		switch event.Type {
+		switch ev.Type {
 		case "assistant":
-			for _, content := range event.Message.Content {
+			for _, content := range ev.Message.Content {
 				if content.Type == "tool_use" {
-					printToolUse(content.Name, content.Input, workDir)
+					emitEvent(opts.EventHandler, events.ToolUse{
+						Name:   content.Name,
+						Detail: toolDetail(content.Name, content.Input, workDir),
+					})
 				} else if content.Type == "text" && content.Text != "" {
-					printText(content.Text)
+					emitEvent(opts.EventHandler, events.AgentText{Text: content.Text})
 				}
 			}
 		case "result":
-			result = event.Result
-			numTurns = event.NumTurns
-			durationMS = event.DurationMS
+			result = ev.Result
+			numTurns = ev.NumTurns
+			durationMS = ev.DurationMS
 		}
 	}
 
 	if numTurns > 0 {
-		printDone(numTurns, durationMS)
+		emitEvent(opts.EventHandler, events.InvocationDone{
+			NumTurns:   numTurns,
+			DurationMS: durationMS,
+		})
 	}
 
 	if err := cmd.Wait(); err != nil {
@@ -173,54 +173,53 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 	return result, nil
 }
 
-func printToolUse(name string, input map[string]any, workDir string) {
-	detail := ""
+// emitEvent sends an event to the handler if non-nil.
+func emitEvent(h events.EventHandler, e events.Event) {
+	if h != nil {
+		h.Handle(e)
+	}
+}
+
+// toolDetail extracts a human-readable detail string from tool input.
+func toolDetail(name string, input map[string]any, workDir string) string {
 	switch name {
 	case "Read":
 		if fp, ok := input["file_path"].(string); ok {
-			detail = relativePath(fp, workDir)
+			return relativePath(fp, workDir)
 		}
 	case "Edit":
 		if fp, ok := input["file_path"].(string); ok {
-			detail = relativePath(fp, workDir)
+			return relativePath(fp, workDir)
 		}
 	case "Write":
 		if fp, ok := input["file_path"].(string); ok {
-			detail = relativePath(fp, workDir)
+			return relativePath(fp, workDir)
 		}
 	case "Bash":
 		if cmd, ok := input["command"].(string); ok {
-			// Truncate long commands
 			if len(cmd) > 60 {
 				cmd = cmd[:57] + "..."
 			}
-			detail = cmd
+			return cmd
 		}
 	case "Grep":
 		if pattern, ok := input["pattern"].(string); ok {
-			detail = fmt.Sprintf("%q", pattern)
+			detail := fmt.Sprintf("%q", pattern)
 			if path, ok := input["path"].(string); ok {
 				detail += " in " + relativePath(path, workDir)
 			}
+			return detail
 		}
 	case "Glob":
 		if pattern, ok := input["pattern"].(string); ok {
-			detail = pattern
+			return pattern
 		}
 	case "Task":
 		if desc, ok := input["description"].(string); ok {
-			detail = desc
+			return desc
 		}
 	}
-
-	arrow := arrowStyle.Render("→")
-	tool := toolStyle.Render(name)
-	if detail != "" {
-		path := pathStyle.Render(detail)
-		fmt.Fprintf(os.Stderr, "  %s %s %s\n", arrow, tool, path)
-	} else {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", arrow, tool)
-	}
+	return ""
 }
 
 func relativePath(path, workDir string) string {
@@ -232,24 +231,6 @@ func relativePath(path, workDir string) string {
 		return path
 	}
 	return rel
-}
-
-func printText(text string) {
-	// Print Claude's text responses with indentation
-	lines := strings.Split(strings.TrimSpace(text), "\n")
-	fmt.Fprintln(os.Stderr)
-	for _, line := range lines {
-		styled := textStyle.Render(line)
-		fmt.Fprintf(os.Stderr, "  %s\n", styled)
-	}
-	fmt.Fprintln(os.Stderr)
-}
-
-func printDone(numTurns int, durationMS int) {
-	durationSec := durationMS / 1000
-	check := successStyle.Render("✓")
-	info := dimStyle.Render(fmt.Sprintf("(%d turns, %ds)", numTurns, durationSec))
-	fmt.Fprintf(os.Stderr, "  %s Done %s\n", check, info)
 }
 
 // ContainsComplete checks whether Claude's output contains the completion signal.

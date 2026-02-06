@@ -28,6 +28,8 @@
 - **Shared workspace helpers**: `AddWorkspaceFlag(fs)` registers `--workspace` flag. `resolveWorkContextFromFlags(flag, repoPath)` encapsulates cwd+env+ResolveWorkContext into a single call. All commands use these for consistency.
 - **E2e test pattern**: `test/e2e/workspace_e2e_test.go` uses `TestMain` to build the binary, `runRalph`/`runRalphWithStdin` helpers for controlled subprocess execution with clean env, `setupTestRepo` copies fixtures + inits git with bare remote. Agent evaluation via Claude CLI is conditional (`t.Skip` when not available). Reports collected as `cmdReport` structs with command, args, exitCode, stdout, stderr.
 - **Error output in main.go**: Use `fmt.Fprintf(os.Stderr, ...)` not `log.Fatalf` for user-facing errors to avoid timestamps.
+- **Event emitter pattern**: `internal/events/` package provides `Event` interface (marker method `eventTag()`), `EventHandler` interface (`Handle(Event)`), and 7 event types: `ToolUse`, `AgentText`, `InvocationDone`, `IterationStart`, `StoryStarted`, `QAPhaseStarted`, `UsageLimitWait`. `PlainTextHandler` writes styled output to an `io.Writer`. Use `emitEvent(h, e)` helper for nil-safe emission. Handler is passed via `claude.InvokeOpts.EventHandler` and `loop.Config.EventHandler`.
+- **TUI package**: `internal/tui/` provides BubbleTea-based TUI. `Model` uses `bubbles/viewport` for scrollable log. `Handler` implements `events.EventHandler` via `p.Send(eventMsg{event})`. Loop runs in a goroutine; BubbleTea owns main goroutine. `--no-tui` flag falls back to `PlainTextHandler`. Status bar shows workspace name, current story, iteration count, and "Stopping..." when quitting. Split-pane layout with sidebar (story/test list) and viewport (agent log). Tab switches focus. Arrow/j/k navigate items in sidebar when focused. PRD refreshes via `PRDRefresh` event → `readPRDCmd` → `prdLoadedMsg` pipeline. `NewModel` takes `(workspaceName, prdPath, cancelFunc)` — prdPath enables file-based refresh, cancelFunc enables graceful stop. Enter on sidebar item opens centered modal overlay showing full story/test details. `?` opens help overlay listing all shortcuts. Esc closes overlays. `q` initiates graceful stop (sets `quitting`, calls `cancelFunc`). Ctrl+C triggers immediate `tea.Quit`. `currentPRD` cached in Model for overlay data lookups. Both detail and help overlays reuse the `overlay` type with `lipgloss.Place` centering and `lipgloss.RoundedBorder`.
 
 ---
 
@@ -802,4 +804,194 @@
   - macOS temp dirs go through /private/var symlinks — use filepath.EvalSymlinks (realPath helper) for path comparisons
   - Agent evaluation via Claude is non-deterministic — ratings can vary between runs, but consistently >= 4/5 after fixing timestamp formatting in error messages
   - The `log.Fatalf` in main.go was causing timestamp-prefixed error messages which Claude's UX eval flagged as inconsistent with the rest of the stderr output
+---
+
+## 2026-02-05 - US-001 (workspace-tui-poc)
+- Created `internal/events/` package with EventHandler interface and event types
+- Event types defined: ToolUse, AgentText, InvocationDone, IterationStart, StoryStarted, QAPhaseStarted, UsageLimitWait
+- EventHandler interface: single `Handle(Event)` method with Event as a marker interface (sum type via `eventTag()`)
+- PlainTextHandler implements EventHandler with same lipgloss-styled formatting as previous direct stderr writes
+- Refactored `internal/claude/claude.go`:
+  - Added `EventHandler` field to `InvokeOpts`
+  - Replaced `printToolUse`, `printText`, `printDone` functions with event emissions via `emitEvent` helper
+  - Extracted `toolDetail` function for computing human-readable detail from tool input
+  - Removed lipgloss dependency from claude package (styles moved to events/plaintext.go)
+- Refactored `internal/loop/loop.go`:
+  - Added `EventHandler` field to `Config` and `invokeOpts`
+  - Replaced `log.Printf("[loop] iteration ...")` with `IterationStart` event
+  - Replaced `log.Printf("[loop] working on ...")` with `StoryStarted` event
+  - Replaced `log.Println("[loop] all stories pass — running QA ...")` with `QAPhaseStarted` event
+  - Replaced styled `fmt.Fprintf(stderrWriter, ...)` usage-limit output with `UsageLimitWait` event
+  - Removed lipgloss dependency and `stderrWriter` variable from loop package
+  - EventHandler passed through to `claude.InvokeOpts` in all invocation paths
+- Updated `internal/commands/run.go` to create `PlainTextHandler{W: os.Stderr}` and pass to `loop.Config`
+- Files changed:
+  - `internal/events/events.go` — new file: Event interface, EventHandler interface, 7 event types
+  - `internal/events/plaintext.go` — new file: PlainTextHandler with lipgloss styles
+  - `internal/events/events_test.go` — new file: 10 tests covering all event types and PlainTextHandler
+  - `internal/claude/claude.go` — removed lipgloss, added EventHandler to InvokeOpts, emitEvent/toolDetail
+  - `internal/loop/loop.go` — added EventHandler to Config/invokeOpts, emit events, removed stderrWriter
+  - `internal/loop/loop_test.go` — added recordingHandler, 3 new event emission tests, updated usage limit test
+  - `internal/commands/run.go` — wire PlainTextHandler
+- **Learnings for future iterations:**
+  - The `Event` interface uses a marker method `eventTag()` — Go's idiomatic sealed sum type pattern
+  - `emitEvent(h, e)` nil-checks the handler for safety — callers don't need to guard
+  - Lipgloss styles belong in the handler (events/plaintext.go), not in the emitter (claude.go/loop.go)
+  - `log.Printf` calls for internal diagnostics (error paths, debug) are kept — only user-visible messages became events
+  - `stderrWriter` package-level var in loop.go was replaced by EventHandler — tests now use `recordingHandler` instead of capturing a `bytes.Buffer`
+  - Pre-existing test failures in commands package (TestRebase_FromBase, TestRun_InBase, TestWorkspacesList_EmptyRegistry) are caused by running from within workspace tree — not related to this change
+---
+
+## 2026-02-05 - US-002 (workspace-tui-poc)
+- Created `internal/tui/` package with BubbleTea-based TUI for ralph run
+- Implementation details:
+  - `model.go`: BubbleTea `Model` with `bubbles/viewport` for scrollable agent log, status bar with workspace name/current story/iteration
+  - `handler.go`: `Handler` implements `events.EventHandler` by converting events into `eventMsg` tea.Msg and sending via `p.Send()` (goroutine-safe)
+  - All 7 event types handled: ToolUse, AgentText, InvocationDone, IterationStart, StoryStarted, QAPhaseStarted, UsageLimitWait
+  - Full-screen alt-screen mode via `tea.WithAltScreen()`
+  - Loop runs in a background goroutine; BubbleTea event loop owns the main goroutine
+  - When loop finishes, sends `tea.Quit()` to exit TUI cleanly
+- Added `--no-tui` flag to `ralph run`:
+  - TUI is the default behavior
+  - `--no-tui` falls back to `PlainTextHandler` (same as before)
+  - Refactored `runLoop` into `runLoopPlainText`, `runLoopTUI`, and `runLoopWithHandler`
+- Promoted `bubbletea` and `bubbles` from indirect to direct dependencies in `go.mod`
+- Updated `cmd/ralph/main.go` usage text with `--no-tui` flag
+- Tests:
+  - `internal/tui/model_test.go`: 21 tests covering all event types, model state updates, viewport initialization, quit keys, status bar content, View() output, and Handler interface compliance
+  - `internal/commands/run_test.go`: added `TestRun_NoTUIFlagParsing` (4 sub-tests)
+- Files changed:
+  - `internal/tui/model.go` — new file: BubbleTea Model with viewport, event handling, status bar
+  - `internal/tui/handler.go` — new file: TUI EventHandler bridging events to BubbleTea messages
+  - `internal/tui/model_test.go` — new file: 21 tests
+  - `internal/commands/run.go` — added --no-tui flag, refactored into TUI/PlainText paths
+  - `internal/commands/run_test.go` — added --no-tui flag parsing test
+  - `cmd/ralph/main.go` — updated usage text
+  - `go.mod` — promoted bubbletea/bubbles to direct dependencies
+- **Learnings for future iterations:**
+  - `p.Send()` is goroutine-safe — events from the loop goroutine can be sent directly to the BubbleTea program
+  - The `eventMsg` wrapper type bridges `events.Event` to `tea.Msg` — simple but effective pattern
+  - `tea.WithAltScreen()` enables full-screen mode; viewport handles scrolling automatically
+  - When the loop goroutine finishes, sending `tea.Quit()` via `p.Send()` cleanly exits the TUI
+  - `bubbles/viewport` needs a `WindowSizeMsg` before it can render — the `ready` flag pattern handles this
+  - Pre-existing test failures in commands package persist (workspace detection from cwd)
+---
+
+## 2026-02-05 - US-003 (workspace-tui-poc)
+- Implemented split-pane TUI layout with sidebar (story/test list) and viewport (agent log)
+- Added `PRDRefresh` event type to `internal/events/events.go` — emitted by loop after each invocation and QA phase
+- Created `internal/tui/sidebar.go` with lightweight sidebar model:
+  - `sidebarItem` struct with id, title, passes, active, isTest fields
+  - `updateFromPRD` refreshes items from PRD data and active story ID
+  - `setActiveStory` updates active highlighting across items
+  - `moveUp`/`moveDown` for cursor navigation with bounds checking
+  - `view()` renders items with ✓/✗ status indicators, ▸ cursor when focused, separator between stories and tests
+  - Active story uses yellow bold styling for visual highlighting
+  - Fixed-width sidebar (38 chars) with right border
+- Refactored `internal/tui/model.go`:
+  - `NewModel` now takes `(workspaceName, prdPath)` — prdPath enables file-based PRD refresh
+  - Added `sidebar`, `focus`, `prdPath`, `activeStoryID` fields to Model
+  - `Init()` returns `readPRDCmd` when prdPath is set (loads initial PRD state)
+  - `prdLoadedMsg` triggers `sidebar.updateFromPRD` with current activeStoryID
+  - `eventMsg{PRDRefresh}` triggers `readPRDCmd` → `prdLoadedMsg` pipeline for real-time updates
+  - Tab key toggles focus between left (sidebar) and right (viewport) panes
+  - Arrow keys and j/k navigate sidebar items when left pane is focused
+  - `View()` uses `lipgloss.JoinHorizontal` to combine sidebar and viewport
+  - `StoryStarted` event updates both `activeStoryID` and calls `sidebar.setActiveStory`
+  - `QAPhaseStarted` clears active story highlighting
+- Updated `internal/loop/loop.go`: emits `PRDRefresh` event at iteration start, after story invocation, after QA verification, and after QA fix
+- Updated `internal/commands/run.go`: passes prdPath to `tui.NewModel`
+- Tests added:
+  - `internal/tui/sidebar_test.go` (16 tests): UpdateFromPRD stories/tests/active, SetActiveStory, MoveUp/Down, cursor bounds, view empty/title/status/cursor/separator
+  - `internal/tui/model_test.go` (expanded from 21 to 34 tests): DefaultFocusRight, StoryStarted_UpdatesSidebar, QAPhaseStarted clears active, TabKey switches focus, ArrowKeys left/right focus, PRDLoadedMsg updates sidebar, PRDLoadedMsg preserves active, PRDRefreshEvent triggers read, View shows split pane, WindowSize sets sidebar dimensions, Init returns cmd with/without prdPath
+  - `TestIT004_StoryListReflectsPRDState`: full integration test matching IT-004 spec (3 stories, verify indicators, update PRD on disk, refresh, verify updated counts)
+- Files changed:
+  - `internal/events/events.go` — added PRDRefresh event type
+  - `internal/tui/sidebar.go` — new file: sidebar model
+  - `internal/tui/sidebar_test.go` — new file: 16 sidebar tests
+  - `internal/tui/model.go` — refactored: split-pane layout, PRD refresh, keyboard navigation
+  - `internal/tui/model_test.go` — updated and expanded: 34 tests
+  - `internal/loop/loop.go` — emit PRDRefresh events
+  - `internal/commands/run.go` — pass prdPath to NewModel
+- **Learnings for future iterations:**
+  - `readPRDCmd` as a `tea.Cmd` keeps file I/O out of the Update function — follows BubbleTea best practices
+  - The `prdLoadedMsg` → `sidebar.updateFromPRD(prd, activeStoryID)` pattern preserves active story highlighting across PRD refreshes
+  - `lipgloss.JoinHorizontal(lipgloss.Top, left, right)` aligns panes to top — important for consistent layout
+  - Sidebar uses `sidebarBorderStyle` with right border only for visual separation
+  - `sidebar.adjustScroll` keeps cursor visible in scrollable lists — important for large PRDs
+  - Pre-existing test failures in commands package persist (workspace detection from cwd) — not related to this change
+---
+
+## 2026-02-05 - US-004 (workspace-tui-poc)
+- Implemented story and integration test detail overlay in the TUI
+- Created `internal/tui/overlay.go` with:
+  - `overlay` struct for modal state (visible, content, scroll, lines, height)
+  - `renderStoryOverlay(prd.Story)` — renders ID, title, status, description, acceptance criteria (bullet list), notes
+  - `renderTestOverlay(prd.IntegrationTest)` — renders ID, status, description, steps (numbered list), failure details, notes
+  - `view(width, height)` — renders centered modal with rounded border using `lipgloss.Place`
+  - Scrollable content when overlay exceeds visible height (scrollUp/scrollDown)
+- Integrated overlay into `internal/tui/model.go`:
+  - Added `overlay` and `currentPRD` fields to Model
+  - `prdLoadedMsg` handler stores PRD in `currentPRD` for overlay lookups
+  - Enter key (when sidebar focused) opens overlay via `openOverlay()` — looks up full story/test from cached PRD
+  - Esc key closes overlay and returns to split-pane view
+  - Up/down/j/k scroll overlay content when visible
+  - Tab and other keys blocked while overlay is open
+  - `View()` renders overlay on top of split-pane layout when visible
+  - Added `Overlay()` and `CurrentPRD()` test accessors
+- Overlay styling: rounded border (magenta), bold cyan labels, bold magenta title, green PASS / red FAIL status
+- Tests added:
+  - `internal/tui/overlay_test.go` (17 tests): renderStoryOverlay (ID, title, description, acceptance criteria, notes, pass/fail), renderTestOverlay (ID, description, steps, pass/fail, failure, notes), overlay show/hide, scroll, view rendering
+  - `internal/tui/model_test.go` (9 new tests): Enter opens story overlay, Enter opens test overlay, Esc closes overlay, overlay blocks other keys, Enter with right focus no-op, PRDLoadedMsg stores currentPRD, View shows overlay
+  - `TestIT005_StoryDetailOverlayShowsCorrectData` — full integration test matching IT-005 spec
+  - `TestIT006_IntegrationTestDetailOverlayShowsFailureInfo` — full integration test matching IT-006 spec
+- Files changed:
+  - `internal/tui/overlay.go` — new file: overlay model and render functions
+  - `internal/tui/overlay_test.go` — new file: 17 overlay unit tests
+  - `internal/tui/model.go` — added overlay/currentPRD fields, Enter/Esc handling, openOverlay method, overlay rendering in View
+  - `internal/tui/model_test.go` — added 9 overlay integration tests including IT-005 and IT-006
+- **Learnings for future iterations:**
+  - Storing `currentPRD` in Model enables lookup of full story/test data from sidebar item ID
+  - Overlay key interception must come before normal key handling — check `m.overlay.visible` first in Update
+  - `lipgloss.Place(width, height, Center, Center, rendered)` provides reliable centering for modal overlays
+  - Overlay `view()` takes width/height params rather than storing them — cleaner since dimensions come from Model
+  - Pre-existing test failures in commands package persist (workspace detection from cwd) — not related to this change
+---
+
+## 2026-02-05 - US-005 (workspace-tui-poc)
+- Implemented keyboard shortcuts help overlay, graceful stop, and immediate stop in the TUI
+- Added `renderHelpOverlay()` to `internal/tui/overlay.go`:
+  - Renders a styled list of all keyboard shortcuts: Tab, ↑/k, ↓/j, Enter, Esc, ?, q, Ctrl+C
+  - Each shortcut has a description of its function
+- Added `helpOverlay` field to `Model` in `internal/tui/model.go`:
+  - Reuses the existing `overlay` type for consistent rendering
+  - `?` key opens help overlay, `Esc` or `?` again closes it
+  - Help overlay blocks all other keys except Ctrl+C
+- Implemented graceful stop with `q` key:
+  - Added `quitting` and `cancelFunc` fields to `Model`
+  - `NewModel` now accepts `context.CancelFunc` parameter
+  - `q` key calls `initiateGracefulStop()` which sets `quitting=true` and calls `cancelFunc()`
+  - The loop goroutine respects `ctx.Done()` and exits after current invocation finishes
+  - Then sends `tea.Quit()` to cleanly exit the TUI
+  - Status bar shows "Stopping..." with red background when quitting
+- `Ctrl+C` triggers immediate `tea.Quit` — exits the TUI immediately
+- Updated `internal/commands/run.go`:
+  - `runLoopTUI` creates a cancellable context with `context.WithCancel`
+  - Passes the `cancel` function to `NewModel`
+- Tests added:
+  - `internal/tui/overlay_test.go` (2 new tests): `TestRenderHelpOverlay_ContainsAllShortcuts`, `TestRenderHelpOverlay_ContainsDescriptions`
+  - `internal/tui/model_test.go` (14 new/updated tests): help overlay open/close/toggle/block keys/Ctrl+C still works, graceful stop cancel/idempotent/nil cancel, status bar Stopping indicator, q key in detail overlay, CtrlC returns quit, q initiates graceful stop, IT-007 integration test
+- Files changed:
+  - `internal/tui/overlay.go` — added `renderHelpOverlay` function
+  - `internal/tui/model.go` — added `helpOverlay`, `quitting`, `cancelFunc` fields; `NewModel` accepts `CancelFunc`; updated `Update()` key handling; added `initiateGracefulStop`, `stoppingStyle`; updated `View()` and `statusBar()`; added test accessors
+  - `internal/tui/model_test.go` — added 14 new tests, updated existing tests for new `NewModel` signature
+  - `internal/tui/overlay_test.go` — added 2 help overlay tests
+  - `internal/commands/run.go` — added `context.WithCancel` in `runLoopTUI`, pass cancel to `NewModel`
+- **Learnings for future iterations:**
+  - Reusing the `overlay` type for both detail and help overlays keeps the code DRY — just different content
+  - `context.CancelFunc` passed to the TUI model enables clean separation between UI and loop lifecycle
+  - `initiateGracefulStop` is idempotent — calling cancel multiple times is safe
+  - Ctrl+C must be checked before any overlay interception — it should always work regardless of UI state
+  - The loop goroutine already handles `ctx.Done()` in `invokeWithUsageLimitWait` — no loop.go changes needed
+  - Pre-existing test failures in commands package persist (workspace detection from cwd) — not related to this change
 ---

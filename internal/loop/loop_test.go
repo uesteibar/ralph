@@ -1,18 +1,26 @@
 package loop
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/uesteibar/ralph/internal/claude"
+	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/prd"
 )
+
+// recordingHandler captures events for test assertions.
+type recordingHandler struct {
+	events []events.Event
+}
+
+func (h *recordingHandler) Handle(e events.Event) {
+	h.events = append(h.events, e)
+}
 
 // mockGitClean sets up the git check to always return clean (no uncommitted changes).
 // Returns a cleanup function that restores the original.
@@ -1250,13 +1258,8 @@ func TestRun_UsageLimitDoesNotCountAsIteration(t *testing.T) {
 	}
 }
 
-func TestInvokeWithUsageLimitWait_PrintsStyledOutput(t *testing.T) {
+func TestInvokeWithUsageLimitWait_EmitsUsageLimitEvent(t *testing.T) {
 	defer mockFastUsageLimitWait()()
-
-	var buf bytes.Buffer
-	origWriter := stderrWriter
-	stderrWriter = &buf
-	defer func() { stderrWriter = origWriter }()
 
 	var calls int
 	origInvokeFn := invokeClaudeFn
@@ -1274,8 +1277,10 @@ func TestInvokeWithUsageLimitWait_PrintsStyledOutput(t *testing.T) {
 		return "success", nil
 	}
 
+	handler := &recordingHandler{}
 	output, err := invokeWithUsageLimitWait(context.Background(), invokeOpts{
-		prompt: "test",
+		prompt:       "test",
+		eventHandler: handler,
 	})
 
 	if err != nil {
@@ -1285,11 +1290,156 @@ func TestInvokeWithUsageLimitWait_PrintsStyledOutput(t *testing.T) {
 		t.Errorf("expected output 'success', got %q", output)
 	}
 
-	stderrOutput := buf.String()
-	if !strings.Contains(stderrOutput, "Usage limit reached") {
-		t.Errorf("expected stderr to contain 'Usage limit reached', got %q", stderrOutput)
+	// Verify UsageLimitWait event was emitted
+	var found bool
+	for _, e := range handler.events {
+		if _, ok := e.(events.UsageLimitWait); ok {
+			found = true
+			break
+		}
 	}
-	if !strings.Contains(stderrOutput, "waiting") {
-		t.Errorf("expected stderr to contain 'waiting', got %q", stderrOutput)
+	if !found {
+		t.Error("expected UsageLimitWait event to be emitted")
+	}
+}
+
+func TestRun_EmitsIterationStartAndStoryStartedEvents(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		testPRD.UserStories[0].Passes = true
+		prd.Write(prdPath, testPRD)
+		return "", nil
+	}
+
+	handler := &recordingHandler{}
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		EventHandler:  handler,
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Should have IterationStart event
+	var hasIterationStart bool
+	for _, e := range handler.events {
+		if is, ok := e.(events.IterationStart); ok {
+			hasIterationStart = true
+			if is.Iteration != 1 {
+				t.Errorf("expected first iteration, got %d", is.Iteration)
+			}
+			break
+		}
+	}
+	if !hasIterationStart {
+		t.Error("expected IterationStart event")
+	}
+
+	// Should have StoryStarted event
+	var hasStoryStarted bool
+	for _, e := range handler.events {
+		if ss, ok := e.(events.StoryStarted); ok {
+			hasStoryStarted = true
+			if ss.StoryID != "US-001" {
+				t.Errorf("expected story ID US-001, got %s", ss.StoryID)
+			}
+			if ss.Title != "Story 1" {
+				t.Errorf("expected title 'Story 1', got %s", ss.Title)
+			}
+			break
+		}
+	}
+	if !hasStoryStarted {
+		t.Error("expected StoryStarted event")
+	}
+}
+
+func TestRun_EmitsQAPhaseStartedEvent(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+		IntegrationTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		if opts.isQAVerification {
+			testPRD.IntegrationTests[0].Passes = true
+			prd.Write(prdPath, testPRD)
+		}
+		return "", nil
+	}
+
+	handler := &recordingHandler{}
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		EventHandler:  handler,
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Should have QAPhaseStarted event with "verification" phase
+	var hasQAPhase bool
+	for _, e := range handler.events {
+		if qa, ok := e.(events.QAPhaseStarted); ok {
+			hasQAPhase = true
+			if qa.Phase != "verification" {
+				t.Errorf("expected phase 'verification', got %s", qa.Phase)
+			}
+			break
+		}
+	}
+	if !hasQAPhase {
+		t.Error("expected QAPhaseStarted event")
 	}
 }

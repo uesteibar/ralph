@@ -336,6 +336,7 @@ func TestWorkspaces_SubRouting(t *testing.T) {
 // --- workspacesList tests ---
 
 func TestWorkspacesList_EmptyRegistry(t *testing.T) {
+	t.Setenv("RALPH_WORKSPACE", "") // Clear env to ensure base context
 	dir := realPath(t, t.TempDir())
 	initTestRepo(t, dir)
 

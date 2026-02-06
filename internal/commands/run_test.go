@@ -51,6 +51,51 @@ func TestRun_WorkspaceFlagParsing(t *testing.T) {
 	}
 }
 
+func TestRun_NoTUIFlagParsing(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		expected bool
+	}{
+		{
+			name:     "no flag defaults to false",
+			args:     []string{},
+			expected: false,
+		},
+		{
+			name:     "--no-tui enables plain text",
+			args:     []string{"--no-tui"},
+			expected: true,
+		},
+		{
+			name:     "--no-tui=true enables plain text",
+			args:     []string{"--no-tui=true"},
+			expected: true,
+		},
+		{
+			name:     "--no-tui=false keeps TUI",
+			args:     []string{"--no-tui=false"},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("run", flag.ContinueOnError)
+			noTUI := fs.Bool("no-tui", false, "Disable TUI")
+
+			err := fs.Parse(tt.args)
+			if err != nil {
+				t.Fatalf("unexpected parse error: %v", err)
+			}
+
+			if *noTUI != tt.expected {
+				t.Errorf("expected no-tui=%v, got %v", tt.expected, *noTUI)
+			}
+		})
+	}
+}
+
 func TestRun_InWorkspace_CorrectWorkDirAndPRDPath(t *testing.T) {
 	dir := realPath(t, t.TempDir())
 	initTestRepo(t, dir)
@@ -108,6 +153,7 @@ func TestRun_InWorkspace_CorrectWorkDirAndPRDPath(t *testing.T) {
 }
 
 func TestRun_InBase_WarningPrinted(t *testing.T) {
+	t.Setenv("RALPH_WORKSPACE", "") // Clear env to ensure base mode
 	dir := realPath(t, t.TempDir())
 	initTestRepo(t, dir)
 
@@ -288,5 +334,78 @@ func TestRun_WorkspaceMissingPRD_Error(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "PRD not found") {
 		t.Errorf("expected error to contain 'PRD not found', got: %v", err)
+	}
+}
+
+func TestRun_AllStoriesPass_PrintsDoneMessage(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	// Create workspace with all stories passing
+	wsName := "done-ws"
+	ws := workspace.Workspace{Name: wsName, Branch: "ralph/" + wsName}
+	wsDir := filepath.Join(dir, ".ralph", "workspaces", wsName)
+	treeDir := filepath.Join(wsDir, "tree")
+	if err := os.MkdirAll(treeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.WriteWorkspaceJSON(dir, wsName, ws); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.RegistryCreate(dir, ws); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write PRD with all stories passing
+	prdContent := `{
+  "project": "test",
+  "branchName": "ralph/done-ws",
+  "description": "Test PRD",
+  "userStories": [
+    {"id": "US-001", "title": "Test", "description": "Test", "acceptanceCriteria": ["Works"], "priority": 1, "passes": true}
+  ],
+  "integrationTests": [
+    {"id": "IT-001", "description": "Test works", "steps": ["Run test"], "passes": true}
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(wsDir, "prd.json"), []byte(prdContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Change to repo root
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture stderr
+	oldStderr := os.Stderr
+	rPipe, wPipe, _ := os.Pipe()
+	os.Stderr = wPipe
+
+	err = Run([]string{"--workspace", wsName})
+
+	wPipe.Close()
+	os.Stderr = oldStderr
+
+	var buf bytes.Buffer
+	buf.ReadFrom(rPipe)
+	stderr := buf.String()
+
+	// Should succeed without error
+	if err != nil {
+		t.Fatalf("expected no error when all stories pass, got: %v", err)
+	}
+
+	// Should print done message
+	if !strings.Contains(stderr, "All stories and integration tests pass") {
+		t.Errorf("expected stderr to contain done message, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "squash and merge your changes back to base") {
+		t.Errorf("expected stderr to mention squash and merge, got: %s", stderr)
 	}
 }
