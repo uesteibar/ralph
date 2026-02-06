@@ -25,6 +25,7 @@ Usage:
   ralph workspaces list [--project-config path]  List all workspaces
   ralph workspaces switch <name>                 Switch to a workspace
   ralph workspaces remove <name>                 Remove a workspace
+  ralph workspaces prune [--project-config path]  Remove all done workspaces
   ralph shell-init                               Print shell integration (eval in .bashrc/.zshrc)
 
 Flags:

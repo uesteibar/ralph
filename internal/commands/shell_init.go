@@ -79,6 +79,18 @@ func shellFunction() string {
                         unset RALPH_WORKSPACE
                     fi
                     ;;
+                prune)
+                    __output=$(command ralph "$@")
+                    __exit=$?
+                    if [ $__exit -ne 0 ]; then
+                        return $__exit
+                    fi
+                    __path=$(echo "$__output" | tail -n 1)
+                    if [ -n "$__path" ] && [ -d "$__path" ]; then
+                        cd "$__path" || return 1
+                        unset RALPH_WORKSPACE
+                    fi
+                    ;;
                 *)
                     command ralph "$@"
                     ;;

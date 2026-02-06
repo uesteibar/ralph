@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"encoding/json"
+
+	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
@@ -330,6 +333,10 @@ func TestWorkspaces_SubRouting(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown workspaces subcommand") {
 		t.Errorf("error = %q, want to contain 'unknown workspaces subcommand'", err.Error())
+	}
+	// Verify prune is listed in the error message for valid subcommands.
+	if !strings.Contains(err.Error(), "prune") {
+		t.Errorf("error = %q, want to contain 'prune' in list of valid subcommands", err.Error())
 	}
 }
 
@@ -742,5 +749,393 @@ func TestWorkspacesRemove_Nonexistent_Error(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("error = %q, want to contain 'not found'", err.Error())
+	}
+}
+
+// --- isDoneWorkspace tests ---
+
+func TestIsDoneWorkspace_NoPRD(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create workspace (no PRD).
+	_, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "no-prd"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+
+	if !isDoneWorkspace(dir, "no-prd") {
+		t.Error("workspace without PRD should be considered done")
+	}
+}
+
+func TestIsDoneWorkspace_AllPassing(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create workspace.
+	_, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "all-pass"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+
+	// Write a PRD with all stories and tests passing.
+	p := &prd.PRD{
+		Project:     "test",
+		Description: "test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+			{ID: "US-002", Title: "Story 2", Passes: true},
+		},
+		IntegrationTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: true},
+		},
+	}
+	prdPath := workspace.PRDPathForWorkspace(dir, "all-pass")
+	data, _ := json.MarshalIndent(p, "", "  ")
+	if err := os.WriteFile(prdPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if !isDoneWorkspace(dir, "all-pass") {
+		t.Error("workspace with all-passing PRD should be considered done")
+	}
+}
+
+func TestIsDoneWorkspace_NotPassing(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create workspace.
+	_, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "not-done"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+
+	// Write a PRD with a failing story.
+	p := &prd.PRD{
+		Project:     "test",
+		Description: "test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+			{ID: "US-002", Title: "Story 2", Passes: false},
+		},
+	}
+	prdPath := workspace.PRDPathForWorkspace(dir, "not-done")
+	data, _ := json.MarshalIndent(p, "", "  ")
+	if err := os.WriteFile(prdPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if isDoneWorkspace(dir, "not-done") {
+		t.Error("workspace with failing story should NOT be considered done")
+	}
+}
+
+func TestIsDoneWorkspace_FailingIntegrationTest(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create workspace.
+	_, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "fail-it"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+
+	// Write a PRD with all stories passing but a failing integration test.
+	p := &prd.PRD{
+		Project:     "test",
+		Description: "test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+		IntegrationTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: false},
+		},
+	}
+	prdPath := workspace.PRDPathForWorkspace(dir, "fail-it")
+	data, _ := json.MarshalIndent(p, "", "  ")
+	if err := os.WriteFile(prdPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if isDoneWorkspace(dir, "fail-it") {
+		t.Error("workspace with failing integration test should NOT be considered done")
+	}
+}
+
+// --- workspacesPrune tests ---
+
+func TestWorkspacesPrune_RemovesDoneWorkspaces(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	t.Setenv("RALPH_WORKSPACE", "")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create 3 workspaces.
+	for _, name := range []string{"ws-done", "ws-empty", "ws-active"} {
+		_, err := captureStdout(t, func() error {
+			return workspacesDispatch([]string{"new", name}, strings.NewReader(""))
+		})
+		if err != nil {
+			t.Fatalf("creating %s: %v", name, err)
+		}
+	}
+
+	// ws-done: all-passing PRD.
+	donePRD := &prd.PRD{
+		Project:     "test",
+		UserStories: []prd.Story{{ID: "US-001", Passes: true}},
+	}
+	data, _ := json.MarshalIndent(donePRD, "", "  ")
+	os.WriteFile(workspace.PRDPathForWorkspace(dir, "ws-done"), data, 0644)
+
+	// ws-empty: no PRD (already done by default).
+
+	// ws-active: incomplete PRD.
+	activePRD := &prd.PRD{
+		Project:     "test",
+		UserStories: []prd.Story{{ID: "US-001", Passes: false}},
+	}
+	data, _ = json.MarshalIndent(activePRD, "", "  ")
+	os.WriteFile(workspace.PRDPathForWorkspace(dir, "ws-active"), data, 0644)
+
+	// Prune with "y" confirmation.
+	stdout, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"prune"}, strings.NewReader("y\n"))
+	})
+	if err != nil {
+		t.Fatalf("prune error: %v", err)
+	}
+
+	// No stdout expected (not in a pruned workspace).
+	if strings.TrimSpace(stdout) != "" {
+		t.Errorf("stdout should be empty when not pruning current workspace, got %q", stdout)
+	}
+
+	// Verify ws-done and ws-empty are removed.
+	entries, _ := workspace.RegistryListWithMissing(dir)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 remaining workspace, got %d", len(entries))
+	}
+	if entries[0].Name != "ws-active" {
+		t.Errorf("remaining workspace = %q, want %q", entries[0].Name, "ws-active")
+	}
+
+	// Verify directories are cleaned up.
+	if _, err := os.Stat(workspace.WorkspacePath(dir, "ws-done")); !os.IsNotExist(err) {
+		t.Error("ws-done directory should be removed")
+	}
+	if _, err := os.Stat(workspace.WorkspacePath(dir, "ws-empty")); !os.IsNotExist(err) {
+		t.Error("ws-empty directory should be removed")
+	}
+	// ws-active should still exist.
+	if _, err := os.Stat(workspace.WorkspacePath(dir, "ws-active")); err != nil {
+		t.Error("ws-active directory should still exist")
+	}
+}
+
+func TestWorkspacesPrune_NoDoneWorkspaces(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	t.Setenv("RALPH_WORKSPACE", "")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create a workspace with an incomplete PRD.
+	_, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "active-ws"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+
+	activePRD := &prd.PRD{
+		Project:     "test",
+		UserStories: []prd.Story{{ID: "US-001", Passes: false}},
+	}
+	data, _ := json.MarshalIndent(activePRD, "", "  ")
+	os.WriteFile(workspace.PRDPathForWorkspace(dir, "active-ws"), data, 0644)
+
+	// Prune (should be no-op without asking for confirmation).
+	_, err = captureStdout(t, func() error {
+		return workspacesDispatch([]string{"prune"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("prune error: %v", err)
+	}
+
+	// Workspace should still exist.
+	entries, _ := workspace.RegistryListWithMissing(dir)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 workspace, got %d", len(entries))
+	}
+}
+
+func TestWorkspacesPrune_AbortOnNo(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	t.Setenv("RALPH_WORKSPACE", "")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create a workspace without PRD (done by default).
+	_, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "done-ws"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+
+	// Prune with "n" — should abort.
+	_, err = captureStdout(t, func() error {
+		return workspacesDispatch([]string{"prune"}, strings.NewReader("n\n"))
+	})
+	if err != nil {
+		t.Fatalf("prune error: %v", err)
+	}
+
+	// Workspace should still exist.
+	entries, _ := workspace.RegistryListWithMissing(dir)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 workspace after abort, got %d", len(entries))
+	}
+}
+
+func TestWorkspacesPrune_AbortOnEmpty(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	t.Setenv("RALPH_WORKSPACE", "")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create a workspace without PRD (done by default).
+	_, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "done-ws"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+
+	// Prune with empty input — should abort.
+	_, err = captureStdout(t, func() error {
+		return workspacesDispatch([]string{"prune"}, strings.NewReader("\n"))
+	})
+	if err != nil {
+		t.Fatalf("prune error: %v", err)
+	}
+
+	// Workspace should still exist.
+	entries, _ := workspace.RegistryListWithMissing(dir)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 workspace after empty input, got %d", len(entries))
+	}
+}
+
+func TestWorkspacesPrune_CurrentWorkspacePruned_OutputsBasePath(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create workspace without PRD (done by default).
+	_, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "current-done"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+
+	// Set as current workspace.
+	t.Setenv("RALPH_WORKSPACE", "current-done")
+
+	// Prune with "y".
+	stdout, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"prune"}, strings.NewReader("y\n"))
+	})
+	if err != nil {
+		t.Fatalf("prune error: %v", err)
+	}
+
+	// Should output base repo path.
+	if strings.TrimSpace(stdout) != dir {
+		t.Errorf("stdout = %q, want repo root %q", strings.TrimSpace(stdout), dir)
+	}
+}
+
+func TestWorkspacesPrune_ConfirmWithYes(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	t.Setenv("RALPH_WORKSPACE", "")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	// Create a workspace without PRD (done by default).
+	_, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "yes-ws"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("creating workspace: %v", err)
+	}
+
+	// Prune with "yes" (full word).
+	_, err = captureStdout(t, func() error {
+		return workspacesDispatch([]string{"prune"}, strings.NewReader("yes\n"))
+	})
+	if err != nil {
+		t.Fatalf("prune error: %v", err)
+	}
+
+	// Workspace should be removed.
+	entries, _ := workspace.RegistryListWithMissing(dir)
+	if len(entries) != 0 {
+		t.Errorf("expected 0 workspaces after prune, got %d", len(entries))
 	}
 }

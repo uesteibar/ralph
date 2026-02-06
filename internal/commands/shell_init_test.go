@@ -121,6 +121,25 @@ func TestShellInit_ZshUsrLocalBinZsh_Supported(t *testing.T) {
 	}
 }
 
+func TestShellInit_BashOutput_ContainsPruneHandler(t *testing.T) {
+	var buf bytes.Buffer
+	err := shellInit("/bin/bash", &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+
+	mustContain := []string{
+		"prune)",             // nested case for workspaces prune
+		"unset RALPH_WORKSPACE", // should unset env if current was pruned
+	}
+	for _, s := range mustContain {
+		if !containsSubstring(out, s) {
+			t.Errorf("bash output missing %q for prune handler", s)
+		}
+	}
+}
+
 func TestShellInit_BashOutput_CapturesStdoutNotStderr(t *testing.T) {
 	var buf bytes.Buffer
 	if err := shellInit("/bin/bash", &buf); err != nil {

@@ -995,3 +995,77 @@
   - The loop goroutine already handles `ctx.Done()` in `invokeWithUsageLimitWait` — no loop.go changes needed
   - Pre-existing test failures in commands package persist (workspace detection from cwd) — not related to this change
 ---
+
+## 2026-02-06 - US-001 (no-co-sign-commits)
+- Added explicit "Do NOT add Co-Authored-By headers" instruction to all three agent prompt templates near their commit command sections
+- Added `claudeMDContent` constant in `init.go` with no-co-sign rule
+- `ralph init` now always writes `.claude/CLAUDE.md` (idempotent, same pattern as finish.md)
+- Running init twice produces identical CLAUDE.md content (no duplication)
+- Files changed:
+  - `internal/prompts/templates/loop_iteration.md` — added no-co-sign instruction after commit command
+  - `internal/prompts/templates/qa_verification.md` — added no-co-sign instruction after commit format
+  - `internal/prompts/templates/qa_fix.md` — added no-co-sign instruction after commit format
+  - `internal/commands/init.go` — added `claudeMDContent` constant, added CLAUDE.md write logic
+  - `internal/commands/init_test.go` — added `TestInit_CreatesClaudeMDWithNoCoSignRule`, `TestInit_ClaudeMD_IdempotentOnRerun`
+  - `internal/prompts/prompts_test.go` — added `TestRenderLoopIteration_ContainsNoCoSignInstruction`, `TestRenderQAVerification_ContainsNoCoSignInstruction`, `TestRenderQAFix_ContainsNoCoSignInstruction`
+- **Learnings for future iterations:**
+  - The "always-write" pattern (same as finish.md) ensures CLAUDE.md is kept up-to-date on every `ralph init` run — no stale rules
+  - `os.WriteFile` with the full content is inherently idempotent — writing the same content twice produces the same file
+  - All three prompt templates (loop_iteration, qa_verification, qa_fix) have commit sections — no-co-sign must be added to each
+---
+
+## 2026-02-06 - US-002
+- Added `ralph new <name>` as an alias for `ralph workspaces new <name>`
+- Implementation:
+  - `cmd/ralph/main.go`: Added `"new"` case in dispatch switch that prepends `"new"` to args and delegates to `commands.Workspaces`
+  - `internal/commands/shell_init.go`: Added `new)` case at the outer level of the shell function, handling cd, RALPH_WORKSPACE export, and prd new launch (identical behavior to the nested `workspaces` + `new` handler)
+  - `cmd/ralph/main.go` usage text: Added `ralph new <name>` line showing it as an alias
+- Tests added:
+  - `TestNewAlias_BehavesIdenticallyToWorkspacesNew` in `workspaces_test.go` — verifies stdout path, tree directory creation, and registry entry
+  - `TestShellInit_BashOutput_ContainsNewAlias` in `shell_init_test.go` — verifies shell function contains new alias handler with RALPH_WORKSPACE and prd new
+- Files changed:
+  - `cmd/ralph/main.go` — added `"new"` dispatch case and usage text
+  - `internal/commands/shell_init.go` — added `new)` case in shell function
+  - `internal/commands/workspaces_test.go` — added alias test
+  - `internal/commands/shell_init_test.go` — added shell function alias test
+- **Learnings for future iterations:**
+  - Top-level aliases in main.go simply prepend the subcommand and delegate to the existing handler — minimal code, full reuse
+  - Shell function `new)` handler uses `$2` for workspace name (vs `$3` in the nested `workspaces new` handler) since there's no `workspaces` prefix
+  - The `command ralph "$@"` pattern in the shell function works correctly because the binary dispatches `new` → `workspaces new` internally
+---
+
+## 2026-02-06 - US-003
+- Implemented `ralph workspaces prune` command to remove all done workspaces in bulk
+- Implementation details:
+  - Added `isDoneWorkspace(repoPath, name)` helper: checks PRD existence and all stories/tests passing via `prd.AllPass` and `prd.AllIntegrationTestsPass`; no PRD = done
+  - Added `workspacesPrune(args, in)` function: lists done workspaces on stderr, prompts y/n confirmation, removes confirmed workspaces via `workspace.RemoveWorkspace`, outputs base path on stdout if current workspace was pruned
+  - Missing workspaces (directory gone but still in registry) are also treated as done and prunable
+  - Accepts y/yes for confirmation; n/no/empty aborts
+  - No-op message on stderr when no workspaces are done
+  - Added `prune)` handler in shell function (shell_init.go): cd to base and unset RALPH_WORKSPACE if current was pruned
+  - Wired into `workspacesDispatch` and updated usage text in main.go
+- Tests added (13 new tests):
+  - `TestIsDoneWorkspace_NoPRD` — workspace without PRD is done
+  - `TestIsDoneWorkspace_AllPassing` — all stories and tests passing is done
+  - `TestIsDoneWorkspace_NotPassing` — failing story is not done
+  - `TestIsDoneWorkspace_FailingIntegrationTest` — passing stories but failing test is not done
+  - `TestWorkspacesPrune_RemovesDoneWorkspaces` — IT-003: removes ws-done and ws-empty, keeps ws-active
+  - `TestWorkspacesPrune_NoDoneWorkspaces` — IT-004: no-op when nothing is done
+  - `TestWorkspacesPrune_AbortOnNo` — n aborts
+  - `TestWorkspacesPrune_AbortOnEmpty` — empty input aborts
+  - `TestWorkspacesPrune_CurrentWorkspacePruned_OutputsBasePath` — stdout has repo root when current pruned
+  - `TestWorkspacesPrune_ConfirmWithYes` — "yes" (full word) works
+  - `TestShellInit_BashOutput_ContainsPruneHandler` — shell function has prune handler
+  - Updated `TestWorkspaces_SubRouting` — verifies prune in error message
+- Files changed:
+  - `internal/commands/workspaces.go` — added isDoneWorkspace, workspacesPrune, updated dispatch and error message
+  - `internal/commands/workspaces_test.go` — added 11 new test functions
+  - `internal/commands/shell_init.go` — added prune) case in shell function
+  - `internal/commands/shell_init_test.go` — added prune handler test
+  - `cmd/ralph/main.go` — added prune to usage text
+- **Learnings for future iterations:**
+  - `isDoneWorkspace` reuses `prd.AllPass` and `prd.AllIntegrationTestsPass` — no duplication of logic
+  - Missing workspaces (directory gone) are treated as prunable since they can't be worked on anyway
+  - The prune shell function handler follows the same pattern as remove: capture stdout, cd if path exists, unset RALPH_WORKSPACE
+  - `strings.ToLower` + trim on confirmation input handles case-insensitive y/yes matching
+---

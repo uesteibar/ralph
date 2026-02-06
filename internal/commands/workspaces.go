@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/uesteibar/ralph/internal/gitops"
+	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
@@ -38,8 +39,10 @@ func workspacesDispatch(args []string, in io.Reader) error {
 		return workspacesSwitch(rest)
 	case "remove":
 		return workspacesRemove(rest)
+	case "prune":
+		return workspacesPrune(rest, in)
 	default:
-		return fmt.Errorf("unknown workspaces subcommand: %s (use 'new', 'list', 'switch', or 'remove')", subcmd)
+		return fmt.Errorf("unknown workspaces subcommand: %s (use 'new', 'list', 'switch', 'remove', or 'prune')", subcmd)
 	}
 }
 
@@ -251,6 +254,101 @@ func workspacesSwitch(args []string) error {
 
 	fmt.Fprintf(os.Stderr, "Switched to workspace %s\n", name)
 	fmt.Println(treePath)
+
+	return nil
+}
+
+// isDoneWorkspace checks if a workspace is considered done:
+// - No PRD file exists, OR
+// - PRD has all userStories with passes:true AND all integrationTests with passes:true
+func isDoneWorkspace(repoPath, name string) bool {
+	prdPath := workspace.PRDPathForWorkspace(repoPath, name)
+	p, err := prd.Read(prdPath)
+	if err != nil {
+		// No PRD file or unreadable → considered done.
+		return true
+	}
+	return prd.AllPass(p) && prd.AllIntegrationTestsPass(p)
+}
+
+func workspacesPrune(args []string, in io.Reader) error {
+	fs := flag.NewFlagSet("workspaces prune", flag.ExitOnError)
+	configPath := AddProjectConfigFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, err := ResolveConfig(*configPath)
+	if err != nil {
+		return fmt.Errorf("resolving config: %w", err)
+	}
+
+	// Print workspace header for current context.
+	curWC, _ := resolveWorkContextFromFlags("", cfg.Repo.Path)
+	printWorkspaceHeader(curWC, cfg.Repo.Path)
+
+	// List all workspaces and find done ones.
+	entries, err := workspace.RegistryListWithMissing(cfg.Repo.Path)
+	if err != nil {
+		return fmt.Errorf("reading workspace registry: %w", err)
+	}
+
+	var doneNames []string
+	for _, e := range entries {
+		if e.Missing || isDoneWorkspace(cfg.Repo.Path, e.Name) {
+			doneNames = append(doneNames, e.Name)
+		}
+	}
+
+	if len(doneNames) == 0 {
+		fmt.Fprintln(os.Stderr, "No done workspaces to prune.")
+		return nil
+	}
+
+	// List done workspaces on stderr.
+	fmt.Fprintln(os.Stderr, "The following workspaces are done:")
+	for _, name := range doneNames {
+		fmt.Fprintf(os.Stderr, "  %s\n", name)
+	}
+
+	// Prompt for confirmation.
+	fmt.Fprint(os.Stderr, "Remove all? (y/n) ")
+	scanner := bufio.NewScanner(in)
+	if !scanner.Scan() {
+		return nil
+	}
+	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	if answer != "y" && answer != "yes" {
+		fmt.Fprintln(os.Stderr, "Aborted.")
+		return nil
+	}
+
+	// Detect if current workspace is among those being pruned.
+	cwd, _ := os.Getwd()
+	wc, _ := workspace.ResolveWorkContext("", os.Getenv("RALPH_WORKSPACE"), cwd, cfg.Repo.Path)
+	currentPruned := false
+	for _, name := range doneNames {
+		if name == wc.Name {
+			currentPruned = true
+			break
+		}
+	}
+
+	ctx := context.Background()
+	repoRunner := &shell.Runner{Dir: cfg.Repo.Path}
+
+	for _, name := range doneNames {
+		if err := workspace.RemoveWorkspace(ctx, repoRunner, cfg.Repo.Path, name); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove workspace '%s': %v\n", name, err)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "✓ Removed workspace '%s'\n", name)
+	}
+
+	// If current workspace was pruned, output base repo path for shell function cd.
+	if currentPruned {
+		fmt.Println(cfg.Repo.Path)
+	}
 
 	return nil
 }
