@@ -262,9 +262,8 @@ func Init(args []string, in io.Reader) error {
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  1. Edit .ralph/ralph.yaml (set quality checks, project details)")
-	fmt.Println("  2. Create your first workspace: ralph workspaces new <name>")
-	fmt.Println("  3. ralph prd new        (interactive PRD creation)")
-	fmt.Println("  4. ralph run            (execute the loop from staged PRD)")
+	fmt.Println("  2. ralph new <name>     (creates workspace and starts PRD creation)")
+	fmt.Println("  3. ralph run            (execute the autonomous loop)")
 
 	return nil
 }

@@ -13,7 +13,6 @@ func usage() {
 Usage:
   ralph init                                     Scaffold .ralph/ directory and config
   ralph validate [--project-config path]         Validate project configuration
-  ralph prd new [--project-config path] [--workspace name]   Create a PRD interactively
   ralph run [--project-config path] [--max-iterations n] [--workspace name] [--no-tui]   Run the agent loop
   ralph chat [--project-config path] [--continue] [--workspace name]   Ad-hoc Claude session
   ralph switch [name] [--project-config path]    Switch workspace (interactive picker if no name)

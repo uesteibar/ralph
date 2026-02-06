@@ -1,62 +1,153 @@
 # Ralph
 
-An autonomous coding agent loop. Ralph takes a feature description, breaks
-it into right-sized user stories, and implements them one by one -- running
-quality checks and committing after each step -- until the feature is done.
+An autonomous coding agent loop. Ralph takes a feature description, breaks it
+into right-sized user stories, and implements them one by one -- running quality
+checks and committing after each step -- until the feature is done.
 
 You work from your terminal. Ralph works in an isolated workspace.
 
+---
+
+## Table of Contents
+
+- [How It Works](#how-it-works)
+- [Typical Workflow](#typical-workflow)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Shell Integration](#shell-integration)
+- [Workspaces](#workspaces)
+- [Commands](#commands)
+  - [ralph init](#ralph-init)
+  - [ralph new](#ralph-new)
+  - [ralph run](#ralph-run)
+  - [ralph chat](#ralph-chat)
+  - [ralph status](#ralph-status)
+  - [ralph overview](#ralph-overview)
+  - [ralph rebase](#ralph-rebase)
+  - [ralph done](#ralph-done)
+  - [ralph switch](#ralph-switch)
+  - [ralph workspaces](#ralph-workspaces)
+  - [ralph eject](#ralph-eject)
+  - [ralph validate](#ralph-validate)
+- [TUI (Terminal UI)](#tui-terminal-ui)
+- [Configuration](#configuration)
+- [PRD Format](#prd-format)
+- [Prompt Customization](#prompt-customization)
+- [Architecture](#architecture)
+- [Development](#development)
+
+---
+
 ## How It Works
 
-1. You create a **workspace** -- an isolated git worktree with its own branch
-2. You describe a feature interactively with Claude
-3. When you're happy, type `/finish` -- Claude generates a structured PRD
-   with user stories and integration tests
-4. Ralph loops through stories in your workspace:
-   - Pick next unfinished story
-   - Implement and test it
-   - Run quality checks
-   - Commit
-   - Repeat until all stories are done
-5. QA verification phase:
-   - QA agent runs integration tests defined in the PRD
-   - If tests fail, QA fix agent resolves the issues
-   - Loop continues until all integration tests pass
-
-## Workspaces
-
-A **workspace** is an isolated environment for a single feature. Each
-workspace gets its own git worktree (branch), PRD, and working directory.
-You can have multiple workspaces active at once and switch between them.
-
 ```
-.ralph/workspaces/
-  login-page/              # workspace directory
-    tree/                  # git worktree (checked out code)
-    workspace.json         # metadata (name, branch, createdAt)
-    prd.json               # workspace-specific PRD
-  dark-mode/
-    tree/
-    workspace.json
-    prd.json
+            You                                Ralph
+            ───                                ─────
+  1. Create a workspace           git worktree + branch created
+  2. Describe your feature        Interactive Claude conversation
+  3. Type /finish                  Structured PRD generated (stories + tests)
+  4. ralph run                     Autonomous loop starts:
+                                     ┌─ Pick next unfinished story
+                                     │  Implement + write tests
+                                     │  Run quality checks
+                                     │  Commit
+                                     │  Mark story as passing
+                                     └─ Repeat until all stories done
+                                   QA phase:
+                                     ┌─ Run integration tests from PRD
+                                     │  Fix any failures
+                                     └─ Repeat until all tests pass
+  5. ralph done                    Squash-merge into main, clean up
 ```
 
-**Why workspaces?**
+### The Loop in Detail
 
-- Each feature is fully isolated -- no conflicts between parallel work
-- Shell integration tracks which workspace you're in
-- `ralph run`, `ralph chat`, `ralph rebase` automatically use the right
-  branch and PRD based on your current workspace
-- When you're done, `ralph done` squash-merges and cleans up
+For each iteration, Ralph:
 
-You can also run commands in **base** mode (the main repo) without a
-workspace, but workspaces are the recommended workflow.
+1. Reads the PRD and finds the next unfinished story
+2. Invokes Claude with the story context, acceptance criteria, and project patterns
+3. Claude implements the story, writes tests, and runs quality checks
+4. On success, Claude commits and marks the story as passing in the PRD
+5. Appends a progress entry to the shared progress log
+
+When all stories pass, Ralph enters the **QA phase**:
+
+1. A QA agent reads the integration test specs from the PRD
+2. It builds and runs automated tests for each spec
+3. If tests fail, a QA fix agent resolves the issues
+4. The cycle continues until all integration tests pass
+
+---
+
+## Typical Workflow
+
+Here is the normal flow from start to finish:
+
+```
+ ┌──────────────────┐
+ │   ralph init     │  One-time project setup
+ └────────┬─────────┘
+          │
+          ▼
+ ┌──────────────────┐
+ │   ralph new      │  Create workspace for a feature
+ │   feature-name   │  (creates branch, worktree, cd's in,
+ │                  │   launches PRD creation automatically)
+ │                  │
+ │  ... chat ...    │  Discuss feature with Claude
+ │  /finish         │  Claude writes structured PRD
+ └────────┬─────────┘
+          │
+          ▼
+ ┌──────────────────┐
+ │   ralph run      │  Autonomous loop
+ │                  │  Stories ──▶ QA ──▶ Done
+ └────────┬─────────┘
+          │
+          ├──── Need to fix something? ──▶ ralph chat
+          │                                    │
+          │◀───────────────────────────────────┘
+          │
+          ├──── Main branch updated? ──▶ ralph rebase
+          │                                    │
+          │◀───────────────────────────────────┘
+          │
+          ▼
+ ┌──────────────────┐
+ │   ralph done     │  Squash-merge into main
+ │                  │  Archives PRD, removes workspace
+ └──────────────────┘
+```
+
+### Working on Multiple Features
+
+Ralph supports multiple workspaces simultaneously. Each workspace is fully
+isolated with its own branch, PRD, and working directory:
+
+```bash
+ralph new login-page         # Start feature A (PRD created interactively)
+# ... /finish, then:
+ralph run                    # Run the loop
+
+ralph new dark-mode          # Start feature B (parallel)
+# ... /finish, then:
+ralph run                    # Run the loop
+
+ralph switch login-page      # Jump back to feature A
+ralph overview               # See progress across all workspaces
+```
+
+---
 
 ## Prerequisites
 
 - **Go 1.25+** (build from source)
-- **[Claude CLI](https://docs.anthropic.com/en/docs/claude-code)** (`claude`) installed and authenticated
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (`claude` CLI) installed and authenticated
 - **git** (for worktree operations)
+- **bash** or **zsh** (for shell integration)
+
+---
 
 ## Installation
 
@@ -64,13 +155,15 @@ workspace, but workspaces are the recommended workflow.
 go install github.com/uesteibar/ralph/cmd/ralph@latest
 ```
 
-Or clone and install with [just](https://github.com/casey/just):
+Or clone and build:
 
 ```bash
 git clone https://github.com/uesteibar/ralph.git
 cd ralph
-just install
+just install    # requires https://github.com/casey/just
 ```
+
+---
 
 ## Quick Start
 
@@ -78,224 +171,190 @@ just install
 # 1. Navigate to your project
 cd ~/code/my-project
 
-# 2. Initialize Ralph
+# 2. Initialize Ralph (creates .ralph/ directory and config)
 ralph init
 
 # 3. Set up shell integration (add to ~/.bashrc or ~/.zshrc)
 eval "$(ralph shell-init)"
 
-# 4. Edit the generated config (set quality checks, etc.)
+# 4. Review and edit the generated config
 $EDITOR .ralph/ralph.yaml
 
-# 5. Create a workspace for your feature
-ralph workspaces new login-page
+# 5. Create a workspace and start building
+ralph new login-page
+#    └─ Creates workspace, cd's into it, starts PRD session with Claude
 
-# 6. Create a PRD interactively (use /finish when ready)
-ralph prd new
+# 6. Discuss the feature with Claude, then type /finish
 
 # 7. Run the autonomous loop
 ralph run
 
-# 8. When all stories pass, merge and clean up
+# 8. When done, squash-merge and clean up
 ralph done
 ```
 
+---
+
 ## Shell Integration
 
-Ralph requires shell integration for workspace switching. Add this to your
-`~/.bashrc` or `~/.zshrc`:
+Ralph requires a thin shell wrapper for workspace switching. It lets commands
+like `ralph new`, `ralph switch`, and `ralph done` change your working directory
+and track the current workspace via the `RALPH_WORKSPACE` environment variable.
+
+Add this to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
 eval "$(ralph shell-init)"
 ```
 
-This wraps the `ralph` command so that workspace operations (`workspaces new`,
-`workspaces switch`, `switch`, `done`) automatically change your working
-directory to the correct workspace tree.
+**What it does:**
+
+- Wraps the `ralph` binary in a shell function
+- Intercepts workspace commands (`new`, `switch`, `done`, `workspaces *`) to
+  automatically `cd` into the correct directory
+- Sets/unsets `RALPH_WORKSPACE` to track the active workspace
+- After `ralph new`, automatically starts an interactive PRD creation session
+  if no PRD exists yet
+- All other commands pass through to the binary unchanged
 
 Currently supports **bash** and **zsh**.
+
+**Tip:** You can embed workspace status in your shell prompt:
+
+```bash
+PS1='$(ralph status --short 2>/dev/null) $ '
+# Shows: "login-page 3/5 $ " or "base $ "
+```
+
+---
+
+## Workspaces
+
+A **workspace** is an isolated environment for a single feature. Each workspace
+gets:
+
+- Its own **git worktree** (a separate checkout of the repo on a dedicated branch)
+- Its own **PRD** (the requirements document that drives the loop)
+- A copy of **`.ralph/`** and **`.claude/`** so the agent has full context
+- Any extra files you specify in `copy_to_worktree` config
+
+```
+your-project/
+  .ralph/
+    ralph.yaml                  # project config (committed)
+    progress.txt                # shared progress log (committed)
+    workspaces/                 # gitignored
+      login-page/
+        workspace.json          # metadata (name, branch, createdAt)
+        prd.json                # this workspace's PRD
+        tree/                   # the git worktree (your code)
+      dark-mode/
+        workspace.json
+        prd.json
+        tree/
+    state/                      # gitignored
+      workspaces.json           # registry of all workspaces
+      archive/                  # PRDs from completed features
+```
+
+### Why Workspaces?
+
+| Benefit | How |
+|---------|-----|
+| **Isolation** | Each feature is on its own branch with its own worktree -- no conflicts between parallel work |
+| **Context tracking** | Shell integration knows which workspace you're in; commands automatically use the right branch and PRD |
+| **Easy switching** | `ralph switch` jumps between features instantly |
+| **Clean merges** | `ralph done` squash-merges everything into one commit on main |
+| **Parallel agents** | You can run `ralph run` in multiple workspaces simultaneously |
+
+### Base Mode
+
+You can also run commands without a workspace (in **base** mode). This uses the
+main repo directory and stores the PRD at `.ralph/state/prd.json`. Workspaces
+are recommended for any non-trivial work, but base mode is useful for quick
+experiments or when you just want `ralph chat`.
+
+---
 
 ## Commands
 
 ### `ralph init`
 
-Scaffolds the `.ralph/` directory in the current project. Idempotent --
-safe to run multiple times.
+One-time project setup. Scaffolds the `.ralph/` directory. Idempotent -- safe
+to run multiple times.
 
 ```bash
 ralph init
 ```
 
-**What it does:**
+**Interactive prompts:**
 
-1. Creates `.ralph/` directory with subdirectories `tasks/`, `skills/`, `workspaces/`
-2. Generates `.ralph/ralph.yaml` with sensible defaults (skipped if it exists)
-3. Creates `.ralph/progress.txt` (shared progress log)
-4. Creates `.ralph/state/` with `archive/` and `workspaces.json`
-5. Installs `.claude/commands/finish.md` (the `/finish` skill for PRD creation)
-6. Adds `.ralph/workspaces/` and `.ralph/state/` to `.gitignore`
-7. Prints shell integration instructions
+1. **Git tracking choice:**
+   - *Track in git* (recommended for teams) -- gitignores only ephemeral dirs
+   - *Keep local* -- gitignores the entire `.ralph/` directory
+2. **LLM analysis:** optionally uses Claude to auto-detect quality check commands
+   for your project (test runners, linters, type checkers, etc.)
 
-**Generated structure:**
+**What it creates:**
 
-```
-.ralph/                     # committed to git
-  ralph.yaml                # project configuration (edit this)
-  progress.txt              # shared progress log
-  tasks/                    # task markdown files
-  skills/                   # project-specific skills for the agent
-  workspaces/               # gitignored -- workspace directories
-
-.ralph/state/               # gitignored -- local working state
-  workspaces.json           # registry of all workspaces
-  prd.json                  # base PRD (when not using workspaces)
-  archive/                  # completed PRDs
-
-.claude/commands/           # Claude CLI skills
-  finish.md                 # /finish skill -- structures conversation into PRD
-```
+| Path | Purpose |
+|------|---------|
+| `.ralph/ralph.yaml` | Project configuration (edit this!) |
+| `.ralph/progress.txt` | Shared progress log across features |
+| `.ralph/tasks/` | Task markdown files |
+| `.ralph/skills/` | Project-specific skills for the agent |
+| `.ralph/workspaces/` | Workspace directories (gitignored) |
+| `.ralph/state/workspaces.json` | Workspace registry (gitignored) |
+| `.ralph/state/archive/` | Completed PRDs (gitignored) |
+| `.claude/commands/finish.md` | The `/finish` skill for PRD generation |
+| `.claude/CLAUDE.md` | Project rules for the agent |
 
 ---
 
-### `ralph workspaces new <name>`
+### `ralph new`
 
-Creates a new workspace with an isolated git worktree and branch.
-
-```bash
-ralph workspaces new login-page
-ralph workspaces new dark-mode --project-config /path/to/config.yaml
-```
-
-The branch name is derived from `repo.branch_prefix` + workspace name
-(e.g., `ralph/login-page`). After creation, your shell changes directory
-into the workspace's `tree/` folder and `ralph prd new` is launched
-automatically if no PRD exists.
-
----
-
-### `ralph workspaces list`
-
-Lists all registered workspaces, showing the current one.
+Creates a new workspace with an isolated git worktree and branch. Alias for
+`ralph workspaces new`.
 
 ```bash
-ralph workspaces list
+ralph new login-page
+ralph new dark-mode
 ```
 
-Example output:
+The branch name is derived from the config prefix + workspace name
+(e.g., `ralph/login-page`). After creation, your shell `cd`s into the
+workspace's `tree/` directory and launches an interactive PRD creation session
+with Claude if no PRD exists yet.
 
-```
-* login-page [current]
-  dark-mode
-  base
-```
+**During PRD creation:**
 
----
+1. You describe the feature you want to build
+2. Claude asks clarifying questions about scope, requirements, edge cases
+3. You discuss and refine until the plan is solid
+4. Once you agree on user stories and integration tests, type **`/finish`**
+5. Claude writes a structured PRD JSON file with:
+   - User stories (ordered by dependency, right-sized for one iteration each)
+   - Integration tests (end-to-end verification specs)
 
-### `ralph workspaces switch <name>`
+After `/finish`, the PRD is ready and you can run `ralph run`.
 
-Switches to an existing workspace (or `base` for the main repo).
+If the branch already exists (e.g., from a previous attempt), Ralph asks
+whether to start **fresh** (delete old branch) or **resume** (reuse it).
 
-```bash
-ralph workspaces switch dark-mode
-ralph workspaces switch base
-```
-
----
-
-### `ralph workspaces remove <name>`
-
-Removes a workspace: deletes the git worktree, branch, and registry entry.
-
-```bash
-ralph workspaces remove login-page
-```
-
----
-
-### `ralph switch`
-
-Interactive workspace picker. Shows all workspaces and lets you select
-one with arrow keys.
-
-```bash
-ralph switch
-```
-
-Requires shell integration (`eval "$(ralph shell-init)"`).
-
----
-
-### `ralph status`
-
-Shows workspace and story progress.
-
-```bash
-ralph status
-ralph status --short
-```
-
-**Full output** shows workspace name, branch, and story/test progress.
-**Short output** (`--short`) prints a single line suitable for shell
-prompts: `workspace-name N/M` or `base`.
-
----
-
-### `ralph shell-init`
-
-Prints the shell function for workspace integration. Not called directly --
-use `eval "$(ralph shell-init)"` in your shell config.
-
-```bash
-eval "$(ralph shell-init)"
-```
-
----
-
-### `ralph validate`
-
-Validates the project configuration.
-
-```bash
-ralph validate
-ralph validate --project-config /path/to/config.yaml
-```
-
-**What it checks:**
-
-- Required fields (`project`, `repo.default_base`)
-- `repo.branch_pattern` is valid regex (if set)
-- `quality_checks` are defined (warns if empty)
-
----
-
-### `ralph prd new`
-
-Starts an interactive Claude session to create a PRD.
-
-```bash
-ralph prd new
-ralph prd new --workspace login-page
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--project-config` | auto-discover | Path to project config YAML |
-| `--workspace` | auto-detect | Workspace name |
-
-- Discuss the feature, refine scope, answer clarifying questions
-- Type `/finish` when ready -- Claude writes the PRD
-- Then run `ralph run` to execute the loop
+Requires [shell integration](#shell-integration).
 
 ---
 
 ### `ralph run`
 
-Runs the autonomous execution loop.
+Runs the autonomous execution loop. This is the core of Ralph -- it implements
+your feature story by story.
 
 ```bash
 ralph run
 ralph run --max-iterations 10
 ralph run --workspace login-page
+ralph run --no-tui
 ```
 
 | Flag | Default | Description |
@@ -303,15 +362,21 @@ ralph run --workspace login-page
 | `--project-config` | auto-discover | Path to project config YAML |
 | `--max-iterations` | `20` | Maximum loop iterations |
 | `--workspace` | auto-detect | Workspace name |
+| `--no-tui` | `false` | Disable TUI, use plain-text output |
 
-For each iteration, Ralph reads the PRD, finds the next unfinished story,
-invokes Claude to implement it, and checks if all stories are complete.
+By default, `ralph run` opens an interactive [TUI](#tui-terminal-ui) showing
+a sidebar with story progress and a scrollable agent log. Use `--no-tui` for
+plain-text output (useful for CI or piping).
+
+When all stories and integration tests pass, Ralph exits and suggests
+`ralph done`.
 
 ---
 
 ### `ralph chat`
 
-Opens a free-form interactive Claude session in the workspace context.
+Opens a free-form interactive Claude session with full project context.
+Use it for ad-hoc tasks, debugging, or manual adjustments within a workspace.
 
 ```bash
 ralph chat
@@ -325,12 +390,65 @@ ralph chat --workspace login-page
 | `--workspace` | auto-detect | Workspace name |
 | `--continue` | `false` | Resume the most recent conversation |
 
+Claude receives context about your project config, progress log, recent commits,
+and the current PRD (if one exists).
+
+---
+
+### `ralph status`
+
+Shows the current workspace and story/test progress.
+
+```bash
+ralph status
+ralph status --short
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-config` | auto-discover | Path to project config YAML |
+| `--short` | `false` | Single-line output for shell prompts |
+
+**Full output:**
+
+```
+Workspace: login-page
+Branch: ralph/login-page
+Stories: 3/5 passing
+Tests: 1/2 passing
+```
+
+**Short output** (`--short`): `login-page 3/5` or `base`
+
+---
+
+### `ralph overview`
+
+Shows progress across all workspaces at a glance.
+
+```bash
+ralph overview
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-config` | auto-discover | Path to project config YAML |
+
+**Example output:**
+
+```
+  base  main
+* login-page  ralph/login-page  Stories: 3/5  Tests: 0/1  [current]
+  dark-mode   ralph/dark-mode   Stories: 5/5  Tests: 2/2
+  payments    ralph/payments    (no prd)
+```
+
 ---
 
 ### `ralph rebase`
 
-Rebases the workspace branch onto the latest base branch. If conflicts
-occur, Claude is invoked to resolve them.
+Rebases the workspace branch onto the latest base branch. If conflicts occur,
+Claude is invoked to resolve them using PRD context.
 
 ```bash
 ralph rebase
@@ -342,6 +460,11 @@ ralph rebase --workspace login-page
 |------|---------|-------------|
 | `--project-config` | auto-discover | Path to project config YAML |
 | `--workspace` | auto-detect | Workspace name |
+
+The optional positional argument specifies the target branch (defaults to
+`repo.default_base` from config).
+
+Requires workspace context (not base).
 
 ---
 
@@ -360,52 +483,202 @@ ralph done --workspace login-page
 | `--project-config` | auto-discover | Path to project config YAML |
 | `--workspace` | auto-detect | Workspace name |
 
+**What it does:**
+
+1. Verifies the base branch is an ancestor (prompts to rebase if not)
+2. Generates a commit message from the PRD (description + completed stories)
+3. Lets you edit the message before committing
+4. Squash-merges into the base branch
+5. Archives the PRD to `.ralph/state/archive/`
+6. Removes the workspace (worktree, branch, registry entry)
+7. Returns you to the base repo directory
+
+Requires [shell integration](#shell-integration).
+
+---
+
+### `ralph switch`
+
+Switches between workspaces. With no argument, shows an interactive picker.
+With a name, switches directly.
+
+```bash
+ralph switch              # interactive picker
+ralph switch login-page   # switch directly
+ralph switch base         # back to main repo
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-config` | auto-discover | Path to project config YAML |
+
+Requires [shell integration](#shell-integration).
+
+---
+
+### `ralph workspaces`
+
+Workspace management subcommands:
+
+```bash
+ralph workspaces new <name>       # Create a workspace (same as `ralph new`)
+ralph workspaces list             # List all workspaces
+ralph workspaces switch <name>    # Switch to a workspace
+ralph workspaces remove <name>    # Remove a workspace
+ralph workspaces prune            # Remove all completed workspaces
+```
+
+**`ralph workspaces prune`** identifies workspaces where all stories and
+integration tests pass (or the PRD is missing), prompts for confirmation,
+and removes them in bulk.
+
+---
+
+### `ralph eject`
+
+Exports all embedded prompt templates to `.ralph/prompts/` so you can
+customize them.
+
+```bash
+ralph eject
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-config` | auto-discover | Path to project config YAML |
+
+After ejecting, Ralph uses your local copies instead of the built-in templates.
+Edit them to change how the agent behaves -- the loop iteration prompt, QA
+prompts, PRD creation prompt, chat system prompt, and rebase conflict prompt.
+
+To re-eject (e.g., after upgrading Ralph), delete `.ralph/prompts/` and run
+`ralph eject` again.
+
+See [Prompt Customization](#prompt-customization) for details.
+
+---
+
+### `ralph validate`
+
+Validates the project configuration and reports issues.
+
+```bash
+ralph validate
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-config` | auto-discover | Path to project config YAML |
+
+Checks required fields (`project`, `repo.default_base`), validates regex
+patterns, and warns about missing quality checks.
+
+---
+
+## TUI (Terminal UI)
+
+When you run `ralph run`, it opens a full-screen terminal UI:
+
+```
+┌─────────────────────────────┬──────────────────────────────────────────┐
+│  Stories                    │  Agent Log                               │
+│                             │                                          │
+│  ✓ US-001 Add schema        │  Read internal/config/config.go          │
+│  ▸ US-002 Add endpoint      │  Edit internal/handlers/login.go         │
+│  ✗ US-003 Add UI            │  Bash npm test                           │
+│  ✗ US-004 Add validation    │  > All 12 tests passed                   │
+│                             │  Bash git commit -m "feat(US-002)..."    │
+│  Tests                      │                                          │
+│  ✗ IT-001 Login flow        │  ── iteration 2/20 ──                    │
+│  ✗ IT-002 Error handling    │  Working on US-003: Add login UI         │
+│                             │  Read internal/components/...            │
+│                             │                                          │
+├─────────────────────────────┴──────────────────────────────────────────┤
+│  login-page │ ralph/login-page │ Iteration 2/20 │ US-002: Add endpoint │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch focus between sidebar and agent log |
+| `↑` / `k` | Navigate up (sidebar items or scroll log) |
+| `↓` / `j` | Navigate down (sidebar items or scroll log) |
+| `Enter` | Open detail overlay for selected story/test |
+| `Esc` | Close overlay |
+| `?` | Toggle help overlay |
+| `q` | Graceful stop (finishes current task, then exits) |
+| `Ctrl+C` | Immediate stop |
+
+### Sidebar
+
+Shows all user stories and integration tests from the PRD with live status
+indicators (✓ pass, ✗ fail). The currently active story is highlighted.
+Refreshes automatically as the agent updates the PRD.
+
+### Detail Overlay
+
+Press `Enter` on a sidebar item to see full details: description, acceptance
+criteria (stories) or steps (tests), status, failure messages, and notes.
+
+### Plain-Text Mode
+
+Use `--no-tui` for simple text output to stderr. Useful for logging,
+CI pipelines, or when your terminal doesn't support the TUI:
+
+```bash
+ralph run --no-tui
+```
+
 ---
 
 ## Configuration
 
-Ralph is configured per-project via a YAML file at `.ralph/ralph.yaml`
-(or passed explicitly with `--project-config`).
+Ralph is configured per-project via `.ralph/ralph.yaml`. It is created by
+`ralph init` and can be edited at any time.
 
 ### Config Discovery
 
 When `--project-config` is not provided, Ralph walks up from the current
 working directory looking for `.ralph/ralph.yaml`. This means you can run
-commands from any subdirectory within your project.
+commands from any subdirectory (or from inside a workspace tree).
 
 ### Full Config Reference
 
 ```yaml
-# Human-readable project name
+# Human-readable project name (required)
 project: MyProject
 
 repo:
-  # Branch that workspaces are created from
+  # Base branch for merges (required)
   default_base: main
 
   # Prefix prepended to workspace names to form branch names
   # e.g., "ralph/" + "login-page" = "ralph/login-page"
-  branch_prefix: "ralph/"
+  branch_prefix: "ralph/"       # default: "ralph/"
 
-  # Regex that generated branch names must match
+  # Regex that generated branch names must match (optional)
   branch_pattern: "^ralph/[a-zA-Z0-9._-]+$"
 
-# Paths relative to the repo root
+# Directory paths relative to repo root
 paths:
   tasks_dir: ".ralph/tasks"
   skills_dir: ".ralph/skills"
 
-# Commands that must pass before committing
-# Each command runs via `sh -c` in the workspace working directory
+# Commands that must pass before the agent commits
+# Each runs via sh -c in the workspace working directory
 quality_checks:
   - "npm test"
   - "npm run lint"
   - "npm run typecheck"
 
-# Files/patterns to copy from repo root into workspace worktrees
+# Files/patterns to copy from repo root into workspace worktrees (optional)
+# Supports literal paths, wildcards (*), and recursive globs (**)
 copy_to_worktree:
   - ".env"
   - "scripts/**"
+  - "fixtures/*.json"
 ```
 
 ### Required Fields
@@ -413,87 +686,196 @@ copy_to_worktree:
 | Field | Description |
 |-------|-------------|
 | `project` | Project name |
-| `repo.default_base` | Base branch (e.g., `main`) |
+| `repo.default_base` | Base branch (e.g., `main`, `develop`) |
 
-All other fields are optional.
+All other fields are optional with sensible defaults.
+
+### `copy_to_worktree`
+
+When creating a workspace, Ralph already copies `.ralph/` and `.claude/`
+automatically. Use `copy_to_worktree` for additional files the agent might need
+that aren't committed to git (e.g., `.env` files) or that live outside those
+directories.
+
+Supports:
+- Literal paths: `scripts/setup.sh`
+- Single-level wildcards: `configs/*.json`
+- Recursive globs: `fixtures/**/*.txt`
+- Directories: `data/` (copied recursively)
+
+---
 
 ## PRD Format
 
 The PRD (Product Requirements Document) is a JSON file that drives the
-execution loop. It is generated by `ralph prd new` and consumed by each
-loop iteration.
+execution loop. It is generated by typing `/finish` during the PRD creation
+session (launched by `ralph new`) and updated by the agent during `ralph run`.
 
 ```json
 {
   "project": "MyProject",
-  "branchName": "ralph/add-dark-mode",
-  "description": "Add dark mode support",
+  "branchName": "ralph/login-page",
+  "description": "Add user login with email and password",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Add theme toggle to settings",
-      "description": "As a user, I want a theme toggle so I can switch to dark mode",
+      "title": "Add user schema and migration",
+      "description": "Create the users table with email, password_hash, created_at",
       "acceptanceCriteria": [
-        "Toggle renders in settings page",
-        "Toggling switches theme",
+        "Migration creates users table with correct columns",
+        "Model validates email format",
         "All quality checks pass"
       ],
       "priority": 1,
       "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Add login API endpoint",
+      "description": "POST /api/login that authenticates and returns a session token",
+      "acceptanceCriteria": [
+        "Returns 200 with token for valid credentials",
+        "Returns 401 for invalid credentials",
+        "All quality checks pass"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    }
+  ],
+  "integrationTests": [
+    {
+      "id": "IT-001",
+      "description": "Full login flow works end-to-end",
+      "steps": [
+        "Create a user via the API",
+        "POST /api/login with valid credentials",
+        "Verify response contains a valid session token",
+        "Use token to access a protected endpoint"
+      ],
+      "passes": false,
+      "failure": "",
       "notes": ""
     }
   ]
 }
 ```
 
-### Story Sizing
+### User Stories
 
-Each story must be completable in one Claude context window (one
-iteration). Right-sized examples:
+Each story represents one iteration of the loop -- it should be completable in
+a single Claude context window. Stories are executed in `priority` order (lowest
+first).
 
-- Add a database column and migration
+**Right-sized stories:**
+
+- Add a database table and migration
+- Add an API endpoint with tests
 - Add a UI component to an existing page
-- Update a server action with new logic
+- Update validation logic
 
-Split larger work into multiple stories ordered by dependency.
+**Too large (split into multiple):**
+
+- Build the entire authentication system
+- Redesign the settings page
+
+Stories are ordered by dependency: schema first, then backend, then UI.
+
+### Integration Tests
+
+Integration tests are end-to-end verification specs agreed upon during PRD
+creation. After all stories pass, the QA agent builds automated tests matching
+these specs and verifies the feature works as a whole.
+
+### Fields Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `userStories[].id` | string | Story identifier (e.g., `US-001`) |
+| `userStories[].passes` | bool | Set to `true` by the agent when complete |
+| `userStories[].notes` | string | Agent notes (patterns learned, decisions made) |
+| `integrationTests[].id` | string | Test identifier (e.g., `IT-001`) |
+| `integrationTests[].passes` | bool | Set to `true` by QA agent when verified |
+| `integrationTests[].failure` | string | Failure details if test didn't pass |
+| `integrationTests[].notes` | string | QA agent notes |
+
+---
+
+## Prompt Customization
+
+Ralph's agent behavior is driven by prompt templates compiled into the binary.
+You can customize them by ejecting:
+
+```bash
+ralph eject
+```
+
+This creates `.ralph/prompts/` with all templates:
+
+| Template | Used by | Purpose |
+|----------|---------|---------|
+| `loop_iteration.md` | `ralph run` | Main prompt for implementing a single story |
+| `qa_verification.md` | `ralph run` | QA agent prompt for integration test verification |
+| `qa_fix.md` | `ralph run` | QA fix agent prompt for resolving test failures |
+| `prd_new.md` | `ralph new` | Interactive PRD creation conversation |
+| `chat_system.md` | `ralph chat` | System prompt for free-form chat sessions |
+| `rebase_conflict.md` | `ralph rebase` | Conflict resolution prompt |
+
+When `.ralph/prompts/` exists, Ralph loads templates from there instead of the
+built-in versions. You can override individual templates -- any missing files
+fall back to the embedded defaults.
+
+Templates use Go's `text/template` syntax with `{{ .FieldName }}` placeholders.
+
+---
 
 ## Architecture
 
 ```
 cmd/ralph/main.go              Entry point + CLI dispatch
 internal/
-  config/                      YAML config types + loading
+  config/                      YAML config types + loading + discovery
   shell/                       Subprocess runner (exec.Command wrapper)
-  prd/                         PRD JSON types + read/write
-  gitops/                      Git operations (worktrees, branches)
-  workspace/                   Workspace management (create, remove, resolve)
-  claude/                      Claude CLI invocation + output parsing
+  prd/                         PRD JSON types + read/write/query helpers
+  gitops/                      Git operations (worktrees, branches, rebase)
+  workspace/                   Workspace lifecycle (create, remove, registry, resolve)
+  claude/                      Claude CLI invocation + streaming output parsing
   prompts/                     Embedded prompt templates (go:embed)
-  loop/                        The Ralph execution loop
+  loop/                        The execution loop (stories -> QA -> done)
+  events/                      Event system (EventHandler interface + event types)
+  tui/                         BubbleTea-based terminal UI
   commands/                    One file per CLI command
 ```
 
 ### Design Decisions
 
-- **Minimal dependencies**: `gopkg.in/yaml.v3` for config, `lipgloss` and
-  `huh` for terminal UI. Everything else is stdlib.
-- **Shell out to CLIs**: `git` and `claude` are invoked as subprocesses.
-  No API client libraries.
-- **Prompts embedded in binary**: Markdown templates are compiled into the
-  binary via `go:embed`. No external prompt files needed at runtime.
-- **Workspace isolation**: Each feature runs in a separate git worktree
-  managed as a workspace, keeping the main branch clean and enabling
-  parallel agents.
+- **Minimal dependencies**: `yaml.v3` for config, `lipgloss`/`bubbletea`/`huh`
+  for terminal UI, `doublestar` for glob patterns. Everything else is stdlib.
+- **Shell out to CLIs**: `git` and `claude` are invoked as subprocesses. No API
+  client libraries.
+- **Prompts compiled into binary**: Markdown templates are embedded via
+  `go:embed`. No external files needed at runtime (unless
+  [ejected](#prompt-customization)).
+- **Workspace isolation**: Each feature runs in a separate git worktree,
+  keeping the main branch clean and enabling parallel agents.
+- **Event-driven output**: The loop emits events (`ToolUse`, `StoryStarted`,
+  `IterationStart`, etc.) consumed by either the TUI or a plain-text handler.
+
+---
 
 ## Development
 
+Requires [just](https://github.com/casey/just) for task running.
+
 ```bash
-# Build
-just build
-
-# Run tests
-just test
-
-# Build + test + vet
-just check
+just build          # Build the ralph binary
+just test           # Run all tests
+just test-verbose   # Run tests with verbose output
+just vet            # Run go vet
+just check          # Build + test + vet
+just fmt            # Format all Go files
+just install        # Install to $GOPATH/bin
+just clean          # Remove build artifacts
+just smoke          # Quick smoke test (build + vet + help)
 ```

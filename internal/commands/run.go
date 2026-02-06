@@ -57,7 +57,7 @@ func Run(args []string) error {
 
 	// Verify PRD exists
 	if _, err := os.Stat(wc.PRDPath); os.IsNotExist(err) {
-		return fmt.Errorf("PRD not found at %s\n\nRun 'ralph prd new' first to create a PRD.", wc.PRDPath)
+		return fmt.Errorf("PRD not found at %s\n\nCreate a workspace first: ralph new <name>", wc.PRDPath)
 	}
 
 	// Check if all work is already done
