@@ -74,7 +74,7 @@ func Run(args []string) error {
 
 	log.Printf("[run] workspace=%s workDir=%s prdPath=%s", wc.Name, wc.WorkDir, wc.PRDPath)
 
-	progressPath := filepath.Join(cfg.Repo.Path, ".ralph", "progress.txt")
+	progressPath := filepath.Join(wc.WorkDir, ".ralph", "progress.txt")
 
 	if *noTUI {
 		return runLoopPlainText(ctx, wc.WorkDir, wc.PRDPath, *maxIter, cfg.QualityChecks, *verbose, progressPath)

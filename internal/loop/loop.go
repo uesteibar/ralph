@@ -145,8 +145,8 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.MaxIterations = DefaultMaxIterations
 	}
 
-	// Progress file lives at the repo root (.ralph/progress.txt), shared
-	// across all runs. It is created by `ralph init` and committed to git.
+	// Progress file lives at <workDir>/.ralph/progress.txt — inside the
+	// workspace tree when running in a workspace, or the repo root for base.
 	// If it doesn't exist yet, create it so the loop can proceed.
 	ensureProgressFile(cfg.ProgressPath)
 

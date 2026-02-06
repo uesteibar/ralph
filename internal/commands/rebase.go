@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/uesteibar/ralph/internal/claude"
-	"github.com/uesteibar/ralph/internal/config"
 	"github.com/uesteibar/ralph/internal/gitops"
 	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/prompts"
@@ -69,7 +69,7 @@ func Rebase(args []string) error {
 	}
 
 	for result.HasConflicts {
-		if err := resolveConflicts(ctx, r, cfg, wc, targetBranch); err != nil {
+		if err := resolveConflicts(ctx, r, wc, targetBranch); err != nil {
 			return err
 		}
 
@@ -92,7 +92,7 @@ func Rebase(args []string) error {
 	return nil
 }
 
-func resolveConflicts(ctx context.Context, r *shell.Runner, cfg *config.Config, wc workspace.WorkContext, targetBranch string) error {
+func resolveConflicts(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch string) error {
 	conflictFiles, err := gitops.ConflictFiles(ctx, r)
 	if err != nil {
 		return fmt.Errorf("listing conflict files: %w", err)
@@ -100,7 +100,7 @@ func resolveConflicts(ctx context.Context, r *shell.Runner, cfg *config.Config, 
 
 	log.Printf("[rebase] conflicts detected in %d file(s): %s", len(conflictFiles), strings.Join(conflictFiles, ", "))
 
-	prompt, err := buildConflictPrompt(ctx, r, cfg, wc, targetBranch, conflictFiles)
+	prompt, err := buildConflictPrompt(ctx, r, wc, targetBranch, conflictFiles)
 	if err != nil {
 		return fmt.Errorf("building conflict prompt: %w", err)
 	}
@@ -118,7 +118,7 @@ func resolveConflicts(ctx context.Context, r *shell.Runner, cfg *config.Config, 
 	return nil
 }
 
-func buildConflictPrompt(ctx context.Context, r *shell.Runner, cfg *config.Config, wc workspace.WorkContext, targetBranch string, conflictFiles []string) (string, error) {
+func buildConflictPrompt(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch string, conflictFiles []string) (string, error) {
 	data := prompts.RebaseConflictData{
 		ConflictFiles: strings.Join(conflictFiles, "\n"),
 	}
@@ -130,7 +130,8 @@ func buildConflictPrompt(ctx context.Context, r *shell.Runner, cfg *config.Confi
 		data.Stories = formatStories(prdData.UserStories)
 	}
 
-	progress, err := os.ReadFile(cfg.ProgressPath())
+	progressPath := filepath.Join(wc.WorkDir, ".ralph", "progress.txt")
+	progress, err := os.ReadFile(progressPath)
 	if err == nil {
 		data.Progress = string(progress)
 	}
