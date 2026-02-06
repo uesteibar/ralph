@@ -96,6 +96,21 @@ func shellFunction() string {
                     ;;
             esac
             ;;
+        new)
+            __output=$(command ralph "$@")
+            __exit=$?
+            if [ $__exit -ne 0 ]; then
+                return $__exit
+            fi
+            __path=$(echo "$__output" | tail -n 1)
+            if [ -n "$__path" ] && [ -d "$__path" ]; then
+                cd "$__path" || return 1
+                export RALPH_WORKSPACE="$2"
+                if [ ! -f "../prd.json" ]; then
+                    command ralph prd new
+                fi
+            fi
+            ;;
         switch)
             __output=$(command ralph "$@")
             __exit=$?

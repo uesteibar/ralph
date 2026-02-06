@@ -73,18 +73,21 @@ func Run(args []string) error {
 		return nil
 	}
 
-	progressPath := filepath.Join(wc.WorkDir, ".ralph", "progress.txt")
+	fmt.Fprintf(os.Stderr, "workspace=%s workDir=%s prdPath=%s\n", wc.Name, wc.WorkDir, wc.PRDPath)
+
+	progressPath := filepath.Join(cfg.Repo.Path, ".ralph", "progress.txt")
+	promptsDir := cfg.PromptsDir()
 
 	if *noTUI {
-		return runLoopPlainText(ctx, wc.WorkDir, wc.PRDPath, *maxIter, cfg.QualityChecks, *verbose, progressPath)
+		return runLoopPlainText(ctx, wc.WorkDir, wc.PRDPath, *maxIter, cfg.QualityChecks, *verbose, progressPath, promptsDir)
 	}
 
-	return runLoopTUI(ctx, wc.WorkDir, wc.PRDPath, *maxIter, cfg.QualityChecks, *verbose, progressPath, wc.Name)
+	return runLoopTUI(ctx, wc.WorkDir, wc.PRDPath, *maxIter, cfg.QualityChecks, *verbose, progressPath, promptsDir, wc.Name)
 }
 
-func runLoopPlainText(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath string) error {
+func runLoopPlainText(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath, promptsDir string) error {
 	handler := &events.PlainTextHandler{W: os.Stderr}
-	err := runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, handler)
+	err := runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, promptsDir, handler)
 	printRunResult(err)
 	if errors.Is(err, context.Canceled) {
 		return nil
@@ -92,7 +95,7 @@ func runLoopPlainText(ctx context.Context, workDir, prdPath string, maxIter int,
 	return err
 }
 
-func runLoopTUI(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath string, workspaceName string) error {
+func runLoopTUI(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath, promptsDir string, workspaceName string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -104,7 +107,8 @@ func runLoopTUI(ctx context.Context, workDir, prdPath string, maxIter int, quali
 	// owns the main goroutine. When the loop finishes, we send tea.Quit.
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, handler)
+		err := runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, promptsDir, handler)
+		errCh <- err
 		p.Send(tea.Quit())
 	}()
 
@@ -137,12 +141,13 @@ func printRunResult(err error) {
 	}
 }
 
-func runLoopWithHandler(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath string, handler events.EventHandler) error {
+func runLoopWithHandler(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath, promptsDir string, handler events.EventHandler) error {
 	return loop.Run(ctx, loop.Config{
 		MaxIterations: maxIter,
 		WorkDir:       workDir,
 		PRDPath:       prdPath,
 		ProgressPath:  progressPath,
+		PromptsDir:    promptsDir,
 		QualityChecks: qualityChecks,
 		Verbose:       verbose,
 		EventHandler:  handler,

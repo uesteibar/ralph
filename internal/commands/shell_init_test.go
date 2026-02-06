@@ -154,6 +154,27 @@ func TestShellInit_BashOutput_CapturesStdoutNotStderr(t *testing.T) {
 	}
 }
 
+func TestShellInit_BashOutput_ContainsNewAlias(t *testing.T) {
+	var buf bytes.Buffer
+	err := shellInit("/bin/bash", &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+
+	// The shell function should handle "ralph new" identically to "ralph workspaces new".
+	mustContain := []string{
+		`new)`,               // outer case for new alias
+		"RALPH_WORKSPACE",    // sets workspace env var
+		"prd new",            // chains prd new if missing
+	}
+	for _, s := range mustContain {
+		if !containsSubstring(out, s) {
+			t.Errorf("bash output missing %q for new alias", s)
+		}
+	}
+}
+
 func containsSubstring(s, sub string) bool {
 	return len(s) >= len(sub) && bytesContains(s, sub)
 }

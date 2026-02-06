@@ -300,6 +300,15 @@ func TestConfig_WorkspacesDir(t *testing.T) {
 	}
 }
 
+func TestConfig_PromptsDir(t *testing.T) {
+	cfg := &Config{Repo: RepoConfig{Path: "/my/repo"}}
+	got := cfg.PromptsDir()
+	want := filepath.Join("/my/repo", ".ralph", "prompts")
+	if got != want {
+		t.Errorf("PromptsDir() = %q, want %q", got, want)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
 }

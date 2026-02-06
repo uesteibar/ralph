@@ -60,7 +60,7 @@ func prdNew(args []string) error {
 		}
 	}
 
-	prompt, err := prompts.RenderPRDNew(data)
+	prompt, err := prompts.RenderPRDNew(data, cfg.PromptsDir())
 	if err != nil {
 		return fmt.Errorf("rendering PRD prompt: %w", err)
 	}

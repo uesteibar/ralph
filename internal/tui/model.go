@@ -283,19 +283,19 @@ func (m *Model) handleEvent(e events.Event) {
 	case events.IterationStart:
 		m.iteration = e.Iteration
 		m.maxIterations = e.MaxIterations
-		m.lines = append(m.lines, fmt.Sprintf("[loop] iteration %d/%d", e.Iteration, e.MaxIterations))
+		m.lines = append(m.lines, fmt.Sprintf("iteration %d/%d", e.Iteration, e.MaxIterations))
 
 	case events.StoryStarted:
 		m.activeStoryID = e.StoryID
 		m.currentStory = fmt.Sprintf("%s: %s", e.StoryID, e.Title)
-		m.lines = append(m.lines, fmt.Sprintf("[loop] working on %s: %s", e.StoryID, e.Title))
+		m.lines = append(m.lines, fmt.Sprintf("working on %s: %s", e.StoryID, e.Title))
 		// Update sidebar to highlight the active story
 		m.sidebar.setActiveStory(e.StoryID)
 
 	case events.QAPhaseStarted:
 		m.activeStoryID = ""
 		m.currentStory = fmt.Sprintf("QA %s", e.Phase)
-		m.lines = append(m.lines, fmt.Sprintf("[loop] all stories pass — running QA %s", e.Phase))
+		m.lines = append(m.lines, fmt.Sprintf("all stories pass — running QA %s", e.Phase))
 		m.sidebar.setActiveStory("")
 
 	case events.UsageLimitWait:

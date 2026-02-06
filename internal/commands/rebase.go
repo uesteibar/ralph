@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,24 +51,26 @@ func Rebase(args []string) error {
 		targetBranch = fs.Arg(0)
 	}
 
-	log.Printf("[rebase] fetching origin/%s", targetBranch)
+	fmt.Fprintf(os.Stderr, "fetching origin/%s\n", targetBranch)
 	if err := gitops.FetchBranch(ctx, r, targetBranch); err != nil {
 		return err
 	}
 
-	log.Printf("[rebase] rebasing onto origin/%s", targetBranch)
+	fmt.Fprintf(os.Stderr, "rebasing onto origin/%s\n", targetBranch)
 	result, err := gitops.StartRebase(ctx, r, "origin/"+targetBranch)
 	if err != nil {
 		return err
 	}
 
 	if result.Success {
-		log.Println("[rebase] rebase completed successfully — no conflicts")
+		fmt.Fprintln(os.Stderr, "rebase completed successfully — no conflicts")
 		return nil
 	}
 
+	promptsDir := cfg.PromptsDir()
+
 	for result.HasConflicts {
-		if err := resolveConflicts(ctx, r, wc, targetBranch); err != nil {
+		if err := resolveConflicts(ctx, r, wc, targetBranch, promptsDir); err != nil {
 			return err
 		}
 
@@ -78,7 +79,7 @@ func Rebase(args []string) error {
 			return fmt.Errorf("checking rebase status: %w", err)
 		}
 		if !inProgress {
-			log.Println("[rebase] rebase is no longer in progress after conflict resolution")
+			fmt.Fprintln(os.Stderr, "rebase completed successfully")
 			return nil
 		}
 
@@ -88,37 +89,37 @@ func Rebase(args []string) error {
 		}
 	}
 
-	log.Println("[rebase] rebase completed successfully")
+	fmt.Fprintln(os.Stderr, "rebase completed successfully")
 	return nil
 }
 
-func resolveConflicts(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch string) error {
+func resolveConflicts(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch, promptsDir string) error {
 	conflictFiles, err := gitops.ConflictFiles(ctx, r)
 	if err != nil {
 		return fmt.Errorf("listing conflict files: %w", err)
 	}
 
-	log.Printf("[rebase] conflicts detected in %d file(s): %s", len(conflictFiles), strings.Join(conflictFiles, ", "))
+	fmt.Fprintf(os.Stderr, "conflicts detected in %d file(s): %s\n", len(conflictFiles), strings.Join(conflictFiles, ", "))
 
-	prompt, err := buildConflictPrompt(ctx, r, wc, targetBranch, conflictFiles)
+	prompt, err := buildConflictPrompt(ctx, r, wc, targetBranch, conflictFiles, promptsDir)
 	if err != nil {
 		return fmt.Errorf("building conflict prompt: %w", err)
 	}
 
-	log.Println("[rebase] invoking Claude to resolve conflicts...")
+	fmt.Fprintln(os.Stderr, "invoking Claude to resolve conflicts...")
 	_, err = claude.Invoke(ctx, claude.InvokeOpts{
 		Prompt:   prompt,
 		Print:    true,
 		MaxTurns: 30,
 	})
 	if err != nil {
-		log.Printf("[rebase] Claude session ended with error: %v", err)
+		fmt.Fprintf(os.Stderr, "Claude session ended with error: %v\n", err)
 	}
 
 	return nil
 }
 
-func buildConflictPrompt(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch string, conflictFiles []string) (string, error) {
+func buildConflictPrompt(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch string, conflictFiles []string, promptsDir string) (string, error) {
 	data := prompts.RebaseConflictData{
 		ConflictFiles: strings.Join(conflictFiles, "\n"),
 	}
@@ -147,7 +148,7 @@ func buildConflictPrompt(ctx context.Context, r *shell.Runner, wc workspace.Work
 		data.BaseDiff = baseDiff
 	}
 
-	return prompts.RenderRebaseConflict(data)
+	return prompts.RenderRebaseConflict(data, promptsDir)
 }
 
 func formatStories(stories []prd.Story) string {

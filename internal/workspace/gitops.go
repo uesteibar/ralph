@@ -3,7 +3,6 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -80,7 +79,7 @@ func CreateWorkspace(ctx context.Context, runner *shell.Runner, repoPath string,
 	// Copy user-specified patterns.
 	if len(copyPatterns) > 0 {
 		if err := gitops.CopyGlobPatterns(repoPath, treePath, copyPatterns, func(msg string) {
-			log.Printf("[workspace] warning: %s", msg)
+			fmt.Fprintf(os.Stderr, "warning: %s\n", msg)
 		}); err != nil {
 			return fmt.Errorf("copying patterns: %w", err)
 		}

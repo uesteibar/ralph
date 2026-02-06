@@ -1,6 +1,8 @@
 package prompts
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,7 +17,7 @@ func TestRenderLoopIteration_ContainsStoryDetails(t *testing.T) {
 		AcceptanceCriteria: []string{"Login form renders", "Tests pass"},
 	}
 
-	out, err := RenderLoopIteration(story, []string{"npm test", "npm run lint"}, ".ralph/progress.txt", "/abs/path/to/prd.json")
+	out, err := RenderLoopIteration(story, []string{"npm test", "npm run lint"}, ".ralph/progress.txt", "/abs/path/to/prd.json", "")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration failed: %v", err)
 	}
@@ -35,7 +37,7 @@ func TestRenderLoopIteration_CompletionRequiresBothStoriesAndIntegrationTests(t 
 		Description: "Test",
 	}
 
-	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json")
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration failed: %v", err)
 	}
@@ -53,11 +55,74 @@ func TestRenderLoopIteration_CompletionRequiresBothStoriesAndIntegrationTests(t 
 	}
 }
 
+func TestRenderLoopIteration_ContainsNoCoSignInstruction(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test Story",
+		Description: "Test",
+	}
+
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "")
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Co-Authored-By") {
+		t.Error("loop_iteration.md should contain Co-Authored-By instruction")
+	}
+	if !strings.Contains(out, "Do NOT add Co-Authored-By") {
+		t.Error("loop_iteration.md should instruct not to add Co-Authored-By headers")
+	}
+}
+
+func TestRenderQAVerification_ContainsNoCoSignInstruction(t *testing.T) {
+	data := QAVerificationData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test"},
+	}
+
+	out, err := RenderQAVerification(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAVerification failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Co-Authored-By") {
+		t.Error("qa_verification.md should contain Co-Authored-By instruction")
+	}
+	if !strings.Contains(out, "Do NOT add Co-Authored-By") {
+		t.Error("qa_verification.md should instruct not to add Co-Authored-By headers")
+	}
+}
+
+func TestRenderQAFix_ContainsNoCoSignInstruction(t *testing.T) {
+	data := QAFixData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test"},
+		FailedTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
+		},
+	}
+
+	out, err := RenderQAFix(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAFix failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Co-Authored-By") {
+		t.Error("qa_fix.md should contain Co-Authored-By instruction")
+	}
+	if !strings.Contains(out, "Do NOT add Co-Authored-By") {
+		t.Error("qa_fix.md should instruct not to add Co-Authored-By headers")
+	}
+}
+
 func TestRenderPRDNew_ContainsProjectName(t *testing.T) {
 	out, err := RenderPRDNew(PRDNewData{
 		ProjectName: "MyProject",
 		PRDPath:     ".ralph/state/prd.json",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("RenderPRDNew failed: %v", err)
 	}
@@ -74,7 +139,7 @@ func TestRenderPRDNew_WithWorkspaceContext(t *testing.T) {
 		ProjectName:     "MyProject",
 		PRDPath:         "/repo/.ralph/workspaces/my-feature/prd.json",
 		WorkspaceBranch: "ralph/my-feature",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("RenderPRDNew failed: %v", err)
 	}
@@ -95,7 +160,7 @@ func TestRenderPRDNew_BaseMode_NoBranch(t *testing.T) {
 	out, err := RenderPRDNew(PRDNewData{
 		ProjectName: "MyProject",
 		PRDPath:     ".ralph/state/prd.json",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("RenderPRDNew failed: %v", err)
 	}
@@ -106,7 +171,7 @@ func TestRenderPRDNew_BaseMode_NoBranch(t *testing.T) {
 }
 
 func TestRenderChatSystem_ContainsProjectName(t *testing.T) {
-	out, err := RenderChatSystem(ChatSystemData{ProjectName: "ChatProject"})
+	out, err := RenderChatSystem(ChatSystemData{ProjectName: "ChatProject"}, "")
 	if err != nil {
 		t.Fatalf("RenderChatSystem failed: %v", err)
 	}
@@ -120,7 +185,7 @@ func TestRenderChatSystem_IncludesPRDContext(t *testing.T) {
 		ProjectName: "TestProject",
 		PRDContext:  "Project: test\nDescription: Build a login system\nStories:\n- US-001: Add login form [done]\n",
 	}
-	out, err := RenderChatSystem(data)
+	out, err := RenderChatSystem(data, "")
 	if err != nil {
 		t.Fatalf("RenderChatSystem failed: %v", err)
 	}
@@ -136,7 +201,7 @@ func TestRenderChatSystem_NoPRDContext_OmitsSection(t *testing.T) {
 	data := ChatSystemData{
 		ProjectName: "TestProject",
 	}
-	out, err := RenderChatSystem(data)
+	out, err := RenderChatSystem(data, "")
 	if err != nil {
 		t.Fatalf("RenderChatSystem failed: %v", err)
 	}
@@ -155,7 +220,7 @@ func TestRenderRebaseConflict_ContainsAllSections(t *testing.T) {
 		ConflictFiles:  "internal/main.go\ninternal/util.go",
 	}
 
-	out, err := RenderRebaseConflict(data)
+	out, err := RenderRebaseConflict(data, "")
 	if err != nil {
 		t.Fatalf("RenderRebaseConflict failed: %v", err)
 	}
@@ -186,7 +251,7 @@ func TestRenderChatSystem_IncludesContext(t *testing.T) {
 		Progress:      "## US-001\nDid some work\n",
 		RecentCommits: "abc1234 feat: add login\ndef5678 fix: typo\n",
 	}
-	out, err := RenderChatSystem(data)
+	out, err := RenderChatSystem(data, "")
 	if err != nil {
 		t.Fatalf("RenderChatSystem failed: %v", err)
 	}
@@ -206,7 +271,7 @@ func TestRenderQAVerification_ContainsAllSections(t *testing.T) {
 		QualityChecks: []string{"just test", "just vet"},
 	}
 
-	out, err := RenderQAVerification(data)
+	out, err := RenderQAVerification(data, "")
 	if err != nil {
 		t.Fatalf("RenderQAVerification failed: %v", err)
 	}
@@ -266,7 +331,7 @@ func TestRenderQAFix_ContainsAllSections(t *testing.T) {
 		},
 	}
 
-	out, err := RenderQAFix(data)
+	out, err := RenderQAFix(data, "")
 	if err != nil {
 		t.Fatalf("RenderQAFix failed: %v", err)
 	}
@@ -301,5 +366,141 @@ func TestRenderQAFix_ContainsAllSections(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("output should contain %q", want)
 		}
+	}
+}
+
+// --- Override tests ---
+
+func TestRender_UsesOverrideTemplateWhenPresent(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a custom loop_iteration.md to the override directory
+	customContent := `Custom template for {{.StoryID}}: {{.StoryTitle}}`
+	if err := os.WriteFile(filepath.Join(dir, "loop_iteration.md"), []byte(customContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	story := &prd.Story{
+		ID:          "US-042",
+		Title:       "Custom Story",
+		Description: "Testing override",
+	}
+
+	out, err := RenderLoopIteration(story, nil, "", "", dir)
+	if err != nil {
+		t.Fatalf("RenderLoopIteration with override failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Custom template for US-042: Custom Story") {
+		t.Errorf("expected override template content, got: %s", out)
+	}
+}
+
+func TestRender_FallsBackToEmbeddedWhenOverrideFileMissing(t *testing.T) {
+	dir := t.TempDir()
+	// Override directory exists but does NOT contain chat_system.md
+
+	data := ChatSystemData{ProjectName: "FallbackProject"}
+	out, err := RenderChatSystem(data, dir)
+	if err != nil {
+		t.Fatalf("RenderChatSystem with missing override should fall back, got error: %v", err)
+	}
+
+	if !strings.Contains(out, "FallbackProject") {
+		t.Errorf("expected embedded template to render, got: %s", out)
+	}
+}
+
+func TestRender_FallsBackToEmbeddedWhenOverrideDirEmpty(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test",
+		Description: "Test",
+	}
+
+	// Empty string overrideDir should use embedded
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "")
+	if err != nil {
+		t.Fatalf("RenderLoopIteration with empty overrideDir failed: %v", err)
+	}
+
+	if !strings.Contains(out, "US-001") {
+		t.Error("expected embedded template to render")
+	}
+}
+
+func TestRender_OverrideDirNonexistentFallsBackToEmbedded(t *testing.T) {
+	data := QAVerificationData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test"},
+	}
+
+	// Point to a directory that doesn't exist — should silently fall back
+	out, err := RenderQAVerification(data, "/nonexistent/path/prompts")
+	if err != nil {
+		t.Fatalf("expected fallback to embedded, got error: %v", err)
+	}
+
+	if !strings.Contains(out, ".ralph/state/prd.json") {
+		t.Error("expected embedded template to render with data")
+	}
+}
+
+func TestRender_OverrideForOneTemplateFallsBackForOthers(t *testing.T) {
+	dir := t.TempDir()
+
+	// Only override loop_iteration.md
+	customContent := `Override: {{.StoryID}}`
+	if err := os.WriteFile(filepath.Join(dir, "loop_iteration.md"), []byte(customContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// loop_iteration.md should use override
+	story := &prd.Story{ID: "US-099", Title: "Overridden", Description: "test"}
+	out, err := RenderLoopIteration(story, nil, "", "", dir)
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+	if !strings.Contains(out, "Override: US-099") {
+		t.Errorf("expected override content, got: %s", out)
+	}
+
+	// chat_system.md should fall back to embedded
+	chatOut, err := RenderChatSystem(ChatSystemData{ProjectName: "MixedTest"}, dir)
+	if err != nil {
+		t.Fatalf("RenderChatSystem should fall back: %v", err)
+	}
+	if !strings.Contains(chatOut, "MixedTest") {
+		t.Errorf("expected embedded chat template, got: %s", chatOut)
+	}
+}
+
+func TestConfig_PromptsDir(t *testing.T) {
+	// Test readTemplate directly with override
+	dir := t.TempDir()
+	customContent := `custom rebase template`
+	if err := os.WriteFile(filepath.Join(dir, "rebase_conflict.md"), []byte(customContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := readTemplate("templates/rebase_conflict.md", dir)
+	if err != nil {
+		t.Fatalf("readTemplate failed: %v", err)
+	}
+	if string(content) != customContent {
+		t.Errorf("expected override content, got: %s", content)
+	}
+
+	// Without override, should return embedded content
+	embeddedContent, err := readTemplate("templates/rebase_conflict.md", "")
+	if err != nil {
+		t.Fatalf("readTemplate without override failed: %v", err)
+	}
+	if len(embeddedContent) == 0 {
+		t.Error("expected non-empty embedded content")
+	}
+	if string(embeddedContent) == customContent {
+		t.Error("embedded content should differ from override")
 	}
 }

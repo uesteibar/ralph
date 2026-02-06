@@ -76,15 +76,15 @@ func (h *PlainTextHandler) handleInvocationDone(e InvocationDone) {
 }
 
 func (h *PlainTextHandler) handleIterationStart(e IterationStart) {
-	fmt.Fprintf(h.W, "[loop] iteration %d/%d\n", e.Iteration, e.MaxIterations)
+	fmt.Fprintf(h.W, "iteration %d/%d\n", e.Iteration, e.MaxIterations)
 }
 
 func (h *PlainTextHandler) handleStoryStarted(e StoryStarted) {
-	fmt.Fprintf(h.W, "[loop] working on %s: %s\n", e.StoryID, e.Title)
+	fmt.Fprintf(h.W, "working on %s: %s\n", e.StoryID, e.Title)
 }
 
 func (h *PlainTextHandler) handleQAPhaseStarted(e QAPhaseStarted) {
-	fmt.Fprintf(h.W, "[loop] all stories pass — running QA %s\n", e.Phase)
+	fmt.Fprintf(h.W, "all stories pass — running QA %s\n", e.Phase)
 }
 
 func (h *PlainTextHandler) handleUsageLimitWait(e UsageLimitWait) {

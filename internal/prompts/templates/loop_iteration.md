@@ -32,6 +32,7 @@ Acceptance Criteria:
    - Update `{{.PRDPath}}`: set `passes: true` for story `{{.StoryID}}`
    - Append a progress entry to `{{.ProgressPath}}` (see format below)
    - `git add -A && git commit -m "feat({{.StoryID}}): {{.StoryTitle}}"`
+   - **Do NOT add Co-Authored-By headers** to commit messages. Commits must use only the local git user.
 6. If checks fail: fix the issues and re-run until passing, then commit.
 
 ## Progress Entry Format

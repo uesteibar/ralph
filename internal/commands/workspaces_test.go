@@ -733,6 +733,49 @@ func TestWorkspacesRemove_CurrentWorkspace_OutputsBasePath(t *testing.T) {
 	}
 }
 
+// --- ralph new alias tests ---
+
+func TestNewAlias_BehavesIdenticallyToWorkspacesNew(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+
+	t.Setenv("RALPH_SHELL_INIT", "1")
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	stdout, err := captureStdout(t, func() error {
+		return workspacesDispatch([]string{"new", "alias-test"}, strings.NewReader(""))
+	})
+	if err != nil {
+		t.Fatalf("new alias error: %v", err)
+	}
+
+	// Verify stdout contains path to tree/ directory.
+	expectedTreePath := workspace.TreePath(dir, "alias-test")
+	stdoutTrimmed := strings.TrimSpace(stdout)
+	if stdoutTrimmed != expectedTreePath {
+		t.Errorf("stdout = %q, want %q", stdoutTrimmed, expectedTreePath)
+	}
+
+	// Verify tree/ directory exists.
+	if _, err := os.Stat(expectedTreePath); err != nil {
+		t.Errorf("tree/ directory should exist: %v", err)
+	}
+
+	// Verify registry entry.
+	list, err := workspace.RegistryList(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("registry has %d entries, want 1", len(list))
+	}
+	if list[0].Name != "alias-test" {
+		t.Errorf("registry entry = %q, want %q", list[0].Name, "alias-test")
+	}
+}
+
 func TestWorkspacesRemove_Nonexistent_Error(t *testing.T) {
 	dir := realPath(t, t.TempDir())
 	initTestRepo(t, dir)

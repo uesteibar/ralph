@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -106,6 +105,14 @@ Use this exact schema:
 
 1. Read back the file to confirm it is valid JSON
 2. Tell the user the PRD is ready and suggest: ` + "`ralph run`" + `
+`
+
+const claudeMDContent = `# Ralph — Project Rules
+
+## Commit Rules
+
+- Do NOT add Co-Authored-By headers to any commit messages.
+- Commits must use only the local git user configuration.
 `
 
 // Init scaffolds the .ralph/ directory in the current project.
@@ -222,10 +229,17 @@ func Init(args []string, in io.Reader) error {
 	}
 	created = append(created, ".claude/commands/finish.md")
 
+	// Write .claude/CLAUDE.md (always write to keep up to date)
+	claudeMDPath := filepath.Join(cwd, ".claude", "CLAUDE.md")
+	if err := os.WriteFile(claudeMDPath, []byte(claudeMDContent), 0644); err != nil {
+		return fmt.Errorf("writing CLAUDE.md: %w", err)
+	}
+	created = append(created, ".claude/CLAUDE.md")
+
 	// Ensure appropriate paths are in .gitignore based on user's choice
 	ensureGitignoreEntries(cwd, gitTrackChoice)
 
-	log.Printf("[init] initialized .ralph/ in %s", cwd)
+	fmt.Fprintf(os.Stderr, "initialized .ralph/ in %s\n", cwd)
 	fmt.Println("Ralph initialized.")
 	if len(created) > 0 {
 		fmt.Println()

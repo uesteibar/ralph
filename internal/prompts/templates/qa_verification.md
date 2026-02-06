@@ -137,6 +137,8 @@ After verifying ALL integration tests:
 
 Use the commit format: `test(QA): <description of tests added>`
 
+**Do NOT add Co-Authored-By headers** to commit messages. Commits must use only the local git user.
+
 Example commit messages:
 - `test(QA): add Playwright e2e tests for user registration`
 - `test(QA): add API integration tests for checkout flow`

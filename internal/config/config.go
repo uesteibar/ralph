@@ -49,6 +49,11 @@ func (c *Config) WorkspacesDir() string {
 	return filepath.Join(c.Repo.Path, ".ralph", "workspaces")
 }
 
+// PromptsDir returns the path to the ejected prompts directory.
+func (c *Config) PromptsDir() string {
+	return filepath.Join(c.Repo.Path, ".ralph", "prompts")
+}
+
 // Load reads and parses a config file at the given path.
 // Repo.Path is derived from the config file location (grandparent of the file,
 // i.e. the directory containing .ralph/).

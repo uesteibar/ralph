@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,11 +69,11 @@ func (g *gitRunner) hasUncommittedChanges(ctx context.Context) (bool, error) {
 func checkGitClean(ctx context.Context, dir string) bool {
 	hasChanges, err := gitHasUncommittedChangesFn(ctx, dir)
 	if err != nil {
-		log.Printf("[loop] WARNING: failed to check git status: %v — continuing loop", err)
+		fmt.Fprintf(os.Stderr, "warning: failed to check git status: %v — continuing loop\n", err)
 		return false
 	}
 	if hasChanges {
-		log.Println("[loop] WARNING: uncommitted changes detected — continuing loop to allow commit")
+		fmt.Fprintln(os.Stderr, "warning: uncommitted changes detected — continuing loop to allow commit")
 		return false
 	}
 	return true
@@ -105,7 +104,7 @@ func invokeWithUsageLimitWait(ctx context.Context, opts invokeOpts) (string, err
 			WaitDuration: waitDur.Round(time.Second),
 			ResetAt:      ulErr.ResetAt,
 		})
-		log.Printf("[loop] usage limit reached — waiting %s until %s",
+		fmt.Fprintf(os.Stderr, "usage limit reached — waiting %s until %s\n",
 			waitDur.Round(time.Second), ulErr.ResetAt.Format(time.RFC3339))
 
 		select {
@@ -130,6 +129,7 @@ type Config struct {
 	WorkDir       string
 	PRDPath       string
 	ProgressPath  string
+	PromptsDir    string
 	QualityChecks []string
 	Verbose       bool
 	EventHandler  events.EventHandler
@@ -172,7 +172,7 @@ func Run(ctx context.Context, cfg Config) error {
 					}
 					continue
 				}
-				log.Println("[loop] all stories pass, no integration tests — done")
+				fmt.Fprintln(os.Stderr, "all stories pass, no integration tests — done")
 				return nil
 			}
 
@@ -183,21 +183,21 @@ func Run(ctx context.Context, cfg Config) error {
 					}
 					continue
 				}
-				log.Println("[loop] all stories and integration tests pass — done")
+				fmt.Fprintln(os.Stderr, "all stories and integration tests pass — done")
 				return nil
 			}
 
 			// Run QA verification phase
 			emitEvent(cfg.EventHandler, events.QAPhaseStarted{Phase: "verification"})
 			if err := runQAVerification(ctx, cfg); err != nil {
-				log.Printf("[loop] QA verification error: %v", err)
+				fmt.Fprintf(os.Stderr, "QA verification error: %v\n", err)
 			}
 			emitEvent(cfg.EventHandler, events.PRDRefresh{})
 
 			// Re-read PRD after QA verification and check if all tests pass
 			verifyPRD, err := prd.Read(cfg.PRDPath)
 			if err != nil {
-				log.Printf("[loop] failed to read PRD after QA: %v — continuing loop", err)
+				fmt.Fprintf(os.Stderr, "failed to read PRD after QA: %v — continuing loop\n", err)
 			} else if prd.AllIntegrationTestsPass(verifyPRD) {
 				if !checkGitClean(ctx, cfg.WorkDir) {
 					if i < cfg.MaxIterations {
@@ -205,7 +205,7 @@ func Run(ctx context.Context, cfg Config) error {
 					}
 					continue
 				}
-				log.Println("[loop] QA verification complete — all integration tests pass")
+				fmt.Fprintln(os.Stderr, "QA verification complete — all integration tests pass")
 				return nil
 			}
 
@@ -214,7 +214,7 @@ func Run(ctx context.Context, cfg Config) error {
 			if len(failedTests) > 0 {
 				emitEvent(cfg.EventHandler, events.QAPhaseStarted{Phase: "fix"})
 				if err := runQAFix(ctx, cfg, failedTests); err != nil {
-					log.Printf("[loop] QA fix error: %v", err)
+					fmt.Fprintf(os.Stderr, "QA fix error: %v\n", err)
 				}
 				emitEvent(cfg.EventHandler, events.PRDRefresh{})
 			}
@@ -231,7 +231,7 @@ func Run(ctx context.Context, cfg Config) error {
 			Title:   story.Title,
 		})
 
-		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath, cfg.PRDPath)
+		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath, cfg.PRDPath, cfg.PromptsDir)
 		if err != nil {
 			return fmt.Errorf("rendering prompt for %s: %w", story.ID, err)
 		}
@@ -243,7 +243,7 @@ func Run(ctx context.Context, cfg Config) error {
 			eventHandler: cfg.EventHandler,
 		})
 		if err != nil {
-			log.Printf("[loop] Claude returned error on %s: %v", story.ID, err)
+			fmt.Fprintf(os.Stderr, "Claude returned error on %s: %v\n", story.ID, err)
 			// Non-fatal — Claude may have partially succeeded.
 			// The next iteration will re-read prd.json and pick up where we left off.
 		}
@@ -251,18 +251,18 @@ func Run(ctx context.Context, cfg Config) error {
 		emitEvent(cfg.EventHandler, events.PRDRefresh{})
 
 		if claude.ContainsComplete(output) {
-			log.Println("[loop] Ralph signaled COMPLETE — verifying PRD state")
+			fmt.Fprintln(os.Stderr, "Ralph signaled COMPLETE — verifying PRD state")
 
 			// Re-read PRD to verify all stories and integration tests actually pass.
 			// This guards against Claude hallucinating completion or stale data.
 			verifyPRD, err := prd.Read(cfg.PRDPath)
 			if err != nil {
-				log.Printf("[loop] failed to verify PRD: %v — continuing loop", err)
+				fmt.Fprintf(os.Stderr, "failed to verify PRD: %v — continuing loop\n", err)
 				continue
 			}
 
 			if !prd.AllPass(verifyPRD) {
-				log.Println("[loop] COMPLETE signal received but not all user stories pass — continuing loop")
+				fmt.Fprintln(os.Stderr, "COMPLETE signal received but not all user stories pass — continuing loop")
 				continue
 			}
 
@@ -273,12 +273,12 @@ func Run(ctx context.Context, cfg Config) error {
 					}
 					continue
 				}
-				log.Println("[loop] verified: all stories pass, no integration tests — done")
+				fmt.Fprintln(os.Stderr, "verified: all stories pass, no integration tests — done")
 				return nil
 			}
 
 			if !prd.AllIntegrationTestsPass(verifyPRD) {
-				log.Println("[loop] COMPLETE signal received but not all integration tests pass — continuing loop")
+				fmt.Fprintln(os.Stderr, "COMPLETE signal received but not all integration tests pass — continuing loop")
 				continue
 			}
 
@@ -288,7 +288,7 @@ func Run(ctx context.Context, cfg Config) error {
 				}
 				continue
 			}
-			log.Println("[loop] verified: all stories and integration tests pass — done")
+			fmt.Fprintln(os.Stderr, "verified: all stories and integration tests pass — done")
 			return nil
 		}
 
@@ -306,7 +306,7 @@ func runQAVerification(ctx context.Context, cfg Config) error {
 		PRDPath:       cfg.PRDPath,
 		ProgressPath:  cfg.ProgressPath,
 		QualityChecks: cfg.QualityChecks,
-	})
+	}, cfg.PromptsDir)
 	if err != nil {
 		return fmt.Errorf("rendering QA verification prompt: %w", err)
 	}
@@ -328,7 +328,7 @@ func runQAFix(ctx context.Context, cfg Config, failedTests []prd.IntegrationTest
 		ProgressPath:  cfg.ProgressPath,
 		QualityChecks: cfg.QualityChecks,
 		FailedTests:   failedTests,
-	})
+	}, cfg.PromptsDir)
 	if err != nil {
 		return fmt.Errorf("rendering QA fix prompt: %w", err)
 	}

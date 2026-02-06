@@ -19,7 +19,8 @@
 - **Absolute git dir**: Use `git rev-parse --absolute-git-dir` (not `--git-dir`) when checking filesystem paths derived from git dir.
 - **ContinueRebase editor skip**: Uses `git -c core.editor=true rebase --continue` to skip editor during automated continuation.
 - **Tests with real git repos**: `initRepo(t, dir)` creates a real git repo in `t.TempDir()`. No git mocking.
-- **Prompt templates**: Located in `internal/prompts/templates/*.md`, embedded via `//go:embed templates/*.md`. Each template has a corresponding `XxxData` struct and `RenderXxx` function in `prompts.go`. The internal `render()` function handles all template parsing/execution.
+- **Prompt templates**: Located in `internal/prompts/templates/*.md`, embedded via `//go:embed templates/*.md`. Each template has a corresponding `XxxData` struct and `RenderXxx` function in `prompts.go`. The internal `render()` function handles all template parsing/execution. All `Render*` functions accept an `overrideDir string` parameter; if non-empty and `<overrideDir>/<filename>` exists, the local file is used instead of the embedded template (fallback on missing).
+- **Prompt override**: `config.PromptsDir()` returns `<repoPath>/.ralph/prompts`. Commands pass this to render functions. `CopyDotRalph` automatically copies `.ralph/prompts/` to workspace trees.
 - **Prompt tests**: Use `strings.Contains` checks against rendered output. Test data should use meaningful values that appear in the rendered template.
 - **Quality checks**: `just test` runs `go test -count=1 ./...`, `just vet` runs `go vet ./...`.
 - **Command pattern**: All commands in `internal/commands/` follow: parse flags with `flag.NewFlagSet`, call `AddProjectConfigFlag(fs)`, load config via `ResolveConfig(*configPath)`, then business logic. Wire into `cmd/ralph/main.go` switch + usage text.
@@ -28,6 +29,7 @@
 - **Shared workspace helpers**: `AddWorkspaceFlag(fs)` registers `--workspace` flag. `resolveWorkContextFromFlags(flag, repoPath)` encapsulates cwd+env+ResolveWorkContext into a single call. All commands use these for consistency.
 - **E2e test pattern**: `test/e2e/workspace_e2e_test.go` uses `TestMain` to build the binary, `runRalph`/`runRalphWithStdin` helpers for controlled subprocess execution with clean env, `setupTestRepo` copies fixtures + inits git with bare remote. Agent evaluation via Claude CLI is conditional (`t.Skip` when not available). Reports collected as `cmdReport` structs with command, args, exitCode, stdout, stderr.
 - **Error output in main.go**: Use `fmt.Fprintf(os.Stderr, ...)` not `log.Fatalf` for user-facing errors to avoid timestamps.
+- **CLI output style**: All user-facing output uses `fmt.Fprintf(os.Stderr, ...)` / `fmt.Fprintln(os.Stderr, ...)` — no Go `log` package. No bracket labels like `[init]` or `[loop]`. Warning messages use `warning:` prefix (lowercase, no brackets).
 - **Event emitter pattern**: `internal/events/` package provides `Event` interface (marker method `eventTag()`), `EventHandler` interface (`Handle(Event)`), and 7 event types: `ToolUse`, `AgentText`, `InvocationDone`, `IterationStart`, `StoryStarted`, `QAPhaseStarted`, `UsageLimitWait`. `PlainTextHandler` writes styled output to an `io.Writer`. Use `emitEvent(h, e)` helper for nil-safe emission. Handler is passed via `claude.InvokeOpts.EventHandler` and `loop.Config.EventHandler`.
 - **TUI package**: `internal/tui/` provides BubbleTea-based TUI. `Model` uses `bubbles/viewport` for scrollable log. `Handler` implements `events.EventHandler` via `p.Send(eventMsg{event})`. Loop runs in a goroutine; BubbleTea owns main goroutine. `--no-tui` flag falls back to `PlainTextHandler`. Status bar shows workspace name, current story, iteration count, and "Stopping..." when quitting. Split-pane layout with sidebar (story/test list) and viewport (agent log). Tab switches focus. Arrow/j/k navigate items in sidebar when focused. PRD refreshes via `PRDRefresh` event → `readPRDCmd` → `prdLoadedMsg` pipeline. `NewModel` takes `(workspaceName, prdPath, cancelFunc)` — prdPath enables file-based refresh, cancelFunc enables graceful stop. Enter on sidebar item opens centered modal overlay showing full story/test details. `?` opens help overlay listing all shortcuts. Esc closes overlays. `q` initiates graceful stop (sets `quitting`, calls `cancelFunc`). Ctrl+C triggers immediate `tea.Quit`. `currentPRD` cached in Model for overlay data lookups. Both detail and help overlays reuse the `overlay` type with `lipgloss.Place` centering and `lipgloss.RoundedBorder`.
 
@@ -1068,4 +1070,84 @@
   - Missing workspaces (directory gone) are treated as prunable since they can't be worked on anyway
   - The prune shell function handler follows the same pattern as remove: capture stdout, cd if path exists, unset RALPH_WORKSPACE
   - `strings.ToLower` + trim on confirmation input handles case-insensitive y/yes matching
+---
+
+## 2026-02-06 - US-004 (eject-prompts)
+- Implemented `ralph eject` command to export all 6 embedded prompt templates to `.ralph/prompts/`
+- Exported `TemplateFS()` function and `TemplateNames` variable from `internal/prompts/prompts.go` for external access
+- `ejectTemplates(repoPath)` is the internal testable function; `Eject(args)` is the exported command entry point
+- Templates are written as raw Go templates with `{{ }}` placeholders preserved (byte-for-byte copy from embedded FS)
+- Error when `.ralph/prompts/` already exists: `"prompts already ejected at .ralph/prompts/ — remove the directory to re-eject"`
+- Error when `.ralph/` missing: `".ralph/ directory not found — run ralph init first"`
+- Wired into `cmd/ralph/main.go` dispatch and usage text
+- Files changed:
+  - `internal/prompts/prompts.go` — added `TemplateFS()` function and `TemplateNames` variable
+  - `internal/commands/eject.go` — new file with `Eject` and `ejectTemplates` functions
+  - `internal/commands/eject_test.go` — new file with 6 tests: CreatesAllTemplateFiles, PreservesGoTemplatePlaceholders, FailsWhenPromptsDirAlreadyExists, FailsWhenRalphDirMissing, TemplateContentMatchesEmbedded, WritesExactlySixFiles
+  - `cmd/ralph/main.go` — added eject case in dispatch and usage text
+- **Learnings for future iterations:**
+  - `embed.FS` can be returned from a function — no need to export the variable directly
+  - `TemplateNames` as an exported `[]string` provides a single source of truth for template file enumeration
+  - Eject writes byte-for-byte copies (via `ReadFile` + `WriteFile`) — no template parsing needed, preserving `{{ }}` placeholders
+  - The `.ralph/prompts/` existence check provides a safe guard against accidental overwrite of customized templates
+---
+
+## 2026-02-06 - US-005 (eject-prompts)
+- Updated prompt rendering to prefer ejected local templates from `.ralph/prompts/`
+- Added `overrideDir` parameter to `render()` and all 6 `Render*` functions in `prompts.go`
+- Added `readTemplate(name, overrideDir)` helper: checks `overrideDir/<filename>` on disk first, falls back to embedded FS
+- Added `PromptsDir()` helper to `config.Config` returning `<repoPath>/.ralph/prompts`
+- Added `PromptsDir` field to `loop.Config` for passing through to prompt rendering
+- Updated all callers: `loop.go` (3 call sites), `chat.go`, `rebase.go`, `prd.go`, `run.go`
+- Updated all existing tests to pass `""` as overrideDir (no behavior change)
+- Added 6 new tests:
+  - `TestRender_UsesOverrideTemplateWhenPresent` — verifies custom template from override dir is used
+  - `TestRender_FallsBackToEmbeddedWhenOverrideFileMissing` — verifies fallback when override file absent
+  - `TestRender_FallsBackToEmbeddedWhenOverrideDirEmpty` — verifies empty string overrideDir uses embedded
+  - `TestRender_OverrideDirNonexistentFallsBackToEmbedded` — verifies nonexistent dir falls back silently
+  - `TestRender_OverrideForOneTemplateFallsBackForOthers` — verifies mixed override/fallback per template
+  - `TestConfig_PromptsDir` — verifies readTemplate directly + config helper
+- Files changed:
+  - `internal/prompts/prompts.go` — added `os`, `path/filepath` imports; added `readTemplate`; updated `render` and all `Render*` signatures
+  - `internal/prompts/prompts_test.go` — updated all existing calls; added 6 new override tests
+  - `internal/config/config.go` — added `PromptsDir()` method
+  - `internal/config/config_test.go` — added `TestConfig_PromptsDir`
+  - `internal/loop/loop.go` — added `PromptsDir` to `Config`; updated 3 render call sites
+  - `internal/commands/run.go` — compute `promptsDir` from config; pass through all layers
+  - `internal/commands/chat.go` — pass `cfg.PromptsDir()` to `RenderChatSystem`
+  - `internal/commands/rebase.go` — pass `cfg.PromptsDir()` to `RenderRebaseConflict`
+  - `internal/commands/prd.go` — pass `cfg.PromptsDir()` to `RenderPRDNew`
+- **Learnings for future iterations:**
+  - `filepath.Base(name)` extracts the filename from `"templates/<filename>"` embedded path — used for override lookup
+  - `os.ReadFile` returns error for missing files — checking `err == nil` is sufficient for "file exists and is readable"
+  - The override dir may not exist at all (no eject run) — `os.ReadFile` naturally fails and triggers fallback
+  - `CopyDotRalph` already copies `.ralph/prompts/` to workspaces since it copies all of `.ralph/` except `worktrees/`, `state/`, and `workspaces/` — no extra work needed
+  - Adding a string parameter to all Render* functions and callers is a wide but mechanical change — grep for all call sites to ensure completeness
+---
+
+## 2026-02-06 - US-006
+- Replaced all `log.Printf` and `log.Println` calls in non-test code with `fmt.Fprintf(os.Stderr, ...)` / `fmt.Fprintln(os.Stderr, ...)`
+- Removed all `[command]` bracket labels (e.g. `[init]`, `[loop]`, `[run]`, `[rebase]`, `[workspace]`, `[ralph]`) from output
+- Retained `warning:` prefix (lowercase, no brackets) for warning messages
+- Replaced rebase message 'rebase is no longer in progress after conflict resolution' with 'rebase completed successfully'
+- Also cleaned up `[loop]` labels in `internal/events/plaintext.go` and `internal/tui/model.go` event handlers
+- Removed unused `"log"` import from all affected files
+- Files changed:
+  - `internal/commands/init.go` — 1 log call replaced, `"log"` import removed
+  - `internal/commands/run.go` — 3 log calls replaced, `"log"` import removed
+  - `internal/commands/rebase.go` — 8 log calls replaced, rebase message updated, `"log"` import removed
+  - `internal/commands/common.go` — 3 log calls replaced (warning messages retain `warning:` prefix), `"log"` import removed
+  - `internal/loop/loop.go` — 16 log calls replaced (warnings retain `warning:` prefix), `"log"` import removed
+  - `internal/workspace/gitops.go` — 1 log call replaced (warning callback), `"log"` import removed
+  - `internal/events/plaintext.go` — 3 format strings updated to remove `[loop]` prefix
+  - `internal/tui/model.go` — 3 format strings updated to remove `[loop]` prefix
+  - `internal/commands/init_test.go` — added `TestInit_OutputHasNoTimestampsOrBracketLabels`
+  - `internal/events/events_test.go` — updated 3 assertions to match new label-free format
+  - `internal/tui/model_test.go` — updated 3 assertions to match new label-free format
+  - `test/integration/tui_integration_test.go` — updated 3 assertions to match new label-free format
+- **Learnings for future iterations:**
+  - Go's `log` package always prepends timestamps by default — replacing with `fmt.Fprintf(os.Stderr)` is the simplest way to get clean output
+  - Bracket labels like `[init]` scattered across log calls need global grep to find all instances, including in event handlers and TUI code
+  - Tests that assert on exact output strings (e.g. `[loop] iteration 3/20`) must be updated when output format changes
+  - The `"log"` import must be removed after replacing all calls to avoid unused import errors
 ---

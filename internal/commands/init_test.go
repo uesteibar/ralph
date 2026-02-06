@@ -1,10 +1,12 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -266,6 +268,113 @@ func TestInit_LLMDefaultYes_AcceptsEmptyInput(t *testing.T) {
 	configPath := filepath.Join(dir, ".ralph", "ralph.yaml")
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatal("ralph.yaml should exist")
+	}
+}
+
+func TestInit_CreatesClaudeMDWithNoCoSignRule(t *testing.T) {
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	in := strings.NewReader("1\nn\n")
+	if err := Init(nil, in); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	claudeMD, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("reading CLAUDE.md: %v", err)
+	}
+
+	content := string(claudeMD)
+	if !strings.Contains(content, "Co-Authored-By") {
+		t.Error("CLAUDE.md should contain Co-Authored-By instruction")
+	}
+	if !strings.Contains(content, "Do NOT add Co-Authored-By") {
+		t.Error("CLAUDE.md should instruct not to add Co-Authored-By headers")
+	}
+}
+
+func TestInit_ClaudeMD_IdempotentOnRerun(t *testing.T) {
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	// First run
+	in1 := strings.NewReader("1\nn\n")
+	if err := Init(nil, in1); err != nil {
+		t.Fatalf("first Init failed: %v", err)
+	}
+
+	first, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("reading CLAUDE.md after first run: %v", err)
+	}
+
+	// Second run
+	in2 := strings.NewReader("1\nn\n")
+	if err := Init(nil, in2); err != nil {
+		t.Fatalf("second Init failed: %v", err)
+	}
+
+	second, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("reading CLAUDE.md after second run: %v", err)
+	}
+
+	if string(first) != string(second) {
+		t.Error("CLAUDE.md content should be identical after re-run (idempotent)")
+	}
+
+	// Verify content is not duplicated
+	count := strings.Count(string(second), "Co-Authored-By")
+	if count != 1 {
+		t.Errorf("expected exactly 1 occurrence of Co-Authored-By, got %d", count)
+	}
+}
+
+func TestInit_OutputHasNoTimestampsOrBracketLabels(t *testing.T) {
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	// Capture stderr
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	in := strings.NewReader("1\nn\n")
+	if err := Init(nil, in); err != nil {
+		w.Close()
+		os.Stderr = oldStderr
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	w.Close()
+	os.Stderr = oldStderr
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	stderr := buf.String()
+
+	// Verify no Go log timestamp pattern (YYYY/MM/DD HH:MM:SS)
+	timestampPattern := regexp.MustCompile(`\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}`)
+	if timestampPattern.MatchString(stderr) {
+		t.Errorf("stderr should not contain timestamps, got: %s", stderr)
+	}
+
+	// Verify no bracket labels
+	bracketPattern := regexp.MustCompile(`\[(init|loop|run|rebase|workspace|ralph)\]`)
+	if bracketPattern.MatchString(stderr) {
+		t.Errorf("stderr should not contain bracket labels, got: %s", stderr)
+	}
+
+	// Verify it still has the init output
+	if !strings.Contains(stderr, "initialized .ralph/") {
+		t.Errorf("stderr should contain initialization message, got: %s", stderr)
 	}
 }
 

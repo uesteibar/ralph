@@ -102,8 +102,8 @@ func TestModel_HandleEvent_IterationStart(t *testing.T) {
 	if len(m.Lines()) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(m.Lines()))
 	}
-	if !strings.Contains(m.Lines()[0], "[loop] iteration 3/20") {
-		t.Errorf("expected '[loop] iteration 3/20', got %q", m.Lines()[0])
+	if !strings.Contains(m.Lines()[0], "iteration 3/20") {
+		t.Errorf("expected 'iteration 3/20', got %q", m.Lines()[0])
 	}
 }
 
@@ -120,7 +120,7 @@ func TestModel_HandleEvent_StoryStarted(t *testing.T) {
 	if len(m.Lines()) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(m.Lines()))
 	}
-	if !strings.Contains(m.Lines()[0], "[loop] working on US-001: Build auth") {
+	if !strings.Contains(m.Lines()[0], "working on US-001: Build auth") {
 		t.Errorf("expected story started line, got %q", m.Lines()[0])
 	}
 }
@@ -157,7 +157,7 @@ func TestModel_HandleEvent_QAPhaseStarted(t *testing.T) {
 	if len(m.Lines()) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(m.Lines()))
 	}
-	if !strings.Contains(m.Lines()[0], "[loop] all stories pass — running QA verification") {
+	if !strings.Contains(m.Lines()[0], "all stories pass — running QA verification") {
 		t.Errorf("expected QA phase line, got %q", m.Lines()[0])
 	}
 }

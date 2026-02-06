@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,17 +73,17 @@ func archiveStagedPRD(cfg *config.Config) {
 	archiveDir := filepath.Join(cfg.StateArchiveDir(),
 		time.Now().Format("2006-01-02")+"-"+sanitized)
 	if err := os.MkdirAll(archiveDir, 0755); err != nil {
-		log.Printf("[ralph] warning: could not create archive dir: %v", err)
+		fmt.Fprintf(os.Stderr, "warning: could not create archive dir: %v\n", err)
 		return
 	}
 
 	if err := os.WriteFile(filepath.Join(archiveDir, "prd.json"), data, 0644); err != nil {
-		log.Printf("[ralph] warning: could not archive PRD: %v", err)
+		fmt.Fprintf(os.Stderr, "warning: could not archive PRD: %v\n", err)
 		return
 	}
 
 	os.Remove(stagedPath)
-	log.Printf("[ralph] archived previous PRD to %s", archiveDir)
+	fmt.Fprintf(os.Stderr, "archived previous PRD to %s\n", archiveDir)
 }
 
 func sanitizeBranchForArchive(branch string) string {

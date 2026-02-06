@@ -85,6 +85,8 @@ Commit each fix separately with the format:
 fix(QA): <description of what was fixed>
 ```
 
+**Do NOT add Co-Authored-By headers** to commit messages. Commits must use only the local git user.
+
 Example commit messages:
 - `fix(QA): handle null user in profile endpoint`
 - `fix(QA): add missing validation for empty form fields`

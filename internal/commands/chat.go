@@ -64,7 +64,7 @@ func Chat(args []string) error {
 		data.PRDContext = formatPRDContext(p)
 	}
 
-	prompt, err := prompts.RenderChatSystem(data)
+	prompt, err := prompts.RenderChatSystem(data, cfg.PromptsDir())
 	if err != nil {
 		return fmt.Errorf("rendering chat prompt: %w", err)
 	}

@@ -170,7 +170,7 @@ func TestIT001_TUILaunchesByDefault(t *testing.T) {
 		}
 
 		// Verify iteration info
-		if !strings.Contains(lines[0], "[loop] iteration 1/10") {
+		if !strings.Contains(lines[0], "iteration 1/10") {
 			t.Errorf("expected iteration start line, got %q", lines[0])
 		}
 
@@ -239,8 +239,8 @@ func TestIT002_NoTUIFallsBackToPlainText(t *testing.T) {
 
 		// Step 3: Verify the format matches expected stderr output
 		checks := []string{
-			"[loop] iteration 1/5",
-			"[loop] working on US-001: Build auth",
+			"iteration 1/5",
+			"working on US-001: Build auth",
 			"→",
 			"Read",
 			"main.go",

@@ -18,6 +18,8 @@ Usage:
   ralph chat [--project-config path] [--continue] [--workspace name]   Ad-hoc Claude session
   ralph switch [name] [--project-config path]    Switch workspace (interactive picker if no name)
   ralph rebase [branch] [--project-config path] [--workspace name]   Rebase onto base branch
+  ralph new <name> [--project-config path]                Alias for ralph workspaces new
+  ralph eject [--project-config path]              Export prompt templates to .ralph/prompts/ for customization
   ralph done [--project-config path] [--workspace name]   Squash-merge and clean up
   ralph status [--project-config path] [--short] Show workspace and story progress
   ralph overview [--project-config path]         Show progress across all workspaces
@@ -72,8 +74,13 @@ func main() {
 		err = commands.Switch(rest)
 	case "rebase":
 		err = commands.Rebase(rest)
+	case "eject":
+		err = commands.Eject(rest)
 	case "done":
 		err = commands.Done(rest)
+	case "new":
+		// "ralph new <name>" is an alias for "ralph workspaces new <name>".
+		err = commands.Workspaces(append([]string{"new"}, rest...))
 	case "workspaces":
 		err = commands.Workspaces(rest)
 	case "shell-init":

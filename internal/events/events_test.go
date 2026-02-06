@@ -98,8 +98,8 @@ func TestPlainTextHandler_IterationStart(t *testing.T) {
 	h.Handle(IterationStart{Iteration: 3, MaxIterations: 20})
 
 	output := buf.String()
-	if !strings.Contains(output, "[loop] iteration 3/20") {
-		t.Errorf("expected '[loop] iteration 3/20', got %q", output)
+	if !strings.Contains(output, "iteration 3/20") {
+		t.Errorf("expected 'iteration 3/20', got %q", output)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestPlainTextHandler_StoryStarted(t *testing.T) {
 	h.Handle(StoryStarted{StoryID: "US-001", Title: "Build auth"})
 
 	output := buf.String()
-	if !strings.Contains(output, "[loop] working on US-001: Build auth") {
+	if !strings.Contains(output, "working on US-001: Build auth") {
 		t.Errorf("expected story started output, got %q", output)
 	}
 }
@@ -122,7 +122,7 @@ func TestPlainTextHandler_QAPhaseStarted(t *testing.T) {
 	h.Handle(QAPhaseStarted{Phase: "verification"})
 
 	output := buf.String()
-	if !strings.Contains(output, "[loop] all stories pass — running QA verification") {
+	if !strings.Contains(output, "all stories pass — running QA verification") {
 		t.Errorf("expected QA phase output, got %q", output)
 	}
 }
