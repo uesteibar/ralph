@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +56,7 @@ func Done(args []string) error {
 func doneBase(ctx context.Context, cfg *config.Config, stdin *os.File) error {
 	r := &shell.Runner{}
 
+	fmt.Fprintln(os.Stderr, "checking worktree context...")
 	isWt, err := gitops.IsWorktree(ctx, r)
 	if err != nil {
 		return fmt.Errorf("checking worktree: %w", err)
@@ -67,16 +67,19 @@ func doneBase(ctx context.Context, cfg *config.Config, stdin *os.File) error {
 
 	baseBranch := cfg.Repo.DefaultBase
 
+	fmt.Fprintln(os.Stderr, "detecting current branch...")
 	featureBranch, err := gitops.CurrentBranch(ctx, r)
 	if err != nil {
 		return fmt.Errorf("getting current branch: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "on branch %s\n", featureBranch)
 
-	log.Printf("[done] fetching origin/%s", baseBranch)
+	fmt.Fprintf(os.Stderr, "fetching origin/%s...\n", baseBranch)
 	if err := gitops.FetchBranch(ctx, r, baseBranch); err != nil {
 		return err
 	}
 
+	fmt.Fprintln(os.Stderr, "checking if base is up-to-date...")
 	upToDate, err := gitops.IsAncestor(ctx, r, "origin/"+baseBranch, "HEAD")
 	if err != nil {
 		return fmt.Errorf("checking if base is ancestor of HEAD: %w", err)
@@ -85,6 +88,7 @@ func doneBase(ctx context.Context, cfg *config.Config, stdin *os.File) error {
 		return fmt.Errorf("origin/%s is not an ancestor of HEAD — run `ralph rebase` first to incorporate the latest changes", baseBranch)
 	}
 
+	fmt.Fprintln(os.Stderr, "generating commit message...")
 	commitMsg, err := generateCommitMessage(cfg.StatePRDPath())
 	if err != nil {
 		return fmt.Errorf("generating commit message: %w", err)
@@ -95,24 +99,24 @@ func doneBase(ctx context.Context, cfg *config.Config, stdin *os.File) error {
 		return fmt.Errorf("reading user input: %w", err)
 	}
 
+	fmt.Fprintln(os.Stderr, "resolving main repo path...")
 	repoPath, err := gitops.MainRepoPath(ctx, r)
 	if err != nil {
 		return fmt.Errorf("resolving main repo path: %w", err)
 	}
 
-	log.Printf("[done] squash-merging %s into %s", featureBranch, baseBranch)
+	fmt.Fprintf(os.Stderr, "squash-merging %s into %s...\n", featureBranch, baseBranch)
 	if err := gitops.SquashMerge(ctx, r, repoPath, featureBranch, baseBranch, editedMsg); err != nil {
 		return err
 	}
-
-	log.Println("[done] squash merge completed successfully")
+	fmt.Fprintln(os.Stderr, "squash merge completed")
 
 	if shouldCleanup(stdin) {
 		wtPath, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("getting worktree path: %w", err)
 		}
-		log.Printf("[done] removing worktree and deleting branch %s", featureBranch)
+		fmt.Fprintf(os.Stderr, "removing worktree and deleting branch %s...\n", featureBranch)
 		if err := gitops.RemoveWorktree(ctx, r, repoPath, wtPath); err != nil {
 			return fmt.Errorf("removing worktree: %w", err)
 		}
@@ -120,9 +124,9 @@ func doneBase(ctx context.Context, cfg *config.Config, stdin *os.File) error {
 		if err := gitops.DeleteBranch(ctx, repoRunner, featureBranch); err != nil {
 			return fmt.Errorf("deleting branch: %w", err)
 		}
-		log.Println("[done] cleanup complete")
+		fmt.Fprintln(os.Stderr, "cleanup complete")
 	} else {
-		log.Println("[done] leaving worktree and branch in place")
+		fmt.Fprintln(os.Stderr, "leaving worktree and branch in place")
 	}
 
 	return nil
@@ -135,16 +139,19 @@ func doneWorkspace(ctx context.Context, cfg *config.Config, wc workspace.WorkCon
 
 	baseBranch := cfg.Repo.DefaultBase
 
+	fmt.Fprintln(os.Stderr, "detecting current branch...")
 	featureBranch, err := gitops.CurrentBranch(ctx, r)
 	if err != nil {
 		return fmt.Errorf("getting current branch: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "on branch %s\n", featureBranch)
 
-	log.Printf("[done] fetching origin/%s", baseBranch)
+	fmt.Fprintf(os.Stderr, "fetching origin/%s...\n", baseBranch)
 	if err := gitops.FetchBranch(ctx, r, baseBranch); err != nil {
 		return err
 	}
 
+	fmt.Fprintln(os.Stderr, "checking if base is up-to-date...")
 	upToDate, err := gitops.IsAncestor(ctx, r, "origin/"+baseBranch, "HEAD")
 	if err != nil {
 		return fmt.Errorf("checking if base is ancestor of HEAD: %w", err)
@@ -153,6 +160,7 @@ func doneWorkspace(ctx context.Context, cfg *config.Config, wc workspace.WorkCon
 		return fmt.Errorf("origin/%s is not an ancestor of HEAD — run `ralph rebase` first to incorporate the latest changes", baseBranch)
 	}
 
+	fmt.Fprintln(os.Stderr, "generating commit message...")
 	commitMsg, err := generateCommitMessage(wc.PRDPath)
 	if err != nil {
 		return fmt.Errorf("generating commit message: %w", err)
@@ -165,19 +173,21 @@ func doneWorkspace(ctx context.Context, cfg *config.Config, wc workspace.WorkCon
 
 	repoPath := cfg.Repo.Path
 
-	log.Printf("[done] squash-merging %s into %s", featureBranch, baseBranch)
+	fmt.Fprintf(os.Stderr, "squash-merging %s into %s...\n", featureBranch, baseBranch)
 	if err := gitops.SquashMerge(ctx, r, repoPath, featureBranch, baseBranch, editedMsg); err != nil {
 		return err
 	}
+	fmt.Fprintln(os.Stderr, "squash merge completed")
 
 	fmt.Fprintf(os.Stderr, "Squash-merged %s into %s\n", featureBranch, baseBranch)
 
 	// Archive PRD from workspace level BEFORE removing the workspace.
+	fmt.Fprintln(os.Stderr, "archiving PRD...")
 	archivePRDFromPath(wc.PRDPath, cfg)
 
 	// Auto-remove workspace.
 	repoRunner := &shell.Runner{Dir: repoPath}
-	log.Printf("[done] removing workspace %s", wc.Name)
+	fmt.Fprintf(os.Stderr, "removing workspace %s...\n", wc.Name)
 	if err := workspace.RemoveWorkspace(ctx, repoRunner, repoPath, wc.Name); err != nil {
 		return fmt.Errorf("removing workspace: %w", err)
 	}
@@ -206,16 +216,16 @@ func archivePRDFromPath(sourcePath string, cfg *config.Config) {
 	destDir := filepath.Join(cfg.StateArchiveDir(),
 		doneNowFn().Format("2006-01-02")+"-"+sanitized)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		log.Printf("[done] warning: could not create archive dir: %v", err)
+		fmt.Fprintf(os.Stderr, "warning: could not create archive dir: %v\n", err)
 		return
 	}
 
 	if err := os.WriteFile(filepath.Join(destDir, "prd.json"), data, 0644); err != nil {
-		log.Printf("[done] warning: could not archive PRD: %v", err)
+		fmt.Fprintf(os.Stderr, "warning: could not archive PRD: %v\n", err)
 		return
 	}
 
-	log.Printf("[done] archived PRD to %s", destDir)
+	fmt.Fprintf(os.Stderr, "archived PRD to %s\n", destDir)
 }
 
 // generateCommitMessage builds a commit message from the PRD at the given path.
@@ -237,12 +247,13 @@ func generateCommitMessage(prdPath string) (string, error) {
 }
 
 // promptEditMessage displays the draft message and lets the user accept or
-// replace it via stdin.
+// replace it via stdin. All prompts go to stderr so stdout stays clean for
+// machine output (e.g., the shell wrapper captures stdout for cd paths).
 func promptEditMessage(draft string, stdin *os.File) (string, error) {
-	fmt.Println("--- Generated commit message ---")
-	fmt.Println(draft)
-	fmt.Println("--- End of message ---")
-	fmt.Print("Press Enter to accept, or type a new message: ")
+	fmt.Fprintln(os.Stderr, "--- Generated commit message ---")
+	fmt.Fprintln(os.Stderr, draft)
+	fmt.Fprintln(os.Stderr, "--- End of message ---")
+	fmt.Fprint(os.Stderr, "Press Enter to accept, or type a new message: ")
 
 	scanner := bufio.NewScanner(stdin)
 	if scanner.Scan() {
@@ -258,9 +269,9 @@ func promptEditMessage(draft string, stdin *os.File) (string, error) {
 }
 
 // shouldCleanup prompts the user whether to remove the worktree and delete the
-// feature branch.
+// feature branch. Prompt goes to stderr to avoid polluting stdout.
 func shouldCleanup(stdin *os.File) bool {
-	fmt.Print("Clean up worktree and delete feature branch? (y/n): ")
+	fmt.Fprint(os.Stderr, "Clean up worktree and delete feature branch? (y/n): ")
 	scanner := bufio.NewScanner(stdin)
 	if scanner.Scan() {
 		answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
