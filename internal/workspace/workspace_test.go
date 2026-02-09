@@ -71,6 +71,14 @@ func TestPRDPathForWorkspace(t *testing.T) {
 	}
 }
 
+func TestProgressPathForWorkspace(t *testing.T) {
+	got := ProgressPathForWorkspace("/repo", "my-ws")
+	want := filepath.Join("/repo", ".ralph", "workspaces", "my-ws", "progress.txt")
+	if got != want {
+		t.Errorf("ProgressPathForWorkspace = %q, want %q", got, want)
+	}
+}
+
 // --- Branch Derivation ---
 
 func TestDeriveBranch_Simple(t *testing.T) {
@@ -415,6 +423,9 @@ func TestResolveWorkContext_FlagWins(t *testing.T) {
 	if wc.PRDPath != PRDPathForWorkspace(repo, "flag-ws") {
 		t.Errorf("PRDPath = %q, want %q", wc.PRDPath, PRDPathForWorkspace(repo, "flag-ws"))
 	}
+	if wc.ProgressPath != ProgressPathForWorkspace(repo, "flag-ws") {
+		t.Errorf("ProgressPath = %q, want %q", wc.ProgressPath, ProgressPathForWorkspace(repo, "flag-ws"))
+	}
 }
 
 func TestResolveWorkContext_EnvVarSecondPriority(t *testing.T) {
@@ -453,6 +464,10 @@ func TestResolveWorkContext_BaseFallback(t *testing.T) {
 	}
 	if wc.PRDPath != filepath.Join(repo, ".ralph", "state", "prd.json") {
 		t.Errorf("PRDPath = %q, want default state path", wc.PRDPath)
+	}
+	wantProgress := filepath.Join(repo, ".ralph", "progress.txt")
+	if wc.ProgressPath != wantProgress {
+		t.Errorf("ProgressPath = %q, want %q", wc.ProgressPath, wantProgress)
 	}
 }
 

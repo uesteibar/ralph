@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -75,7 +74,7 @@ func Run(args []string) error {
 
 	fmt.Fprintf(os.Stderr, "workspace=%s workDir=%s prdPath=%s\n", wc.Name, wc.WorkDir, wc.PRDPath)
 
-	progressPath := filepath.Join(cfg.Repo.Path, ".ralph", "progress.txt")
+	progressPath := wc.ProgressPath
 	promptsDir := cfg.PromptsDir()
 
 	if *noTUI {

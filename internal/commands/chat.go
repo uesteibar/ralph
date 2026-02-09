@@ -45,8 +45,8 @@ func Chat(args []string) error {
 		data.Config = string(configYAML)
 	}
 
-	// Read progress log from workspace tree (or repo root for base)
-	progress, err := os.ReadFile(filepath.Join(wc.WorkDir, ".ralph", "progress.txt"))
+	// Read progress log from workspace (or repo root for base)
+	progress, err := os.ReadFile(wc.ProgressPath)
 	if err == nil {
 		data.Progress = string(progress)
 	}

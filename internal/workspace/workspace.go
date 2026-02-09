@@ -19,9 +19,10 @@ type Workspace struct {
 
 // WorkContext holds the resolved context for the current working environment.
 type WorkContext struct {
-	Name    string // workspace name or "base"
-	WorkDir string // tree/ directory or repo root
-	PRDPath string // workspace/prd.json or .ralph/state/prd.json
+	Name         string // workspace name or "base"
+	WorkDir      string // tree/ directory or repo root
+	PRDPath      string // workspace/prd.json or .ralph/state/prd.json
+	ProgressPath string // workspace/progress.txt or .ralph/progress.txt
 }
 
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
@@ -50,6 +51,11 @@ func TreePath(repoPath, name string) string {
 // PRDPathForWorkspace returns the PRD path: <repoPath>/.ralph/workspaces/<name>/prd.json
 func PRDPathForWorkspace(repoPath, name string) string {
 	return filepath.Join(repoPath, ".ralph", "workspaces", name, "prd.json")
+}
+
+// ProgressPathForWorkspace returns the progress path: <repoPath>/.ralph/workspaces/<name>/progress.txt
+func ProgressPathForWorkspace(repoPath, name string) string {
+	return filepath.Join(repoPath, ".ralph", "workspaces", name, "progress.txt")
 }
 
 // DeriveBranch returns prefix + name and validates against branchPattern if set.
@@ -297,9 +303,10 @@ func ResolveWorkContext(workspaceFlag, envVar, cwd, repoPath string) (WorkContex
 
 	// Priority 4: base
 	return WorkContext{
-		Name:    "base",
-		WorkDir: repoPath,
-		PRDPath: filepath.Join(repoPath, ".ralph", "state", "prd.json"),
+		Name:         "base",
+		WorkDir:      repoPath,
+		PRDPath:      filepath.Join(repoPath, ".ralph", "state", "prd.json"),
+		ProgressPath: filepath.Join(repoPath, ".ralph", "progress.txt"),
 	}, nil
 }
 
@@ -308,8 +315,9 @@ func workContextForWorkspace(repoPath, name string) (WorkContext, error) {
 		return WorkContext{}, err
 	}
 	return WorkContext{
-		Name:    name,
-		WorkDir: TreePath(repoPath, name),
-		PRDPath: PRDPathForWorkspace(repoPath, name),
+		Name:         name,
+		WorkDir:      TreePath(repoPath, name),
+		PRDPath:      PRDPathForWorkspace(repoPath, name),
+		ProgressPath: ProgressPathForWorkspace(repoPath, name),
 	}, nil
 }

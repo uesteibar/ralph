@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/uesteibar/ralph/internal/claude"
@@ -131,8 +130,7 @@ func buildConflictPrompt(ctx context.Context, r *shell.Runner, wc workspace.Work
 		data.Stories = formatStories(prdData.UserStories)
 	}
 
-	progressPath := filepath.Join(wc.WorkDir, ".ralph", "progress.txt")
-	progress, err := os.ReadFile(progressPath)
+	progress, err := os.ReadFile(wc.ProgressPath)
 	if err == nil {
 		data.Progress = string(progress)
 	}

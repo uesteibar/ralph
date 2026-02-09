@@ -145,9 +145,8 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.MaxIterations = DefaultMaxIterations
 	}
 
-	// Progress file lives at <workDir>/.ralph/progress.txt — inside the
-	// workspace tree when running in a workspace, or the repo root for base.
-	// If it doesn't exist yet, create it so the loop can proceed.
+	// Ensure the progress file exists. For workspaces this lives at
+	// .ralph/workspaces/<name>/progress.txt; for base at .ralph/progress.txt.
 	ensureProgressFile(cfg.ProgressPath)
 
 	for i := 1; i <= cfg.MaxIterations; i++ {
