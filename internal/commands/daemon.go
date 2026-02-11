@@ -84,7 +84,6 @@ func Daemon(args []string) error {
 	handler := events.NewFileHandler(logsDir)
 	defer handler.Close()
 
-	progressPath := filepath.Join(cfg.Repo.Path, ".ralph", "progress.txt")
 	promptsDir := cfg.PromptsDir()
 
 	// Run the loop.
@@ -92,7 +91,7 @@ func Daemon(args []string) error {
 		MaxIterations: *maxIter,
 		WorkDir:       wc.WorkDir,
 		PRDPath:       wc.PRDPath,
-		ProgressPath:  progressPath,
+		ProgressPath:  wc.ProgressPath,
 		PromptsDir:    promptsDir,
 		QualityChecks: cfg.QualityChecks,
 		EventHandler:  handler,
