@@ -17,7 +17,7 @@ func TestRenderLoopIteration_ContainsStoryDetails(t *testing.T) {
 		AcceptanceCriteria: []string{"Login form renders", "Tests pass"},
 	}
 
-	out, err := RenderLoopIteration(story, []string{"npm test", "npm run lint"}, ".ralph/progress.txt", "/abs/path/to/prd.json", "")
+	out, err := RenderLoopIteration(story, []string{"npm test", "npm run lint"}, ".ralph/progress.txt", "/abs/path/to/prd.json", "", "", "")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration failed: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestRenderLoopIteration_CompletionRequiresBothStoriesAndIntegrationTests(t 
 		Description: "Test",
 	}
 
-	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "")
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration failed: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestRenderLoopIteration_ContainsNoCoSignInstruction(t *testing.T) {
 		Description: "Test",
 	}
 
-	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "")
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration failed: %v", err)
 	}
@@ -72,6 +72,54 @@ func TestRenderLoopIteration_ContainsNoCoSignInstruction(t *testing.T) {
 	}
 	if !strings.Contains(out, "Do NOT add Co-Authored-By") {
 		t.Error("loop_iteration.md should instruct not to add Co-Authored-By headers")
+	}
+}
+
+func TestRenderLoopIteration_WithOverviewsPopulated(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test Story",
+		Description: "Test",
+	}
+
+	featureOverview := "This feature adds dark mode support across the entire application"
+	architectureOverview := "We use a theme context provider at the root with CSS custom properties"
+
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "", featureOverview, architectureOverview)
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+
+	checks := []string{
+		"## Feature Overview",
+		featureOverview,
+		"## Architecture Overview",
+		architectureOverview,
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderLoopIteration_WithEmptyOverviews(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test Story",
+		Description: "Test",
+	}
+
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "")
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+
+	if strings.Contains(out, "## Feature Overview") {
+		t.Error("output should not contain Feature Overview section when empty")
+	}
+	if strings.Contains(out, "## Architecture Overview") {
+		t.Error("output should not contain Architecture Overview section when empty")
 	}
 }
 
@@ -131,6 +179,66 @@ func TestRenderPRDNew_ContainsProjectName(t *testing.T) {
 	}
 	if !strings.Contains(out, ".ralph/state/prd.json") {
 		t.Error("output should contain PRD path")
+	}
+}
+
+func TestRenderPRDNew_OverviewSectionsExistWithCorrectContent(t *testing.T) {
+	out, err := RenderPRDNew(PRDNewData{
+		ProjectName: "TestProject",
+		PRDPath:     ".ralph/state/prd.json",
+	}, "")
+	if err != nil {
+		t.Fatalf("RenderPRDNew failed: %v", err)
+	}
+
+	// Both overview sections must exist
+	checks := []string{
+		"Proposing Feature Overview",
+		"Proposing Architecture Overview",
+		"at least 2 approaches",
+		"Other options considered",
+		"wait for user approval",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderPRDNew_OverviewSectionsInCorrectOrder(t *testing.T) {
+	out, err := RenderPRDNew(PRDNewData{
+		ProjectName: "TestProject",
+		PRDPath:     ".ralph/state/prd.json",
+	}, "")
+	if err != nil {
+		t.Fatalf("RenderPRDNew failed: %v", err)
+	}
+
+	// The flow order must be: clarify → feature overview → architecture overview → user stories → integration tests → /finish
+	markers := []struct {
+		label string
+		text  string
+	}{
+		{"clarifying questions", "clarifying questions"},
+		{"Feature Overview", "Proposing Feature Overview"},
+		{"Architecture Overview", "Proposing Architecture Overview"},
+		{"Story writing", "Story writing guidelines"},
+		{"Integration Tests", "Proposing Integration Tests"},
+	}
+
+	prevIdx := -1
+	prevLabel := ""
+	for _, m := range markers {
+		idx := strings.Index(out, m.text)
+		if idx < 0 {
+			t.Fatalf("output should contain %q", m.text)
+		}
+		if idx <= prevIdx {
+			t.Errorf("%q (pos %d) should come after %q (pos %d)", m.label, idx, prevLabel, prevIdx)
+		}
+		prevIdx = idx
+		prevLabel = m.label
 	}
 }
 
@@ -386,7 +494,7 @@ func TestRender_UsesOverrideTemplateWhenPresent(t *testing.T) {
 		Description: "Testing override",
 	}
 
-	out, err := RenderLoopIteration(story, nil, "", "", dir)
+	out, err := RenderLoopIteration(story, nil, "", "", dir, "", "")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration with override failed: %v", err)
 	}
@@ -419,7 +527,7 @@ func TestRender_FallsBackToEmbeddedWhenOverrideDirEmpty(t *testing.T) {
 	}
 
 	// Empty string overrideDir should use embedded
-	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "")
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration with empty overrideDir failed: %v", err)
 	}
@@ -458,7 +566,7 @@ func TestRender_OverrideForOneTemplateFallsBackForOthers(t *testing.T) {
 
 	// loop_iteration.md should use override
 	story := &prd.Story{ID: "US-099", Title: "Overridden", Description: "test"}
-	out, err := RenderLoopIteration(story, nil, "", "", dir)
+	out, err := RenderLoopIteration(story, nil, "", "", dir, "", "")
 	if err != nil {
 		t.Fatalf("RenderLoopIteration failed: %v", err)
 	}

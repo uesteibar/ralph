@@ -318,6 +318,71 @@ func TestFailedIntegrationTests_Empty_ReturnsNil(t *testing.T) {
 	}
 }
 
+func TestOverviewFields_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prd.json")
+
+	original := &PRD{
+		Project:               "TestProject",
+		BranchName:            "ralph/test",
+		Description:           "Test with overviews",
+		FeatureOverview:       "This feature adds X to improve Y",
+		ArchitectureOverview:  "We will use a layered architecture with Z",
+		UserStories:           []Story{{ID: "US-001", Title: "First", Passes: true}},
+	}
+
+	if err := Write(path, original); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	loaded, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if loaded.FeatureOverview != original.FeatureOverview {
+		t.Errorf("FeatureOverview = %q, want %q", loaded.FeatureOverview, original.FeatureOverview)
+	}
+	if loaded.ArchitectureOverview != original.ArchitectureOverview {
+		t.Errorf("ArchitectureOverview = %q, want %q", loaded.ArchitectureOverview, original.ArchitectureOverview)
+	}
+}
+
+func TestRead_PRDWithoutOverviewFields_ParsesCorrectly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prd.json")
+
+	jsonData := `{
+  "project": "OldProject",
+  "branchName": "ralph/old-feature",
+  "description": "Legacy PRD without overviews",
+  "userStories": [
+    {"id": "US-001", "title": "Story", "passes": true}
+  ]
+}`
+	if err := os.WriteFile(path, []byte(jsonData), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if loaded.Project != "OldProject" {
+		t.Errorf("Project = %q, want %q", loaded.Project, "OldProject")
+	}
+	if loaded.FeatureOverview != "" {
+		t.Errorf("FeatureOverview = %q, want empty string", loaded.FeatureOverview)
+	}
+	if loaded.ArchitectureOverview != "" {
+		t.Errorf("ArchitectureOverview = %q, want empty string", loaded.ArchitectureOverview)
+	}
+	if len(loaded.UserStories) != 1 {
+		t.Errorf("UserStories count = %d, want 1", len(loaded.UserStories))
+	}
+}
+
 func TestFailedIntegrationTests_AllPassing_ReturnsNil(t *testing.T) {
 	p := &PRD{
 		IntegrationTests: []IntegrationTest{

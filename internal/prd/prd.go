@@ -8,11 +8,13 @@ import (
 )
 
 type PRD struct {
-	Project          string            `json:"project"`
-	BranchName       string            `json:"branchName"`
-	Description      string            `json:"description"`
-	UserStories      []Story           `json:"userStories"`
-	IntegrationTests []IntegrationTest `json:"integrationTests,omitempty"`
+	Project               string            `json:"project"`
+	BranchName            string            `json:"branchName"`
+	Description           string            `json:"description"`
+	FeatureOverview       string            `json:"featureOverview,omitempty"`
+	ArchitectureOverview  string            `json:"architectureOverview,omitempty"`
+	UserStories           []Story           `json:"userStories"`
+	IntegrationTests      []IntegrationTest `json:"integrationTests,omitempty"`
 }
 
 type Story struct {

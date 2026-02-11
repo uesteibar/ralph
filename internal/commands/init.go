@@ -54,6 +54,8 @@ Use this exact schema:
   "project": "<project name from .ralph/ralph.yaml>",
   "branchName": "ralph/<feature-name-kebab-case>",
   "description": "<one-line description of the feature>",
+  "featureOverview": "<approved feature overview from the conversation>",
+  "architectureOverview": "<approved architecture overview from the conversation>",
   "userStories": [
     {
       "id": "US-001",
@@ -83,6 +85,13 @@ Use this exact schema:
   ]
 }
 ` + "```" + `
+
+## Overview Fields
+
+- Capture the approved feature overview and architecture overview from the conversation
+- ` + "`featureOverview`" + `: a concise summary of the agreed-upon feature design, including the chosen approach and alternatives considered
+- ` + "`architectureOverview`" + `: a concise summary of the agreed-upon architecture, including the chosen approach and alternatives considered
+- If no overviews were discussed, leave these fields as empty strings
 
 ## Story Rules
 

@@ -25,6 +25,43 @@ Ask only critical questions where the initial prompt is ambiguous. Focus on:
 
 Discuss, refine, and agree on a plan with the user.
 
+## Proposing Feature Overview
+
+**After clarifying questions are resolved**, propose a Feature Overview for the change.
+
+1. Consider at least 2 approaches to solve the problem at the feature level
+2. Compare the approaches, listing pros and cons of each
+3. Propose the strongest approach with a clear rationale
+4. List discarded alternatives under **Other options considered** with brief explanations of why they were rejected
+
+Present your proposed Feature Overview to the user and **wait for user approval before continuing** to the Architecture Overview.
+
+## Proposing Architecture Overview
+
+**After the Feature Overview is approved**, propose an Architecture Overview describing how the feature will be implemented technically.
+
+1. Consider at least 2 approaches for the technical architecture
+2. Compare the approaches, listing pros and cons of each
+3. Propose the strongest approach with a clear rationale
+4. List discarded alternatives under **Other options considered** with brief explanations of why they were rejected
+
+Present your proposed Architecture Overview to the user and **wait for user approval before continuing** to user stories.
+
+## Story writing guidelines
+
+Each story must be completable in ONE Ralph iteration (one context window).
+
+- Dependencies first: Schema → Backend → UI
+- User stories are small, self-contained and specific
+- When possible, user stories should be useful and usable by themselves, instead of building small parts of a larger feature
+- Acceptance criteria must be VERIFIABLE (not vague)
+- Include "Changes are covered by tests" in every story
+- Include "All quality checks pass" in every story
+- For UI stories: include "Verify in browser"
+
+Good: Add a database column, add a UI component, update a server action, add a filter
+Bad: Build entire dashboard, add full authentication (split these up)
+
 ## Proposing Integration Tests
 
 **After user stories are agreed upon**, propose integration tests to verify the feature works end-to-end. These are higher-level tests that verify the feature from a user's perspective.
@@ -58,18 +95,3 @@ Do these integration tests cover the key scenarios? Would you like to add, remov
 Once integration tests are confirmed, tell the user to run `/finish` to generate the PRD.
 
 Do NOT write any files.
-
-## Story writing guidelines
-
-Each story must be completable in ONE Ralph iteration (one context window).
-
-- Dependencies first: Schema → Backend → UI
-- User stories are small, self-contained and specific
-- When possible, user stories should be useful and usable by themselves, instead of building small parts of a larger feature
-- Acceptance criteria must be VERIFIABLE (not vague)
-- Include "Changes are covered by tests" in every story
-- Include "All quality checks pass" in every story
-- For UI stories: include "Verify in browser"
-
-Good: Add a database column, add a UI component, update a server action, add a filter
-Bad: Build entire dashboard, add full authentication (split these up)

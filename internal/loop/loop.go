@@ -230,7 +230,7 @@ func Run(ctx context.Context, cfg Config) error {
 			Title:   story.Title,
 		})
 
-		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath, cfg.PRDPath, cfg.PromptsDir)
+		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath, cfg.PRDPath, cfg.PromptsDir, currentPRD.FeatureOverview, currentPRD.ArchitectureOverview)
 		if err != nil {
 			return fmt.Errorf("rendering prompt for %s: %w", story.ID, err)
 		}

@@ -32,27 +32,31 @@ var TemplateNames = []string{
 
 // LoopIterationData holds the context for rendering a loop iteration prompt.
 type LoopIterationData struct {
-	StoryID            string
-	StoryTitle         string
-	StoryDescription   string
-	AcceptanceCriteria []string
-	QualityChecks      []string
-	ProgressPath       string
-	PRDPath            string
+	StoryID               string
+	StoryTitle            string
+	StoryDescription      string
+	AcceptanceCriteria    []string
+	QualityChecks         []string
+	ProgressPath          string
+	PRDPath               string
+	FeatureOverview       string
+	ArchitectureOverview  string
 }
 
 // RenderLoopIteration renders the prompt for a single Ralph loop iteration.
 // If overrideDir is non-empty and contains loop_iteration.md, that file is used
 // instead of the embedded template.
-func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath, prdPath, overrideDir string) (string, error) {
+func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath, prdPath, overrideDir, featureOverview, architectureOverview string) (string, error) {
 	data := LoopIterationData{
-		StoryID:            story.ID,
-		StoryTitle:         story.Title,
-		StoryDescription:   story.Description,
-		AcceptanceCriteria: story.AcceptanceCriteria,
-		QualityChecks:      qualityChecks,
-		ProgressPath:       progressPath,
-		PRDPath:            prdPath,
+		StoryID:              story.ID,
+		StoryTitle:           story.Title,
+		StoryDescription:     story.Description,
+		AcceptanceCriteria:   story.AcceptanceCriteria,
+		QualityChecks:        qualityChecks,
+		ProgressPath:         progressPath,
+		PRDPath:              prdPath,
+		FeatureOverview:      featureOverview,
+		ArchitectureOverview: architectureOverview,
 	}
 	return render("templates/loop_iteration.md", data, overrideDir)
 }

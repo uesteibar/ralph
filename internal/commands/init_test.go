@@ -409,3 +409,23 @@ func TestInit_CreatesWorkspaceInfrastructure(t *testing.T) {
 		t.Errorf("workspaces.json should contain empty array, got %q", string(data))
 	}
 }
+
+func TestFinishSkillContent_ContainsOverviewFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"featureOverview in JSON schema", `"featureOverview"`},
+		{"architectureOverview in JSON schema", `"architectureOverview"`},
+		{"instruction to capture feature overview", "feature overview"},
+		{"instruction to capture architecture overview", "architecture overview"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(finishSkillContent, tt.content) {
+				t.Errorf("finishSkillContent should contain %q", tt.content)
+			}
+		})
+	}
+}
