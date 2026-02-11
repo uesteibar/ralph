@@ -2,9 +2,11 @@ package claude
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,7 +103,12 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = opts.Dir
 	cmd.Stdin = strings.NewReader(opts.Prompt)
-	cmd.Stderr = os.Stderr
+
+	// Capture stderr while still showing it to the user. The rate limit
+	// message from Claude CLI is written to stderr, so we need to capture
+	// it for detection.
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -113,6 +120,8 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 	}
 
 	var result string
+	var assistantText strings.Builder
+	var nonJSONLines []string
 	scanner := bufio.NewScanner(stdout)
 	// Increase buffer size for large JSON lines
 	buf := make([]byte, 0, 1024*1024)
@@ -125,6 +134,11 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 		line := scanner.Text()
 		var ev streamEvent
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			// Capture non-JSON lines — Claude CLI may write error
+			// messages as plain text (e.g. usage limit warnings).
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				nonJSONLines = append(nonJSONLines, trimmed)
+			}
 			continue
 		}
 
@@ -137,6 +151,8 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 						Detail: toolDetail(content.Name, content.Input, workDir),
 					})
 				} else if content.Type == "text" && content.Text != "" {
+					assistantText.WriteString(content.Text)
+					assistantText.WriteByte('\n')
 					emitEvent(opts.EventHandler, events.AgentText{Text: content.Text})
 				}
 			}
@@ -154,20 +170,26 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 		})
 	}
 
-	if err := cmd.Wait(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return result, &shell.ExitError{
-				Code: exitErr.ExitCode(),
-				Cmd:  "claude",
-			}
-		}
-		return result, fmt.Errorf("running claude: %w", err)
+	waitErr := cmd.Wait()
+
+	// Check for usage limit in all available output. The rate limit message
+	// may appear in any of: the result event text, the assistant event text
+	// (most common — shown as AgentText in the TUI), stderr, or non-JSON
+	// stdout lines. We check all of them.
+	allOutput := result + "\n" + assistantText.String() + "\n" + stderrBuf.String() + "\n" + strings.Join(nonJSONLines, "\n")
+	if ulErr := parseUsageLimit(allOutput); ulErr != nil {
+		return result, ulErr
 	}
 
-	// Check for usage limit in the result text. The CLI exits with code 0
-	// when hitting the subscription cap, so we detect it from the output.
-	if ulErr := parseUsageLimit(result); ulErr != nil {
-		return result, ulErr
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			return result, &shell.ExitError{
+				Code:   exitErr.ExitCode(),
+				Stderr: strings.TrimSpace(stderrBuf.String()),
+				Cmd:    "claude",
+			}
+		}
+		return result, fmt.Errorf("running claude: %w", waitErr)
 	}
 
 	return result, nil
@@ -251,13 +273,17 @@ func (e *UsageLimitError) Error() string {
 // IsUsageLimitError returns true if the output text contains a Claude usage limit message.
 func IsUsageLimitError(output string) bool {
 	lower := strings.ToLower(output)
-	return strings.Contains(lower, "you've hit your limit") ||
-		strings.Contains(lower, "usage limit reached")
+	return strings.Contains(lower, "usage limit") ||
+		strings.Contains(lower, "you've hit your limit")
 }
 
 // resets Jan 2, 2026, 3pm (UTC)
 // resets January 2, 2026, 3:04pm (UTC)
-var resetsPattern = regexp.MustCompile(`resets\s+(\w+\s+\d{1,2},\s+\d{4},\s+\d{1,2}(?::\d{2})?(?:am|pm))\s+\(([^)]+)\)`)
+var resetsDateTimePattern = regexp.MustCompile(`resets\s+(\w+\s+\d{1,2},\s+\d{4},\s+\d{1,2}(?::\d{2})?(?:am|pm))\s+\(([^)]+)\)`)
+
+// resets 8pm (Europe/Madrid)
+// resets 3:30pm (UTC)
+var resetsTimeOnlyPattern = regexp.MustCompile(`resets\s+(\d{1,2}(?::\d{2})?(?:am|pm))\s+\(([^)]+)\)`)
 
 // Your limit will reset at 1pm (Etc/GMT+5)
 // Your limit will reset at 3:30pm (UTC)
@@ -280,14 +306,21 @@ func parseUsageLimit(output string) *UsageLimitError {
 }
 
 func parseResetTime(output string) time.Time {
-	// Try "resets Jan 2, 2026, 3pm (UTC)" pattern
-	if m := resetsPattern.FindStringSubmatch(output); m != nil {
+	// Try "resets Jan 2, 2026, 3pm (UTC)" — full date+time (most specific)
+	if m := resetsDateTimePattern.FindStringSubmatch(output); m != nil {
 		if t, err := parseDateTime(m[1], m[2]); err == nil {
 			return t
 		}
 	}
 
-	// Try "reset at 1pm (Etc/GMT+5)" pattern — time only, assume today or next occurrence
+	// Try "resets 8pm (Europe/Madrid)" — time only after "resets"
+	if m := resetsTimeOnlyPattern.FindStringSubmatch(output); m != nil {
+		if t, err := parseTimeOnly(m[1], m[2]); err == nil {
+			return t
+		}
+	}
+
+	// Try "reset at 1pm (Etc/GMT+5)" — time only after "reset at"
 	if m := resetAtPattern.FindStringSubmatch(output); m != nil {
 		if t, err := parseTimeOnly(m[1], m[2]); err == nil {
 			return t

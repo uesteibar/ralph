@@ -105,9 +105,12 @@ func TestIsUsageLimitError(t *testing.T) {
 		want   bool
 	}{
 		{"hit your limit", "You've hit your limit · resets Jan 1, 2026, 9am (UTC)", true},
+		{"hit your usage limit", "You've hit your usage limit for Claude", true},
 		{"usage limit reached", "Claude AI usage limit reached", true},
 		{"usage limit reached with reset", "Claude usage limit reached. Your limit will reset at 1pm (Etc/GMT+5)", true},
+		{"usage limit generic", "Your usage limit will reset at 3pm", true},
 		{"case insensitive", "you've hit your limit · resets tomorrow", true},
+		{"case insensitive usage limit", "USAGE LIMIT reached", true},
 		{"normal output", "Here is the implementation you requested", false},
 		{"empty", "", false},
 		{"contains limit but not usage", "The rate limit for this API is 100 requests", false},
@@ -242,5 +245,176 @@ func TestUsageLimitError_ErrorString(t *testing.T) {
 	got := err.Error()
 	if got == "" {
 		t.Error("Error() should not return empty string")
+	}
+}
+
+// TestParseUsageLimit_DetectsLimitInStderrPortion verifies that usage limit
+// detection works when the limit message appears in the stderr portion of
+// a combined "result + \n + stderr" string (as used by runWithStreamJSON).
+func TestParseUsageLimit_DetectsLimitInStderrPortion(t *testing.T) {
+	// Simulate: result is empty, stderr contains the limit message.
+	// This is the most common real-world scenario — Claude CLI writes
+	// the rate limit message to stderr and exits.
+	combined := "\n" + "You've hit your limit · resets Feb 11, 2026, 3pm (UTC)"
+	got := parseUsageLimit(combined)
+
+	if got == nil {
+		t.Fatal("parseUsageLimit returned nil — failed to detect limit in stderr portion")
+	}
+
+	want := time.Date(2026, time.February, 11, 15, 0, 0, 0, time.UTC)
+	if !got.ResetAt.Equal(want) {
+		t.Errorf("ResetAt = %v, want %v", got.ResetAt, want)
+	}
+}
+
+// TestParseUsageLimit_HitYourUsageLimit verifies detection of the actual
+// Claude CLI message format "You've hit your usage limit" (note the word
+// "usage" between "your" and "limit").
+func TestParseUsageLimit_HitYourUsageLimit(t *testing.T) {
+	output := "You've hit your usage limit for Claude · resets Feb 11, 2026, 5pm (UTC)"
+	got := parseUsageLimit(output)
+
+	if got == nil {
+		t.Fatal("parseUsageLimit returned nil — failed to detect 'hit your usage limit'")
+	}
+
+	want := time.Date(2026, time.February, 11, 17, 0, 0, 0, time.UTC)
+	if !got.ResetAt.Equal(want) {
+		t.Errorf("ResetAt = %v, want %v", got.ResetAt, want)
+	}
+}
+
+// TestParseUsageLimit_HitYourUsageLimitInStderr verifies the actual real-world
+// scenario: result is empty, stderr has the "usage limit" message.
+func TestParseUsageLimit_HitYourUsageLimitInStderr(t *testing.T) {
+	// Simulate combined output: empty result + stderr with usage limit
+	combined := "\n\n" + "You've hit your usage limit for Claude. Your limit will reset at 5pm (UTC)"
+	got := parseUsageLimit(combined)
+
+	if got == nil {
+		t.Fatal("parseUsageLimit returned nil — failed to detect usage limit in stderr")
+	}
+
+	if got.ResetAt.Hour() != 17 {
+		t.Errorf("ResetAt.Hour() = %d, want 17", got.ResetAt.Hour())
+	}
+}
+
+// TestParseUsageLimit_DetectsLimitInResultPortion verifies detection still
+// works when the message is in the result portion (original behavior).
+func TestParseUsageLimit_DetectsLimitInResultPortion(t *testing.T) {
+	// Simulate: result has the limit, stderr is empty.
+	combined := "You've hit your limit · resets Feb 11, 2026, 3pm (UTC)" + "\n"
+	got := parseUsageLimit(combined)
+
+	if got == nil {
+		t.Fatal("parseUsageLimit returned nil — failed to detect limit in result portion")
+	}
+
+	want := time.Date(2026, time.February, 11, 15, 0, 0, 0, time.UTC)
+	if !got.ResetAt.Equal(want) {
+		t.Errorf("ResetAt = %v, want %v", got.ResetAt, want)
+	}
+}
+
+// TestParseUsageLimit_CombinedOutputNoLimit verifies that normal output
+// combined with normal stderr does NOT trigger false positive detection.
+func TestParseUsageLimit_CombinedOutputNoLimit(t *testing.T) {
+	combined := "Here is the implementation\n" + "Some stderr debug output\n"
+	got := parseUsageLimit(combined)
+
+	if got != nil {
+		t.Errorf("parseUsageLimit should return nil for non-limit output, got %+v", got)
+	}
+}
+
+// TestParseUsageLimit_StderrWithResetAtPattern verifies the "reset at" time-only
+// pattern works when it appears in stderr.
+func TestParseUsageLimit_StderrWithResetAtPattern(t *testing.T) {
+	combined := "\n" + "Claude usage limit reached. Your limit will reset at 5pm (UTC)"
+	got := parseUsageLimit(combined)
+
+	if got == nil {
+		t.Fatal("parseUsageLimit returned nil — failed to detect limit with reset-at pattern in stderr")
+	}
+
+	if got.ResetAt.Hour() != 17 {
+		t.Errorf("ResetAt.Hour() = %d, want 17", got.ResetAt.Hour())
+	}
+}
+
+// TestParseUsageLimit_StderrWithNoResetTime verifies fallback works when
+// stderr has limit message but no parseable reset time.
+func TestParseUsageLimit_StderrWithNoResetTime(t *testing.T) {
+	combined := "\n" + "You've hit your limit"
+	got := parseUsageLimit(combined)
+
+	if got == nil {
+		t.Fatal("parseUsageLimit returned nil — failed to detect bare limit message in stderr")
+	}
+
+	// Should fall back to ~30 minutes from now
+	expectedMin := time.Now().Add(29 * time.Minute)
+	expectedMax := time.Now().Add(31 * time.Minute)
+	if got.ResetAt.Before(expectedMin) || got.ResetAt.After(expectedMax) {
+		t.Errorf("ResetAt = %v, want between %v and %v", got.ResetAt, expectedMin, expectedMax)
+	}
+}
+
+// TestParseUsageLimit_ResetsTimeOnly verifies the "resets 8pm (Europe/Madrid)"
+// format — the actual format observed from Claude CLI in stream-json mode.
+func TestParseUsageLimit_ResetsTimeOnly(t *testing.T) {
+	output := "You've hit your limit · resets 8pm (Europe/Madrid)"
+	got := parseUsageLimit(output)
+
+	if got == nil {
+		t.Fatal("parseUsageLimit returned nil — failed to detect 'resets <time> (<tz>)' format")
+	}
+
+	if got.ResetAt.Hour() != 20 {
+		t.Errorf("ResetAt.Hour() = %d, want 20", got.ResetAt.Hour())
+	}
+
+	loc, _ := time.LoadLocation("Europe/Madrid")
+	if got.ResetAt.Location().String() != loc.String() {
+		t.Errorf("ResetAt.Location() = %s, want %s", got.ResetAt.Location(), loc)
+	}
+}
+
+// TestParseUsageLimit_ResetsTimeOnlyWithMinutes verifies "resets 3:30pm (UTC)".
+func TestParseUsageLimit_ResetsTimeOnlyWithMinutes(t *testing.T) {
+	output := "You've hit your limit · resets 3:30pm (UTC)"
+	got := parseUsageLimit(output)
+
+	if got == nil {
+		t.Fatal("parseUsageLimit returned nil")
+	}
+
+	if got.ResetAt.Hour() != 15 || got.ResetAt.Minute() != 30 {
+		t.Errorf("ResetAt = %v, want 15:30", got.ResetAt)
+	}
+}
+
+// TestParseUsageLimit_InAssistantText verifies detection when the rate limit
+// message arrives as assistant event text (the most common real-world scenario).
+// In stream-json mode, the limit message comes through as Claude's text
+// response in an assistant event, not in the result event's result field.
+func TestParseUsageLimit_InAssistantText(t *testing.T) {
+	// Simulate: result is empty (result event has no text), but assistant
+	// event text contains the rate limit message.
+	result := ""
+	assistantText := "You've hit your limit · resets 8pm (Europe/Madrid)\n"
+	stderr := ""
+
+	combined := result + "\n" + assistantText + "\n" + stderr + "\n"
+	got := parseUsageLimit(combined)
+
+	if got == nil {
+		t.Fatal("parseUsageLimit returned nil — failed to detect limit in assistant text")
+	}
+
+	if got.ResetAt.Hour() != 20 {
+		t.Errorf("ResetAt.Hour() = %d, want 20", got.ResetAt.Hour())
 	}
 }
