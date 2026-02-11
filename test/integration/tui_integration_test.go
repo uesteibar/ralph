@@ -69,8 +69,8 @@ func TestIT001_TUILaunchesByDefault(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		// Create model (same path as runLoopTUI in run.go)
-		model := tui.NewModel(workspaceName, prdPath, cancel)
+		// Create model (same path as run.go TUI mode)
+		model := tui.NewModel(workspaceName, prdPath)
 
 		// Verify workspace name is set
 		if model.WorkspaceName() != workspaceName {
@@ -142,7 +142,7 @@ func TestIT001_TUILaunchesByDefault(t *testing.T) {
 
 	// Step 4: Verify TUI processes events and updates the viewport
 	t.Run("TUI model processes event sequence", func(t *testing.T) {
-		model := tui.NewModel("my-ws", "", nil)
+		model := tui.NewModel("my-ws", "")
 
 		// Make ready
 		updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -419,7 +419,7 @@ func TestIT003_EventEmitterProducesCorrectEvents(t *testing.T) {
 		plainHandler := &events.PlainTextHandler{W: &buf}
 
 		// TUI model (acts as handler via eventMsg)
-		model := tui.NewModel("ws", "", nil)
+		model := tui.NewModel("ws", "")
 		updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 		model = updated.(tui.Model)
 

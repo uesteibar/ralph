@@ -1,11 +1,18 @@
 package commands
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,12 +21,45 @@ import (
 	"github.com/uesteibar/ralph/internal/gitops"
 	"github.com/uesteibar/ralph/internal/loop"
 	"github.com/uesteibar/ralph/internal/prd"
+	"github.com/uesteibar/ralph/internal/runstate"
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/tui"
+	"github.com/uesteibar/ralph/internal/workspace"
 )
 
-// Run executes the Ralph loop using workspace context to determine
-// the working directory and PRD location.
+// spawnDaemonFn spawns the ralph _daemon process. Package-level var for testability.
+var spawnDaemonFn = func(workspaceName string, maxIter int) (*exec.Cmd, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("finding executable path: %w", err)
+	}
+	cmd := exec.Command(exe, "_daemon",
+		"--workspace", workspaceName,
+		"--max-iterations", fmt.Sprintf("%d", maxIter))
+	cmd.SysProcAttr = spawnSysProcAttr()
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting daemon: %w", err)
+	}
+	// Release the child so it can outlive us.
+	go cmd.Wait()
+	return cmd, nil
+}
+
+// waitForPIDFileFn waits for the PID file to appear. Package-level var for testability.
+var waitForPIDFileFn = func(wsPath string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if runstate.IsRunning(wsPath) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("daemon did not start within %s", timeout)
+}
+
+// Run executes the Ralph loop by spawning a daemon and attaching a viewer.
 func Run(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	configPath := AddProjectConfigFlag(fs)
@@ -30,6 +70,8 @@ func Run(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// verbose is parsed but only used if we fall back to in-process mode in the future
+	_ = verbose
 
 	cfg, err := ResolveConfig(*configPath)
 	if err != nil {
@@ -72,83 +114,207 @@ func Run(args []string) error {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "workspace=%s workDir=%s prdPath=%s\n", wc.Name, wc.WorkDir, wc.PRDPath)
+	wsPath := workspace.WorkspacePath(cfg.Repo.Path, wc.Name)
 
-	progressPath := wc.ProgressPath
-	promptsDir := cfg.PromptsDir()
+	// Check if daemon is already running; if not, spawn one.
+	alreadyRunning := runstate.IsRunning(wsPath)
+	if !alreadyRunning {
+		fmt.Fprintf(os.Stderr, "workspace=%s workDir=%s prdPath=%s\n", wc.Name, wc.WorkDir, wc.PRDPath)
+		_, err := spawnDaemonFn(wc.Name, *maxIter)
+		if err != nil {
+			return fmt.Errorf("spawning daemon: %w", err)
+		}
+		if err := waitForPIDFileFn(wsPath, 5*time.Second); err != nil {
+			return fmt.Errorf("daemon failed to start: %w", err)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "daemon already running for workspace %s\n", wc.Name)
+	}
+
+	logsDir := filepath.Join(wsPath, "logs")
 
 	if *noTUI {
-		return runLoopPlainText(ctx, wc.WorkDir, wc.PRDPath, *maxIter, cfg.QualityChecks, *verbose, progressPath, promptsDir)
+		return tailLogsPlainText(ctx, wsPath, logsDir)
 	}
 
-	return runLoopTUI(ctx, wc.WorkDir, wc.PRDPath, *maxIter, cfg.QualityChecks, *verbose, progressPath, promptsDir, wc.Name)
+	return tailLogsTUI(wsPath, logsDir, wc.Name, wc.PRDPath)
 }
 
-func runLoopPlainText(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath, promptsDir string) error {
-	handler := &events.PlainTextHandler{W: os.Stderr}
-	err := runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, promptsDir, handler)
-	printRunResult(err)
-	if errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return err
-}
-
-func runLoopTUI(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath, promptsDir string, workspaceName string) error {
+// tailLogsPlainText tails JSONL log files and streams events to stderr via PlainTextHandler.
+// On Ctrl+C (SIGINT), it stops tailing and sends SIGTERM to the daemon.
+func tailLogsPlainText(ctx context.Context, wsPath, logsDir string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	model := tui.NewModel(workspaceName, prdPath, cancel)
+	// Handle Ctrl+C: stop tailing + kill daemon.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		select {
+		case <-sigCh:
+			stopDaemon(wsPath)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	defer signal.Stop(sigCh)
+
+	handler := &events.PlainTextHandler{W: os.Stderr}
+
+	// Track which files we've read and where we left off.
+	offsets := make(map[string]int64)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
+		// Check if daemon is still running.
+		if !runstate.IsRunning(wsPath) {
+			// Daemon stopped — do one final read then exit.
+			readNewLogEntries(logsDir, offsets, handler)
+			return printDaemonResult(wsPath)
+		}
+
+		readNewLogEntries(logsDir, offsets, handler)
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// tailLogsTUI opens a BubbleTea TUI that reads events from JSONL log files.
+// Historical events are replayed on startup; live events appear in real-time.
+// d=detach (quit TUI, daemon continues), q=stop (SIGTERM to daemon, then quit).
+func tailLogsTUI(wsPath, logsDir, workspaceName, prdPath string) error {
+	model := tui.NewModel(workspaceName, prdPath)
+	model.SetStopDaemonFn(func() {
+		stopDaemon(wsPath)
+		// Wait briefly for daemon to exit
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if !runstate.IsRunning(wsPath) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	handler := tui.NewHandler(p)
 
-	// Run the loop in a background goroutine; the BubbleTea event loop
-	// owns the main goroutine. When the loop finishes, we send tea.Quit.
-	errCh := make(chan error, 1)
+	// Read log events via LogReader in a goroutine, forwarding to the TUI handler.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reader := events.NewLogReader(logsDir)
 	go func() {
-		err := runLoopWithHandler(ctx, workDir, prdPath, maxIter, qualityChecks, verbose, progressPath, promptsDir, handler)
-		errCh <- err
-		p.Send(tea.Quit())
+		reader.Run(ctx)
+	}()
+	go func() {
+		for evt := range reader.Events() {
+			handler.Handle(evt)
+		}
+		// LogReader channel closed — daemon likely exited.
+		p.Send(tui.MakeLogReaderDoneMsg())
+	}()
+
+	// Monitor daemon liveness: when daemon exits, cancel LogReader so it closes its channel.
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+				if !runstate.IsRunning(wsPath) {
+					// Give LogReader one final poll cycle to drain remaining events.
+					time.Sleep(300 * time.Millisecond)
+					cancel()
+					return
+				}
+			}
+		}
 	}()
 
 	if _, err := p.Run(); err != nil {
-		return err
+		return fmt.Errorf("running TUI: %w", err)
 	}
 
-	// The goroutine should have finished before p.Run() returns (it sends
-	// tea.Quit). Use a short timeout as a safety net for Ctrl+C exits
-	// where the goroutine may still be running.
-	select {
-	case loopErr := <-errCh:
-		printRunResult(loopErr)
-		if errors.Is(loopErr, context.Canceled) {
-			return nil
+	return printDaemonResult(wsPath)
+}
+
+// readNewLogEntries reads new JSONL lines from all log files in logsDir.
+func readNewLogEntries(logsDir string, offsets map[string]int64, handler events.EventHandler) {
+	files, err := filepath.Glob(filepath.Join(logsDir, "*.jsonl"))
+	if err != nil || len(files) == 0 {
+		return
+	}
+	sort.Strings(files)
+
+	for _, path := range files {
+		offset := offsets[path]
+		f, err := os.Open(path)
+		if err != nil {
+			continue
 		}
-		return loopErr
-	case <-time.After(500 * time.Millisecond):
-		return nil
+
+		if offset > 0 {
+			if _, err := f.Seek(offset, io.SeekStart); err != nil {
+				f.Close()
+				continue
+			}
+		}
+
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			evt, err := events.UnmarshalEvent([]byte(line))
+			if err != nil {
+				continue
+			}
+			handler.Handle(evt)
+		}
+
+		newOffset, _ := f.Seek(0, io.SeekCurrent)
+		offsets[path] = newOffset
+		f.Close()
 	}
 }
 
-func printRunResult(err error) {
-	if err == nil {
+// stopDaemon reads the daemon PID and sends SIGTERM.
+func stopDaemon(wsPath string) {
+	pid, err := runstate.ReadPID(wsPath)
+	if err != nil {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	sendTermSignal(proc)
+}
+
+// printDaemonResult reads the daemon's status file and prints the outcome.
+func printDaemonResult(wsPath string) error {
+	status, err := runstate.ReadStatus(wsPath)
+	if err != nil {
+		return nil
+	}
+	switch status.Result {
+	case runstate.ResultSuccess:
 		doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
 		fmt.Fprintf(os.Stderr, "\n%s All work complete.\n\n", doneStyle.Render("✓"))
 		fmt.Fprintf(os.Stderr, "Run `ralph done` to squash and merge your changes back to base.\n")
-	} else if errors.Is(err, context.Canceled) {
+	case runstate.ResultCancelled:
 		fmt.Fprintln(os.Stderr, "\nStopped.")
+	case runstate.ResultFailed:
+		if status.Error != "" {
+			return errors.New(status.Error)
+		}
+		return errors.New("daemon failed")
 	}
-}
-
-func runLoopWithHandler(ctx context.Context, workDir, prdPath string, maxIter int, qualityChecks []string, verbose bool, progressPath, promptsDir string, handler events.EventHandler) error {
-	return loop.Run(ctx, loop.Config{
-		MaxIterations: maxIter,
-		WorkDir:       workDir,
-		PRDPath:       prdPath,
-		ProgressPath:  progressPath,
-		PromptsDir:    promptsDir,
-		QualityChecks: qualityChecks,
-		Verbose:       verbose,
-		EventHandler:  handler,
-	})
+	return nil
 }

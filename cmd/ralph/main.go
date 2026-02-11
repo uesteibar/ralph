@@ -19,6 +19,8 @@ Usage:
   ralph rebase [branch] [--project-config path] [--workspace name]   Rebase onto base branch
   ralph new <name> [--project-config path]                Alias for ralph workspaces new
   ralph eject [--project-config path]              Export prompt templates to .ralph/prompts/ for customization
+  ralph tui [--project-config path]            Multi-workspace overview TUI
+  ralph stop [<name>] [--project-config path] [--workspace name]   Stop a running daemon
   ralph done [--project-config path] [--workspace name]   Squash-merge and clean up
   ralph status [--project-config path] [--short] Show workspace and story progress
   ralph overview [--project-config path]         Show progress across all workspaces
@@ -75,6 +77,10 @@ func main() {
 		err = commands.Rebase(rest)
 	case "eject":
 		err = commands.Eject(rest)
+	case "tui":
+		err = commands.Tui(rest)
+	case "stop":
+		err = commands.Stop(rest)
 	case "done":
 		err = commands.Done(rest)
 	case "new":
@@ -84,6 +90,8 @@ func main() {
 		err = commands.Workspaces(rest)
 	case "shell-init":
 		err = commands.ShellInit(rest)
+	case "_daemon":
+		err = commands.Daemon(rest)
 	case "help", "-h", "--help":
 		usage()
 		return

@@ -20,23 +20,23 @@ type overlay struct {
 var (
 	overlayBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("5")).
+				BorderForeground(lipgloss.AdaptiveColor{Light: "#6639ba", Dark: "#d2a8ff"}).
 				Padding(1, 2)
 
 	overlayTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("5"))
+				Foreground(lipgloss.AdaptiveColor{Light: "#6639ba", Dark: "#d2a8ff"})
 
 	overlayLabelStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("6"))
+				Foreground(lipgloss.AdaptiveColor{Light: "#0550ae", Dark: "#58a6ff"})
 
 	overlayPassStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("2")).
+				Foreground(lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"}).
 				Bold(true)
 
 	overlayFailStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("1")).
+				Foreground(lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"}).
 				Bold(true)
 )
 
@@ -186,9 +186,10 @@ func renderHelpOverlay() string {
 		{"↑/k", "Navigate up (sidebar items / scroll)"},
 		{"↓/j", "Navigate down (sidebar items / scroll)"},
 		{"Enter", "Open detail overlay for selected item"},
-		{"Esc", "Close overlay / dismiss"},
+		{"Esc", "Close overlay / detach from TUI"},
 		{"?", "Toggle this help overlay"},
-		{"q", "Graceful stop (finish current task, then exit)"},
+		{"d", "Detach from TUI (daemon keeps running)"},
+		{"q", "Stop the running loop (with confirmation)"},
 		{"Ctrl+C", "Immediate stop (exit now)"},
 	}
 

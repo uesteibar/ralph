@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -23,6 +22,12 @@ type eventMsg struct {
 type prdLoadedMsg struct {
 	prd *prd.PRD
 }
+
+// daemonStoppedMsg is sent when the daemon process has exited after SIGTERM.
+type daemonStoppedMsg struct{}
+
+// logReaderDoneMsg is sent when the LogReader channel is closed (daemon exited).
+type logReaderDoneMsg struct{}
 
 // Model is the BubbleTea model for the Ralph TUI.
 type Model struct {
@@ -46,9 +51,11 @@ type Model struct {
 	iteration     int
 	maxIterations int
 
-	// Graceful stop
-	quitting   bool
-	cancelFunc context.CancelFunc
+	// Stop / detach
+	quitting       bool
+	confirmingStop bool
+	stopDaemonFn   func() // sends SIGTERM to daemon PID, waits for exit
+	attached       bool   // true when attached to daemon in multi-workspace TUI
 
 	width  int
 	height int
@@ -56,26 +63,29 @@ type Model struct {
 
 var (
 	statusBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("8")).
-			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.AdaptiveColor{Light: "#d8dee4", Dark: "#30363d"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#24292f", Dark: "#e6edf3"}).
 			Padding(0, 1)
 	statusKeyStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("8")).
-			Foreground(lipgloss.Color("6")).
+			Background(lipgloss.AdaptiveColor{Light: "#d8dee4", Dark: "#30363d"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#0550ae", Dark: "#58a6ff"}).
 			Padding(0, 1).
 			Bold(true)
 )
 
-// NewModel creates a new TUI model with the given workspace name, PRD path,
-// and optional cancel function for graceful stop.
-func NewModel(workspaceName string, prdPath string, cancelFunc context.CancelFunc) Model {
+// NewModel creates a new TUI model with the given workspace name and PRD path.
+func NewModel(workspaceName string, prdPath string) Model {
 	return Model{
 		workspaceName: workspaceName,
 		prdPath:       prdPath,
-		cancelFunc:    cancelFunc,
 		sidebar:       newSidebar(),
 		focus:         focusRight, // default focus on agent log
 	}
+}
+
+// SetStopDaemonFn sets the function called when the user confirms stopping the daemon.
+func (m *Model) SetStopDaemonFn(fn func()) {
+	m.stopDaemonFn = fn
 }
 
 // readPRDCmd returns a tea.Cmd that reads the PRD from disk.
@@ -104,6 +114,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Ctrl+C always triggers immediate stop
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+
+		// When confirming stop, only accept y/n/Esc
+		if m.confirmingStop {
+			switch msg.String() {
+			case "y":
+				m.confirmingStop = false
+				m.quitting = true
+				if m.stopDaemonFn != nil {
+					m.stopDaemonFn()
+				}
+				return m, waitForDaemonExit()
+			case "n", "esc":
+				m.confirmingStop = false
+				return m, nil
+			}
+			return m, nil
 		}
 
 		// When help overlay is visible, intercept keys
@@ -135,7 +162,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.overlay.scrollDown()
 				return m, nil
 			case "q":
-				m.initiateGracefulStop()
+				m.overlay.hide()
+				m.confirmingStop = true
 				return m, nil
 			}
 			return m, nil
@@ -143,8 +171,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "q":
-			m.initiateGracefulStop()
+			m.confirmingStop = true
 			return m, nil
+		case "d", "esc":
+			return m, tea.Quit
 		case "?":
 			m.helpOverlay.show(renderHelpOverlay(), m.height)
 			return m, nil
@@ -172,6 +202,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+
+	case daemonStoppedMsg:
+		return m, tea.Quit
+
+	case logReaderDoneMsg:
+		return m, tea.Quit
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -216,14 +252,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// initiateGracefulStop signals the loop to finish its current task and exit.
-func (m *Model) initiateGracefulStop() {
-	if m.quitting {
-		return
-	}
-	m.quitting = true
-	if m.cancelFunc != nil {
-		m.cancelFunc()
+// waitForDaemonExit returns a tea.Cmd that signals daemon has stopped.
+// The actual SIGTERM was already sent synchronously; this just signals the TUI.
+func waitForDaemonExit() tea.Cmd {
+	return func() tea.Msg {
+		return daemonStoppedMsg{}
 	}
 }
 
@@ -318,6 +351,13 @@ func (m Model) View() string {
 	content := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	base := content + "\n" + m.statusBar()
 
+	if m.confirmingStop {
+		prompt := confirmPromptStyle.Render("Stop the running loop? (y/n)")
+		return lipgloss.Place(m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			prompt)
+	}
+
 	if m.helpOverlay.visible {
 		return m.helpOverlay.view(m.width, m.height)
 	}
@@ -330,9 +370,21 @@ func (m Model) View() string {
 }
 
 var stoppingStyle = lipgloss.NewStyle().
-	Background(lipgloss.Color("1")).
-	Foreground(lipgloss.Color("15")).
+	Background(lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"}).
+	Foreground(lipgloss.Color("#ffffff")).
 	Padding(0, 1).
+	Bold(true)
+
+var attachedStyle = lipgloss.NewStyle().
+	Background(lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"}).
+	Foreground(lipgloss.Color("#ffffff")).
+	Padding(0, 1).
+	Bold(true)
+
+var confirmPromptStyle = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#d29922"}).
+	Padding(1, 3).
 	Bold(true)
 
 func (m Model) statusBar() string {
@@ -354,6 +406,9 @@ func (m Model) statusBar() string {
 	}
 	if iter != "" {
 		left += " " + iter
+	}
+	if m.attached {
+		left += " " + attachedStyle.Render("ATTACHED")
 	}
 	if m.quitting {
 		left += " " + stoppingStyle.Render("Stopping...")
@@ -426,7 +481,17 @@ func (m Model) Quitting() bool {
 	return m.quitting
 }
 
+// ConfirmingStop returns whether the model is showing the stop confirmation prompt (for testing).
+func (m Model) ConfirmingStop() bool {
+	return m.confirmingStop
+}
+
 // MakeEventMsg wraps an events.Event as a tea.Msg for use in integration tests.
 func MakeEventMsg(e events.Event) tea.Msg {
 	return eventMsg{event: e}
+}
+
+// MakeLogReaderDoneMsg creates a logReaderDoneMsg for external use.
+func MakeLogReaderDoneMsg() tea.Msg {
+	return logReaderDoneMsg{}
 }

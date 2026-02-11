@@ -14,55 +14,55 @@ type EventHandler interface {
 
 // ToolUse is emitted when Claude invokes a tool (Read, Edit, Bash, etc.).
 type ToolUse struct {
-	Name    string
-	Detail  string
-	WorkDir string
+	Name    string `json:"name"`
+	Detail  string `json:"detail"`
+	WorkDir string `json:"workDir"`
 }
 
 func (ToolUse) eventTag() {}
 
 // AgentText is emitted when Claude produces text output.
 type AgentText struct {
-	Text string
+	Text string `json:"text"`
 }
 
 func (AgentText) eventTag() {}
 
 // InvocationDone is emitted when a Claude invocation completes.
 type InvocationDone struct {
-	NumTurns   int
-	DurationMS int
+	NumTurns   int `json:"numTurns"`
+	DurationMS int `json:"durationMs"`
 }
 
 func (InvocationDone) eventTag() {}
 
 // IterationStart is emitted at the beginning of each loop iteration.
 type IterationStart struct {
-	Iteration     int
-	MaxIterations int
+	Iteration     int `json:"iteration"`
+	MaxIterations int `json:"maxIterations"`
 }
 
 func (IterationStart) eventTag() {}
 
 // StoryStarted is emitted when the loop begins working on a user story.
 type StoryStarted struct {
-	StoryID string
-	Title   string
+	StoryID string `json:"storyId"`
+	Title   string `json:"title"`
 }
 
 func (StoryStarted) eventTag() {}
 
 // QAPhaseStarted is emitted when the QA verification or fix phase begins.
 type QAPhaseStarted struct {
-	Phase string // "verification" or "fix"
+	Phase string `json:"phase"` // "verification" or "fix"
 }
 
 func (QAPhaseStarted) eventTag() {}
 
 // UsageLimitWait is emitted when a usage limit is hit and the loop is waiting.
 type UsageLimitWait struct {
-	WaitDuration time.Duration
-	ResetAt      time.Time
+	WaitDuration time.Duration `json:"waitDuration"`
+	ResetAt      time.Time     `json:"resetAt"`
 }
 
 func (UsageLimitWait) eventTag() {}

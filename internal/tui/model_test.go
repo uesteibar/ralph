@@ -15,21 +15,21 @@ import (
 )
 
 func TestNewModel_SetsWorkspaceName(t *testing.T) {
-	m := NewModel("my-feature", "", nil)
+	m := NewModel("my-feature", "")
 	if m.WorkspaceName() != "my-feature" {
 		t.Errorf("expected workspace name 'my-feature', got %q", m.WorkspaceName())
 	}
 }
 
 func TestNewModel_DefaultFocusRight(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	if m.Focus() != focusRight {
 		t.Errorf("expected default focus on right pane, got %d", m.Focus())
 	}
 }
 
 func TestModel_HandleEvent_ToolUse_WithDetail(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.handleEvent(events.ToolUse{Name: "Read", Detail: "./file.go"})
 
 	if len(m.Lines()) != 1 {
@@ -44,7 +44,7 @@ func TestModel_HandleEvent_ToolUse_WithDetail(t *testing.T) {
 }
 
 func TestModel_HandleEvent_ToolUse_WithoutDetail(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.handleEvent(events.ToolUse{Name: "Glob"})
 
 	if len(m.Lines()) != 1 {
@@ -56,7 +56,7 @@ func TestModel_HandleEvent_ToolUse_WithoutDetail(t *testing.T) {
 }
 
 func TestModel_HandleEvent_AgentText(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.handleEvent(events.AgentText{Text: "Hello\nWorld"})
 
 	if len(m.Lines()) != 2 {
@@ -71,7 +71,7 @@ func TestModel_HandleEvent_AgentText(t *testing.T) {
 }
 
 func TestModel_HandleEvent_InvocationDone(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.handleEvent(events.InvocationDone{NumTurns: 5, DurationMS: 12000})
 
 	if len(m.Lines()) != 1 {
@@ -90,7 +90,7 @@ func TestModel_HandleEvent_InvocationDone(t *testing.T) {
 }
 
 func TestModel_HandleEvent_IterationStart(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.handleEvent(events.IterationStart{Iteration: 3, MaxIterations: 20})
 
 	if m.Iteration() != 3 {
@@ -108,7 +108,7 @@ func TestModel_HandleEvent_IterationStart(t *testing.T) {
 }
 
 func TestModel_HandleEvent_StoryStarted(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.handleEvent(events.StoryStarted{StoryID: "US-001", Title: "Build auth"})
 
 	if m.CurrentStory() != "US-001: Build auth" {
@@ -126,7 +126,7 @@ func TestModel_HandleEvent_StoryStarted(t *testing.T) {
 }
 
 func TestModel_HandleEvent_StoryStarted_UpdatesSidebar(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	// Pre-populate sidebar
 	m.sidebar.items = []sidebarItem{
 		{id: "US-001", title: "First", passes: false},
@@ -145,7 +145,7 @@ func TestModel_HandleEvent_StoryStarted_UpdatesSidebar(t *testing.T) {
 }
 
 func TestModel_HandleEvent_QAPhaseStarted(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.handleEvent(events.QAPhaseStarted{Phase: "verification"})
 
 	if m.CurrentStory() != "QA verification" {
@@ -163,7 +163,7 @@ func TestModel_HandleEvent_QAPhaseStarted(t *testing.T) {
 }
 
 func TestModel_HandleEvent_UsageLimitWait(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	resetAt := time.Date(2026, 2, 5, 15, 30, 0, 0, time.UTC)
 	m.handleEvent(events.UsageLimitWait{
 		WaitDuration: 30 * time.Minute,
@@ -183,7 +183,7 @@ func TestModel_HandleEvent_UsageLimitWait(t *testing.T) {
 }
 
 func TestModel_MultipleEvents_AccumulateLines(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.handleEvent(events.IterationStart{Iteration: 1, MaxIterations: 5})
 	m.handleEvent(events.StoryStarted{StoryID: "US-001", Title: "Auth"})
 	m.handleEvent(events.ToolUse{Name: "Read", Detail: "main.go"})
@@ -195,7 +195,7 @@ func TestModel_MultipleEvents_AccumulateLines(t *testing.T) {
 }
 
 func TestModel_Update_WindowSize(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	um := updated.(Model)
@@ -206,7 +206,7 @@ func TestModel_Update_WindowSize(t *testing.T) {
 }
 
 func TestModel_Update_WindowSize_SetsSidebarDimensions(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	um := updated.(Model)
 
@@ -219,7 +219,7 @@ func TestModel_Update_WindowSize_SetsSidebarDimensions(t *testing.T) {
 }
 
 func TestModel_Update_EventMsg(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	// First make it ready
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = ready.(Model)
@@ -233,34 +233,120 @@ func TestModel_Update_EventMsg(t *testing.T) {
 }
 
 func TestModel_Update_CtrlC_ReturnsQuit(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd == nil {
 		t.Error("expected quit command from Ctrl+C")
 	}
 }
 
-func TestModel_Update_Q_InitiatesGracefulStop(t *testing.T) {
-	cancelled := false
-	cancel := func() { cancelled = true }
-	m := NewModel("ws", "", cancel)
+func TestModel_Q_ShowsStopConfirmation(t *testing.T) {
+	m := NewModel("ws", "")
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	um := updated.(Model)
 
-	if cmd != nil {
-		t.Error("expected no quit command from q (graceful stop)")
+	if !um.ConfirmingStop() {
+		t.Error("expected confirmingStop state after q")
 	}
-	if !um.Quitting() {
-		t.Error("expected model to be in quitting state")
+	if um.Quitting() {
+		t.Error("expected NOT quitting yet (waiting for confirmation)")
 	}
-	if !cancelled {
-		t.Error("expected cancel function to be called")
+}
+
+func TestModel_Q_ThenY_StopsAndQuits(t *testing.T) {
+	stopCalled := false
+	m := NewModel("ws", "")
+	m.stopDaemonFn = func() { stopCalled = true }
+
+	// Press q to show confirmation
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = updated.(Model)
+
+	// Press y to confirm stop
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(Model)
+
+	if !m.Quitting() {
+		t.Error("expected quitting after y confirmation")
+	}
+	if !stopCalled {
+		t.Error("expected stopDaemonFn to be called")
+	}
+	// Should return a command (waitForDaemonExit)
+	if cmd == nil {
+		t.Error("expected a command to wait for daemon exit")
+	}
+}
+
+func TestModel_Q_ThenN_ReturnsToTUI(t *testing.T) {
+	m := NewModel("ws", "")
+
+	// Press q
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = updated.(Model)
+	if !m.ConfirmingStop() {
+		t.Fatal("expected confirmingStop")
+	}
+
+	// Press n
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = updated.(Model)
+
+	if m.ConfirmingStop() {
+		t.Error("expected confirmingStop to be false after n")
+	}
+	if m.Quitting() {
+		t.Error("expected not quitting after n")
+	}
+}
+
+func TestModel_Q_ThenEsc_ReturnsToTUI(t *testing.T) {
+	m := NewModel("ws", "")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+
+	if m.ConfirmingStop() {
+		t.Error("expected confirmingStop to be false after Esc")
+	}
+}
+
+func TestModel_D_DetachesCleanly(t *testing.T) {
+	m := NewModel("ws", "")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+
+	if cmd == nil {
+		t.Error("expected tea.Quit command from d key")
+	}
+}
+
+func TestModel_Esc_DetachesCleanly(t *testing.T) {
+	m := NewModel("ws", "")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if cmd == nil {
+		t.Error("expected tea.Quit command from Esc key")
+	}
+}
+
+func TestModel_DaemonStoppedMsg_Quits(t *testing.T) {
+	m := NewModel("ws", "")
+
+	_, cmd := m.Update(daemonStoppedMsg{})
+
+	if cmd == nil {
+		t.Error("expected tea.Quit command from daemonStoppedMsg")
 	}
 }
 
 func TestModel_View_BeforeReady(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	view := m.View()
 	if !strings.Contains(view, "Initializing") {
 		t.Errorf("expected 'Initializing' before ready, got %q", view)
@@ -268,7 +354,7 @@ func TestModel_View_BeforeReady(t *testing.T) {
 }
 
 func TestModel_StatusBar_ShowsWorkspaceName(t *testing.T) {
-	m := NewModel("login-page", "", nil)
+	m := NewModel("login-page", "")
 	m.width = 80
 	bar := m.statusBar()
 	if !strings.Contains(bar, "login-page") {
@@ -277,7 +363,7 @@ func TestModel_StatusBar_ShowsWorkspaceName(t *testing.T) {
 }
 
 func TestModel_StatusBar_ShowsCurrentStory(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.width = 80
 	m.currentStory = "US-001: Auth"
 	bar := m.statusBar()
@@ -287,7 +373,7 @@ func TestModel_StatusBar_ShowsCurrentStory(t *testing.T) {
 }
 
 func TestModel_StatusBar_ShowsIteration(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.width = 80
 	m.iteration = 3
 	m.maxIterations = 20
@@ -310,7 +396,7 @@ func TestHandler_SendsEventMsg(t *testing.T) {
 }
 
 func TestModel_Init_ReturnsNilWithoutPRDPath(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	cmd := m.Init()
 	if cmd != nil {
 		t.Error("expected Init to return nil without PRD path")
@@ -318,7 +404,7 @@ func TestModel_Init_ReturnsNilWithoutPRDPath(t *testing.T) {
 }
 
 func TestModel_Init_ReturnsCmdWithPRDPath(t *testing.T) {
-	m := NewModel("ws", "/some/path/prd.json", nil)
+	m := NewModel("ws", "/some/path/prd.json")
 	cmd := m.Init()
 	if cmd == nil {
 		t.Error("expected Init to return a command when PRD path is set")
@@ -326,7 +412,7 @@ func TestModel_Init_ReturnsCmdWithPRDPath(t *testing.T) {
 }
 
 func TestModel_HandleEvent_ToolUse_MultipleTools(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	tools := []string{"Read", "Edit", "Bash", "Write", "Glob"}
 	for _, tool := range tools {
 		m.handleEvent(events.ToolUse{Name: tool, Detail: fmt.Sprintf("detail-%s", tool)})
@@ -345,7 +431,7 @@ func TestModel_HandleEvent_ToolUse_MultipleTools(t *testing.T) {
 // --- Split-pane and keyboard navigation tests ---
 
 func TestModel_TabKey_SwitchesFocus(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	if m.Focus() != focusRight {
 		t.Fatalf("expected initial focus right")
 	}
@@ -372,7 +458,7 @@ func TestModel_TabKey_SwitchesFocus(t *testing.T) {
 }
 
 func TestModel_ArrowKeys_LeftFocus_NavigatesSidebar(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.sidebar.items = []sidebarItem{
 		{id: "US-001", title: "First"},
 		{id: "US-002", title: "Second"},
@@ -411,7 +497,7 @@ func TestModel_ArrowKeys_LeftFocus_NavigatesSidebar(t *testing.T) {
 }
 
 func TestModel_ArrowKeys_RightFocus_DoesNotNavigateSidebar(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.sidebar.items = []sidebarItem{
 		{id: "US-001", title: "First"},
 		{id: "US-002", title: "Second"},
@@ -427,7 +513,7 @@ func TestModel_ArrowKeys_RightFocus_DoesNotNavigateSidebar(t *testing.T) {
 }
 
 func TestModel_PRDLoadedMsg_UpdatesSidebar(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	testPRD := &prd.PRD{
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Auth", Passes: true},
@@ -461,7 +547,7 @@ func TestModel_PRDLoadedMsg_UpdatesSidebar(t *testing.T) {
 }
 
 func TestModel_PRDLoadedMsg_PreservesActiveStory(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.activeStoryID = "US-002"
 
 	testPRD := &prd.PRD{
@@ -495,7 +581,7 @@ func TestModel_PRDRefreshEvent_TriggersPRDRead(t *testing.T) {
 	data, _ := json.MarshalIndent(testPRD, "", "  ")
 	os.WriteFile(prdPath, data, 0644)
 
-	m := NewModel("ws", prdPath, nil)
+	m := NewModel("ws", prdPath)
 	// Make model ready
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
@@ -524,7 +610,7 @@ func TestModel_PRDRefreshEvent_TriggersPRDRead(t *testing.T) {
 }
 
 func TestModel_View_ShowsSplitPaneLayout(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	// Make ready
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
@@ -559,7 +645,7 @@ func TestModel_View_ShowsSplitPaneLayout(t *testing.T) {
 // --- Overlay integration tests ---
 
 func TestModel_EnterKey_OpensStoryOverlay(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	testPRD := &prd.PRD{
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Auth", Description: "Implement auth", Passes: true,
@@ -605,7 +691,7 @@ func TestModel_EnterKey_OpensStoryOverlay(t *testing.T) {
 }
 
 func TestModel_EnterKey_OpensTestOverlay(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	testPRD := &prd.PRD{
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Auth", Passes: true},
@@ -655,7 +741,7 @@ func TestModel_EnterKey_OpensTestOverlay(t *testing.T) {
 }
 
 func TestModel_EscKey_ClosesOverlay(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	testPRD := &prd.PRD{
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Auth", Passes: true},
@@ -687,7 +773,7 @@ func TestModel_EscKey_ClosesOverlay(t *testing.T) {
 }
 
 func TestModel_OverlayVisible_BlocksOtherKeys(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	testPRD := &prd.PRD{
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Auth", Passes: true},
@@ -719,7 +805,7 @@ func TestModel_OverlayVisible_BlocksOtherKeys(t *testing.T) {
 }
 
 func TestModel_EnterKey_RightFocus_NoOverlay(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	testPRD := &prd.PRD{
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Auth", Passes: true},
@@ -738,7 +824,7 @@ func TestModel_EnterKey_RightFocus_NoOverlay(t *testing.T) {
 }
 
 func TestModel_PRDLoadedMsg_StoresCurrentPRD(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	testPRD := &prd.PRD{
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Auth", Passes: true},
@@ -757,7 +843,7 @@ func TestModel_PRDLoadedMsg_StoresCurrentPRD(t *testing.T) {
 }
 
 func TestModel_View_ShowsOverlayWhenVisible(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	testPRD := &prd.PRD{
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Auth", Description: "Build auth", Passes: true},
@@ -803,7 +889,7 @@ func TestIT004_StoryListReflectsPRDState(t *testing.T) {
 	data, _ := json.MarshalIndent(initialPRD, "", "  ")
 	os.WriteFile(prdPath, data, 0644)
 
-	m := NewModel("ws", prdPath, nil)
+	m := NewModel("ws", prdPath)
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
 
@@ -882,7 +968,7 @@ func TestIT005_StoryDetailOverlayShowsCorrectData(t *testing.T) {
 	data, _ := json.MarshalIndent(testPRD, "", "  ")
 	os.WriteFile(prdPath, data, 0644)
 
-	m := NewModel("ws", prdPath, nil)
+	m := NewModel("ws", prdPath)
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
 
@@ -967,7 +1053,7 @@ func TestIT006_IntegrationTestDetailOverlayShowsFailureInfo(t *testing.T) {
 	data, _ := json.MarshalIndent(testPRD, "", "  ")
 	os.WriteFile(prdPath, data, 0644)
 
-	m := NewModel("ws", prdPath, nil)
+	m := NewModel("ws", prdPath)
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
 
@@ -1021,7 +1107,7 @@ func TestIT006_IntegrationTestDetailOverlayShowsFailureInfo(t *testing.T) {
 // --- Help overlay tests ---
 
 func TestModel_QuestionMark_OpensHelpOverlay(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
 
@@ -1032,7 +1118,7 @@ func TestModel_QuestionMark_OpensHelpOverlay(t *testing.T) {
 		t.Fatal("expected help overlay to be visible after ? key")
 	}
 	content := m.HelpOverlay().content
-	shortcuts := []string{"Tab", "Enter", "Esc", "q", "?", "Ctrl+C"}
+	shortcuts := []string{"Tab", "Enter", "Esc", "d", "q", "?", "Ctrl+C"}
 	for _, s := range shortcuts {
 		if !strings.Contains(content, s) {
 			t.Errorf("expected help overlay to contain shortcut %q", s)
@@ -1040,8 +1126,36 @@ func TestModel_QuestionMark_OpensHelpOverlay(t *testing.T) {
 	}
 }
 
+func TestModel_View_ShowsConfirmationPrompt(t *testing.T) {
+	m := NewModel("ws", "")
+	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = ready.(Model)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "Stop the running loop?") {
+		t.Errorf("expected view to contain confirmation prompt, got %q", view)
+	}
+	if !strings.Contains(view, "(y/n)") {
+		t.Errorf("expected view to contain '(y/n)' in confirmation, got %q", view)
+	}
+}
+
+func TestModel_LogReaderDoneMsg_Quits(t *testing.T) {
+	m := NewModel("ws", "")
+	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = ready.(Model)
+
+	_, cmd := m.Update(logReaderDoneMsg{})
+	if cmd == nil {
+		t.Error("expected tea.Quit command from logReaderDoneMsg")
+	}
+}
+
 func TestModel_HelpOverlay_DismissWithEsc(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
 
@@ -1061,7 +1175,7 @@ func TestModel_HelpOverlay_DismissWithEsc(t *testing.T) {
 }
 
 func TestModel_HelpOverlay_DismissWithQuestionMark(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
 
@@ -1081,7 +1195,7 @@ func TestModel_HelpOverlay_DismissWithQuestionMark(t *testing.T) {
 }
 
 func TestModel_HelpOverlay_BlocksOtherKeys(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.sidebar.items = []sidebarItem{
 		{id: "US-001", title: "First"},
 		{id: "US-002", title: "Second"},
@@ -1104,7 +1218,7 @@ func TestModel_HelpOverlay_BlocksOtherKeys(t *testing.T) {
 }
 
 func TestModel_HelpOverlay_CtrlC_StillWorks(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
 
@@ -1120,7 +1234,7 @@ func TestModel_HelpOverlay_CtrlC_StillWorks(t *testing.T) {
 }
 
 func TestModel_View_ShowsHelpOverlayWhenVisible(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
 
@@ -1139,45 +1253,36 @@ func TestModel_View_ShowsHelpOverlayWhenVisible(t *testing.T) {
 
 // --- Graceful stop tests ---
 
-func TestModel_GracefulStop_CallsCancelFunc(t *testing.T) {
-	cancelled := false
-	cancel := func() { cancelled = true }
-	m := NewModel("ws", "", cancel)
+func TestModel_StopDaemon_CallsStopFnAndSetsQuitting(t *testing.T) {
+	stopCalled := false
+	m := NewModel("ws", "")
+	m.stopDaemonFn = func() { stopCalled = true }
 
-	m.initiateGracefulStop()
+	m.confirmingStop = true
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(Model)
 
 	if !m.quitting {
 		t.Error("expected quitting to be true")
 	}
-	if !cancelled {
-		t.Error("expected cancel function to be called")
+	if !stopCalled {
+		t.Error("expected stopDaemonFn to be called")
 	}
 }
 
-func TestModel_GracefulStop_Idempotent(t *testing.T) {
-	callCount := 0
-	cancel := func() { callCount++ }
-	m := NewModel("ws", "", cancel)
-
-	m.initiateGracefulStop()
-	m.initiateGracefulStop()
-
-	if callCount != 1 {
-		t.Errorf("expected cancel called once, got %d", callCount)
-	}
-}
-
-func TestModel_GracefulStop_NilCancelFunc(t *testing.T) {
-	m := NewModel("ws", "", nil)
-	// Should not panic
-	m.initiateGracefulStop()
+func TestModel_StopDaemon_NilStopFn(t *testing.T) {
+	m := NewModel("ws", "")
+	// stopDaemonFn is nil by default — should not panic
+	m.confirmingStop = true
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(Model)
 	if !m.quitting {
-		t.Error("expected quitting to be true even with nil cancel func")
+		t.Error("expected quitting to be true even with nil stopDaemonFn")
 	}
 }
 
 func TestModel_StatusBar_ShowsStopping(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.width = 80
 	m.quitting = true
 	bar := m.statusBar()
@@ -1187,7 +1292,7 @@ func TestModel_StatusBar_ShowsStopping(t *testing.T) {
 }
 
 func TestModel_StatusBar_NoStoppingWhenNotQuitting(t *testing.T) {
-	m := NewModel("ws", "", nil)
+	m := NewModel("ws", "")
 	m.width = 80
 	bar := m.statusBar()
 	if strings.Contains(bar, "Stopping") {
@@ -1195,10 +1300,8 @@ func TestModel_StatusBar_NoStoppingWhenNotQuitting(t *testing.T) {
 	}
 }
 
-func TestModel_QKey_InOverlay_InitiatesGracefulStop(t *testing.T) {
-	cancelled := false
-	cancel := func() { cancelled = true }
-	m := NewModel("ws", "", cancel)
+func TestModel_QKey_InOverlay_ShowsConfirmation(t *testing.T) {
+	m := NewModel("ws", "")
 	testPRD := &prd.PRD{
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Auth", Passes: true},
@@ -1220,21 +1323,22 @@ func TestModel_QKey_InOverlay_InitiatesGracefulStop(t *testing.T) {
 		t.Fatal("expected detail overlay to be visible")
 	}
 
-	// Press q while in overlay
+	// Press q while in overlay - should show stop confirmation
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	m = updated.(Model)
 
-	if !m.Quitting() {
-		t.Error("expected quitting state after q in overlay")
+	if !m.ConfirmingStop() {
+		t.Error("expected confirmingStop state after q in overlay")
 	}
-	if !cancelled {
-		t.Error("expected cancel called after q in overlay")
+	// Detail overlay should be dismissed when showing confirmation
+	if m.Overlay().visible {
+		t.Error("expected detail overlay to be hidden when confirmation shown")
 	}
 }
 
 // --- IT-007: Keyboard shortcuts and graceful stop ---
 
-func TestIT007_KeyboardShortcutsAndGracefulStop(t *testing.T) {
+func TestIT007_KeyboardShortcutsAndDetachStop(t *testing.T) {
 	dir := t.TempDir()
 	prdPath := filepath.Join(dir, "prd.json")
 
@@ -1246,9 +1350,9 @@ func TestIT007_KeyboardShortcutsAndGracefulStop(t *testing.T) {
 	data, _ := json.MarshalIndent(testPRD, "", "  ")
 	os.WriteFile(prdPath, data, 0644)
 
-	cancelled := false
-	cancel := func() { cancelled = true }
-	m := NewModel("ws", prdPath, cancel)
+	stopCalled := false
+	m := NewModel("ws", prdPath)
+	m.stopDaemonFn = func() { stopCalled = true }
 	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = ready.(Model)
 
@@ -1261,7 +1365,7 @@ func TestIT007_KeyboardShortcutsAndGracefulStop(t *testing.T) {
 	updated, _ := m.Update(msg)
 	m = updated.(Model)
 
-	// Step 1: ? key opens help overlay
+	// Step 1: ? key opens help overlay with new keybindings
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
 	m = updated.(Model)
 
@@ -1270,7 +1374,7 @@ func TestIT007_KeyboardShortcutsAndGracefulStop(t *testing.T) {
 	}
 
 	view := m.View()
-	shortcutChecks := []string{"Tab", "Enter", "Esc", "q", "?", "Ctrl+C"}
+	shortcutChecks := []string{"Tab", "Enter", "Esc", "d", "q", "?", "Ctrl+C"}
 	for _, sc := range shortcutChecks {
 		if !strings.Contains(view, sc) {
 			t.Errorf("expected help view to contain shortcut %q", sc)
@@ -1285,18 +1389,36 @@ func TestIT007_KeyboardShortcutsAndGracefulStop(t *testing.T) {
 		t.Error("expected help overlay to be hidden after Esc")
 	}
 
-	// Step 3: q key initiates graceful quit
-	updated, cmd2 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	// Step 3: q key shows stop confirmation
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = updated.(Model)
+
+	if !m.ConfirmingStop() {
+		t.Error("expected confirmingStop after q")
+	}
+
+	// Step 4: n cancels stop confirmation
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = updated.(Model)
+
+	if m.ConfirmingStop() {
+		t.Error("expected confirmingStop to be false after n")
+	}
+
+	// Step 5: q then y stops the daemon
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = updated.(Model)
+	updated, cmd2 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	m = updated.(Model)
 
 	if !m.Quitting() {
-		t.Error("expected model to be in quitting state after q")
+		t.Error("expected quitting after y confirmation")
 	}
-	if !cancelled {
-		t.Error("expected cancel function to be called on q")
+	if !stopCalled {
+		t.Error("expected stopDaemonFn to be called")
 	}
-	if cmd2 != nil {
-		t.Error("expected no immediate quit command from q (graceful stop waits for loop)")
+	if cmd2 == nil {
+		t.Error("expected a command to wait for daemon exit")
 	}
 
 	// Verify status bar shows Stopping...

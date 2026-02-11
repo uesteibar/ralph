@@ -227,7 +227,7 @@ func TestRenderHelpOverlay_ContainsAllShortcuts(t *testing.T) {
 		t.Error("expected title 'Keyboard Shortcuts'")
 	}
 
-	shortcuts := []string{"Tab", "Enter", "Esc", "q", "?", "Ctrl+C"}
+	shortcuts := []string{"Tab", "Enter", "Esc", "d", "q", "?", "Ctrl+C"}
 	for _, s := range shortcuts {
 		if !strings.Contains(content, s) {
 			t.Errorf("expected help overlay to contain shortcut %q", s)
@@ -244,7 +244,8 @@ func TestRenderHelpOverlay_ContainsDescriptions(t *testing.T) {
 		"Open detail overlay",
 		"Close overlay",
 		"Toggle this help",
-		"Graceful stop",
+		"Detach from TUI",
+		"Stop the running loop",
 		"Immediate stop",
 	}
 	for _, d := range descriptions {

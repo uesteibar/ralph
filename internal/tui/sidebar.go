@@ -36,24 +36,24 @@ type sidebar struct {
 var (
 	sidebarTitleStyle = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("8")).
+		Foreground(lipgloss.AdaptiveColor{Light: "#24292f", Dark: "#e6edf3"}).
+		Background(lipgloss.AdaptiveColor{Light: "#d8dee4", Dark: "#30363d"}).
 		Padding(0, 1)
 
-	passStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
-	failStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
+	passStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"})
+	failStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"})
 
 	activeStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("3")).
-		Bold(true) // yellow bold for active story
+		Foreground(lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#d29922"}).
+		Bold(true)
 
 	cursorStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("6")).
-		Bold(true) // cyan cursor
+		Foreground(lipgloss.AdaptiveColor{Light: "#0550ae", Dark: "#58a6ff"}).
+		Bold(true)
 
 	sidebarBorderStyle = lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder(), false, true, false, false).
-		BorderForeground(lipgloss.Color("8"))
+		BorderForeground(lipgloss.AdaptiveColor{Light: "#d0d7de", Dark: "#484f58"})
 )
 
 func newSidebar() sidebar {
