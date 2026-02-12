@@ -65,6 +65,8 @@ review feedback) using Ralph under the hood.
   - [ralph done](#ralph-done)
   - [ralph switch](#ralph-switch)
   - [ralph workspaces](#ralph-workspaces)
+  - [ralph attach](#ralph-attach)
+  - [ralph stop](#ralph-stop)
   - [ralph eject](#ralph-eject)
   - [ralph validate](#ralph-validate)
 - [TUI (Terminal UI)](#tui-terminal-ui)
@@ -557,6 +559,48 @@ ralph done --workspace login-page
 7. Returns you to the base repo directory
 
 Requires [shell integration](#shell-integration).
+
+---
+
+### `ralph attach`
+
+Attaches to a running daemon and displays its log output. Use it to monitor
+a `ralph run` that's already in progress (e.g., started in another terminal
+or resumed after disconnection).
+
+```bash
+ralph attach
+ralph attach --workspace login-page
+ralph attach --no-tui
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-config` | auto-discover | Path to project config YAML |
+| `--workspace` | auto-detect | Workspace name |
+| `--no-tui` | `false` | Disable TUI, use plain-text output |
+
+Requires a daemon to be running for the target workspace (see `ralph run`).
+
+---
+
+### `ralph stop`
+
+Stops a running daemon for a workspace. Sends a graceful shutdown signal and
+waits for the current task to finish before exiting.
+
+```bash
+ralph stop
+ralph stop login-page
+ralph stop --workspace login-page
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-config` | auto-discover | Path to project config YAML |
+| `--workspace` | auto-detect | Workspace name |
+
+The workspace name can be passed as a positional argument or via `--workspace`.
 
 ---
 
