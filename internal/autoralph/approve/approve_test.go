@@ -101,7 +101,7 @@ func TestIsApproval_DetectsApprovalComment(t *testing.T) {
 	client := &mockCommentClient{
 		comments: []linear.Comment{
 			{ID: "c1", Body: "Here is the plan", UserName: "autoralph"},
-			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+			{ID: "c2", Body: "I approve this", UserName: "human"},
 		},
 	}
 
@@ -117,7 +117,7 @@ func TestIsApproval_CaseInsensitive(t *testing.T) {
 	client := &mockCommentClient{
 		comments: []linear.Comment{
 			{ID: "c1", Body: "plan draft", UserName: "autoralph"},
-			{ID: "c2", Body: "@AutoRalph Approved", UserName: "human"},
+			{ID: "c2", Body: "i APPROVE This", UserName: "human"},
 		},
 	}
 
@@ -177,7 +177,7 @@ func TestIsIteration_ApprovalComment_ReturnsFalse(t *testing.T) {
 	client := &mockCommentClient{
 		comments: []linear.Comment{
 			{ID: "c1", Body: "plan draft", UserName: "autoralph"},
-			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+			{ID: "c2", Body: "I approve this", UserName: "human"},
 		},
 	}
 
@@ -228,7 +228,7 @@ func TestApprovalAction_StoresPlanText(t *testing.T) {
 	client := &mockCommentClient{
 		comments: []linear.Comment{
 			{ID: "c1", Body: "## Implementation Plan\n\n1. Add avatar upload endpoint\n2. Resize images", UserName: "autoralph"},
-			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+			{ID: "c2", Body: "I approve this", UserName: "human"},
 		},
 	}
 
@@ -258,7 +258,7 @@ func TestApprovalAction_UpdatesLastCommentID(t *testing.T) {
 	client := &mockCommentClient{
 		comments: []linear.Comment{
 			{ID: "c1", Body: "The plan", UserName: "autoralph"},
-			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+			{ID: "c2", Body: "I approve this", UserName: "human"},
 		},
 	}
 
@@ -285,7 +285,7 @@ func TestApprovalAction_LogsActivity(t *testing.T) {
 	client := &mockCommentClient{
 		comments: []linear.Comment{
 			{ID: "c1", Body: "Plan text", UserName: "autoralph"},
-			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+			{ID: "c2", Body: "I approve this", UserName: "human"},
 		},
 	}
 
@@ -401,8 +401,9 @@ func TestIterationAction_PostsAIResponse(t *testing.T) {
 	if client.posted[0].issueID != "lin-123" {
 		t.Errorf("expected issue ID %q, got %q", "lin-123", client.posted[0].issueID)
 	}
-	if client.posted[0].body != aiResponse {
-		t.Errorf("expected posted body to be AI response")
+	expectedBody := aiResponse + ApprovalHint
+	if client.posted[0].body != expectedBody {
+		t.Errorf("expected posted body to contain AI response + approval hint, got %q", client.posted[0].body)
 	}
 }
 
@@ -581,21 +582,18 @@ func TestContainsApproval_Variants(t *testing.T) {
 		text string
 		want bool
 	}{
-		{"@autoralph approved", true},
-		{"@AutoRalph Approved", true},
-		{"@AUTORALPH APPROVED", true},
-		{"Looks good! @autoralph approved", true},
-		{"@autoralph approved, let's go!", true},
-		// Linear mention format — full bot account name
-		{"@uesteibarautoralph approved", true},
-		{"@UesteibarAutoralph Approved", true},
-		// Any bot username should work
-		{"@mybot approved", true},
+		{"I approve this", true},
+		{"i approve this", true},
+		{"I APPROVE THIS", true},
+		{"Looks good! I approve this", true},
+		{"I approve this, let's go!", true},
+		{"Sure, I approve this plan.", true},
 		// Negative cases
-		{"@autoralph not approved", false},
-		{"autoralph approved", false},
-		{"@autoralph approve", false},
+		{"I approve", false},
+		{"approved", false},
+		{"@autoralph approved", false},
 		{"some random comment", false},
+		{"I don't approve this", false},
 	}
 
 	for _, tt := range tests {
@@ -611,7 +609,7 @@ func TestExtractPlanText_ReturnsCommentBeforeApproval(t *testing.T) {
 		{ID: "c1", Body: "What image formats?", UserName: "autoralph"},
 		{ID: "c2", Body: "PNG and JPEG", UserName: "human"},
 		{ID: "c3", Body: "## Plan\n\n1. Add upload\n2. Resize", UserName: "autoralph"},
-		{ID: "c4", Body: "@autoralph approved", UserName: "human"},
+		{ID: "c4", Body: "I approve this", UserName: "human"},
 	}
 
 	plan := extractPlanText(comments)
@@ -622,7 +620,7 @@ func TestExtractPlanText_ReturnsCommentBeforeApproval(t *testing.T) {
 
 func TestExtractPlanText_ApprovalIsFirst_ReturnsEmpty(t *testing.T) {
 	comments := []linear.Comment{
-		{ID: "c1", Body: "@autoralph approved", UserName: "human"},
+		{ID: "c1", Body: "I approve this", UserName: "human"},
 	}
 
 	plan := extractPlanText(comments)

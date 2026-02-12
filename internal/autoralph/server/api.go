@@ -467,8 +467,7 @@ func (h *apiHandler) handleRetryIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "retrying", "state": retryState})
 }
 
-// handleDeleteIssue dismisses an issue from autoralph. The issue remains in the
-// DB with state "dismissed" so the Linear poller won't re-ingest it.
+// handleDeleteIssue deletes an issue from autoralph permanently.
 func (h *apiHandler) handleDeleteIssue(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -493,14 +492,10 @@ func (h *apiHandler) handleDeleteIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	previousState := issue.State
-	issue.State = "dismissed"
-	issue.ErrorMessage = ""
-	if err := h.db.UpdateIssue(issue); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to dismiss issue: "+err.Error())
+	if err := h.db.DeleteIssue(id); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete issue: "+err.Error())
 		return
 	}
-	h.db.LogActivity(issue.ID, "state_change", previousState, "dismissed", "Issue dismissed via API")
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

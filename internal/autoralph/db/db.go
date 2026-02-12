@@ -23,6 +23,8 @@ type Project struct {
 	GithubRepo         string
 	LinearTeamID       string
 	LinearAssigneeID   string
+	LinearProjectID    string
+	LinearLabel        string
 	RalphConfigPath    string
 	MaxIterations      int
 	BranchPrefix       string
@@ -70,6 +72,8 @@ CREATE TABLE IF NOT EXISTS projects (
 	github_repo TEXT NOT NULL DEFAULT '',
 	linear_team_id TEXT NOT NULL DEFAULT '',
 	linear_assignee_id TEXT NOT NULL DEFAULT '',
+	linear_project_id TEXT NOT NULL DEFAULT '',
+	linear_label TEXT NOT NULL DEFAULT '',
 	ralph_config_path TEXT NOT NULL DEFAULT '.ralph/ralph.yaml',
 	max_iterations INTEGER NOT NULL DEFAULT 20,
 	branch_prefix TEXT NOT NULL DEFAULT 'autoralph/',
@@ -140,6 +144,11 @@ func Open(path string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("running schema migration: %w", err)
 	}
+
+	// Migrations for existing databases: add columns that may not exist yet.
+	// ALTER TABLE ADD COLUMN errors are silently ignored (column already exists).
+	conn.Exec(`ALTER TABLE projects ADD COLUMN linear_project_id TEXT NOT NULL DEFAULT ''`)
+	conn.Exec(`ALTER TABLE projects ADD COLUMN linear_label TEXT NOT NULL DEFAULT ''`)
 
 	return &DB{conn: conn}, nil
 }

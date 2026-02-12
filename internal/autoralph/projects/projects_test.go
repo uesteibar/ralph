@@ -49,6 +49,8 @@ github:
 linear:
   team_id: team-123
   assignee_id: user-456
+  project_id: proj-789
+  label: autoralph
 ralph_config_path: .ralph/custom.yaml
 max_iterations: 30
 branch_prefix: custom/
@@ -79,6 +81,12 @@ branch_prefix: custom/
 	if cfg.Linear.AssigneeID != "user-456" {
 		t.Errorf("Linear.AssigneeID = %q, want %q", cfg.Linear.AssigneeID, "user-456")
 	}
+	if cfg.Linear.ProjectID != "proj-789" {
+		t.Errorf("Linear.ProjectID = %q, want %q", cfg.Linear.ProjectID, "proj-789")
+	}
+	if cfg.Linear.Label != "autoralph" {
+		t.Errorf("Linear.Label = %q, want %q", cfg.Linear.Label, "autoralph")
+	}
 	if cfg.RalphConfigPath != ".ralph/custom.yaml" {
 		t.Errorf("RalphConfigPath = %q, want %q", cfg.RalphConfigPath, ".ralph/custom.yaml")
 	}
@@ -103,6 +111,7 @@ github:
 linear:
   team_id: team-1
   assignee_id: user-1
+  project_id: proj-1
 `)
 
 	cfg, err := Load(filepath.Join(dir, "projects", "minimal.yaml"))
@@ -117,6 +126,9 @@ linear:
 	}
 	if cfg.BranchPrefix != "autoralph/" {
 		t.Errorf("BranchPrefix = %q, want default %q", cfg.BranchPrefix, "autoralph/")
+	}
+	if cfg.Linear.Label != "" {
+		t.Errorf("Linear.Label = %q, want empty (optional field)", cfg.Linear.Label)
 	}
 }
 
@@ -155,6 +167,7 @@ github:
 linear:
   team_id: team-1
   assignee_id: user-1
+  project_id: proj-a
 `)
 	writeProjectFile(t, dir, "bravo.yaml", `
 name: bravo
@@ -166,6 +179,7 @@ github:
 linear:
   team_id: team-2
   assignee_id: user-2
+  project_id: proj-b
 `)
 
 	configs, warnings := LoadAll(dir)
@@ -196,6 +210,7 @@ github:
 linear:
   team_id: team-1
   assignee_id: user-1
+  project_id: proj-1
 `)
 	os.WriteFile(filepath.Join(projDir, "readme.txt"), []byte("not a project"), 0o644)
 
@@ -225,6 +240,7 @@ github:
 linear:
   team_id: team-1
   assignee_id: user-1
+  project_id: proj-1
 `)
 	// Missing required fields
 	writeProjectFile(t, dir, "bad.yaml", `
@@ -258,6 +274,7 @@ github:
 linear:
   team_id: team-1
   assignee_id: user-1
+  project_id: proj-1
 `)
 
 	configs, warnings := LoadAll(dir)
@@ -286,7 +303,7 @@ func TestValidate_MissingName(t *testing.T) {
 		LocalPath:          t.TempDir(),
 		CredentialsProfile: "default",
 		Github:             GithubConfig{Owner: "o", Repo: "r"},
-		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a"},
+		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a", ProjectID: "p"},
 	}
 	err := Validate(cfg)
 	if err == nil {
@@ -299,7 +316,7 @@ func TestValidate_MissingLocalPath(t *testing.T) {
 		Name:               "test",
 		CredentialsProfile: "default",
 		Github:             GithubConfig{Owner: "o", Repo: "r"},
-		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a"},
+		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a", ProjectID: "p"},
 	}
 	err := Validate(cfg)
 	if err == nil {
@@ -313,7 +330,7 @@ func TestValidate_LocalPathNotExists(t *testing.T) {
 		LocalPath:          "/nonexistent/path/that/does/not/exist",
 		CredentialsProfile: "default",
 		Github:             GithubConfig{Owner: "o", Repo: "r"},
-		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a"},
+		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a", ProjectID: "p"},
 	}
 	err := Validate(cfg)
 	if err == nil {
@@ -327,7 +344,7 @@ func TestValidate_MissingGithubOwner(t *testing.T) {
 		LocalPath:          t.TempDir(),
 		CredentialsProfile: "default",
 		Github:             GithubConfig{Repo: "r"},
-		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a"},
+		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a", ProjectID: "p"},
 	}
 	err := Validate(cfg)
 	if err == nil {
@@ -341,7 +358,7 @@ func TestValidate_MissingGithubRepo(t *testing.T) {
 		LocalPath:          t.TempDir(),
 		CredentialsProfile: "default",
 		Github:             GithubConfig{Owner: "o"},
-		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a"},
+		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a", ProjectID: "p"},
 	}
 	err := Validate(cfg)
 	if err == nil {
@@ -355,7 +372,7 @@ func TestValidate_MissingLinearTeamID(t *testing.T) {
 		LocalPath:          t.TempDir(),
 		CredentialsProfile: "default",
 		Github:             GithubConfig{Owner: "o", Repo: "r"},
-		Linear:             LinearConfig{AssigneeID: "a"},
+		Linear:             LinearConfig{AssigneeID: "a", ProjectID: "p"},
 	}
 	err := Validate(cfg)
 	if err == nil {
@@ -369,11 +386,25 @@ func TestValidate_MissingLinearAssigneeID(t *testing.T) {
 		LocalPath:          t.TempDir(),
 		CredentialsProfile: "default",
 		Github:             GithubConfig{Owner: "o", Repo: "r"},
-		Linear:             LinearConfig{TeamID: "t"},
+		Linear:             LinearConfig{TeamID: "t", ProjectID: "p"},
 	}
 	err := Validate(cfg)
 	if err == nil {
 		t.Fatal("expected error for missing linear.assignee_id")
+	}
+}
+
+func TestValidate_MissingLinearProjectID(t *testing.T) {
+	cfg := ProjectConfig{
+		Name:               "test",
+		LocalPath:          t.TempDir(),
+		CredentialsProfile: "default",
+		Github:             GithubConfig{Owner: "o", Repo: "r"},
+		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a"},
+	}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing linear.project_id")
 	}
 }
 
@@ -383,7 +414,7 @@ func TestValidate_AllFieldsPresent_NoError(t *testing.T) {
 		LocalPath:          t.TempDir(),
 		CredentialsProfile: "default",
 		Github:             GithubConfig{Owner: "o", Repo: "r"},
-		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a"},
+		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a", ProjectID: "p"},
 	}
 	err := Validate(cfg)
 	if err != nil {
@@ -414,7 +445,7 @@ func TestSync_CreatesNewProjects(t *testing.T) {
 			LocalPath:          localPath,
 			CredentialsProfile: "default",
 			Github:             GithubConfig{Owner: "acme", Repo: "alpha"},
-			Linear:             LinearConfig{TeamID: "t1", AssigneeID: "u1"},
+			Linear:             LinearConfig{TeamID: "t1", AssigneeID: "u1", ProjectID: "p1"},
 			RalphConfigPath:    ".ralph/ralph.yaml",
 			MaxIterations:      20,
 			BranchPrefix:       "autoralph/",
@@ -442,6 +473,9 @@ func TestSync_CreatesNewProjects(t *testing.T) {
 	if projects[0].LinearTeamID != "t1" {
 		t.Errorf("expected linear_team_id %q, got %q", "t1", projects[0].LinearTeamID)
 	}
+	if projects[0].LinearProjectID != "p1" {
+		t.Errorf("expected linear_project_id %q, got %q", "p1", projects[0].LinearProjectID)
+	}
 }
 
 func TestSync_UpdatesExistingProject(t *testing.T) {
@@ -457,6 +491,7 @@ func TestSync_UpdatesExistingProject(t *testing.T) {
 		GithubRepo:         "old-repo",
 		LinearTeamID:       "old-team",
 		LinearAssigneeID:   "old-user",
+		LinearProjectID:    "old-proj",
 		RalphConfigPath:    ".ralph/ralph.yaml",
 		MaxIterations:      10,
 		BranchPrefix:       "old/",
@@ -469,7 +504,7 @@ func TestSync_UpdatesExistingProject(t *testing.T) {
 			LocalPath:          localPath,
 			CredentialsProfile: "new-profile",
 			Github:             GithubConfig{Owner: "new-owner", Repo: "new-repo"},
-			Linear:             LinearConfig{TeamID: "new-team", AssigneeID: "new-user"},
+			Linear:             LinearConfig{TeamID: "new-team", AssigneeID: "new-user", ProjectID: "new-proj"},
 			RalphConfigPath:    ".ralph/custom.yaml",
 			MaxIterations:      30,
 			BranchPrefix:       "new/",
@@ -494,6 +529,9 @@ func TestSync_UpdatesExistingProject(t *testing.T) {
 	}
 	if p.MaxIterations != 30 {
 		t.Errorf("MaxIterations = %d, want 30", p.MaxIterations)
+	}
+	if p.LinearProjectID != "new-proj" {
+		t.Errorf("LinearProjectID = %q, want %q", p.LinearProjectID, "new-proj")
 	}
 }
 
@@ -522,7 +560,7 @@ func TestSync_MultipleProjects(t *testing.T) {
 			LocalPath:          path1,
 			CredentialsProfile: "default",
 			Github:             GithubConfig{Owner: "acme", Repo: "alpha"},
-			Linear:             LinearConfig{TeamID: "t1", AssigneeID: "u1"},
+			Linear:             LinearConfig{TeamID: "t1", AssigneeID: "u1", ProjectID: "p1"},
 			RalphConfigPath:    ".ralph/ralph.yaml",
 			MaxIterations:      20,
 			BranchPrefix:       "autoralph/",
@@ -532,7 +570,7 @@ func TestSync_MultipleProjects(t *testing.T) {
 			LocalPath:          path2,
 			CredentialsProfile: "work",
 			Github:             GithubConfig{Owner: "acme", Repo: "bravo"},
-			Linear:             LinearConfig{TeamID: "t2", AssigneeID: "u2"},
+			Linear:             LinearConfig{TeamID: "t2", AssigneeID: "u2", ProjectID: "p2"},
 			RalphConfigPath:    ".ralph/ralph.yaml",
 			MaxIterations:      15,
 			BranchPrefix:       "auto/",

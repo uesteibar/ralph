@@ -15,10 +15,12 @@ import (
 
 // ProjectInfo holds the data the poller needs for each configured project.
 type ProjectInfo struct {
-	ProjectID      string
-	LinearTeamID   string
+	ProjectID        string
+	LinearTeamID     string
 	LinearAssigneeID string
-	LinearClient   *linear.Client
+	LinearProjectID  string
+	LinearLabel      string
+	LinearClient     *linear.Client
 }
 
 // Poller polls Linear for assigned issues and ingests new ones into the DB.
@@ -76,7 +78,7 @@ func (p *Poller) poll(ctx context.Context) {
 // pollProject fetches assigned issues from Linear for a single project
 // and ingests any that are not already in the DB.
 func (p *Poller) pollProject(ctx context.Context, proj ProjectInfo) {
-	issues, err := proj.LinearClient.FetchAssignedIssues(ctx, proj.LinearTeamID, proj.LinearAssigneeID)
+	issues, err := proj.LinearClient.FetchAssignedIssues(ctx, proj.LinearTeamID, proj.LinearAssigneeID, proj.LinearProjectID, proj.LinearLabel)
 	if err != nil {
 		p.logger.Warn("poll failed", "project_id", proj.ProjectID, "error", err)
 		return
@@ -84,9 +86,9 @@ func (p *Poller) pollProject(ctx context.Context, proj ProjectInfo) {
 
 	var newCount int
 	for _, li := range issues {
-		_, err := p.db.GetIssueByLinearID(li.ID)
+		_, err := p.db.GetIssueByLinearIDAndProject(li.ID, proj.ProjectID)
 		if err == nil {
-			continue // already in DB
+			continue // already in this project
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			p.logger.Warn("checking existing issue", "linear_issue_id", li.ID, "error", err)

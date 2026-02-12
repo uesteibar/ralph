@@ -56,6 +56,7 @@ type Issue struct {
 	StateID     string
 	StateName   string
 	StateType   string
+	Labels      []string // label names for filtering
 }
 
 // Comment is a mock Linear comment.
@@ -89,6 +90,13 @@ type User struct {
 	Email       string
 }
 
+// Project is a mock Linear project.
+type Project struct {
+	ID     string
+	SlugID string
+	Name   string
+}
+
 // Mock is an in-memory mock of the Linear GraphQL API.
 // It enforces UUID format on ID fields to match real Linear API behavior.
 type Mock struct {
@@ -98,6 +106,7 @@ type Mock struct {
 	states   []WorkflowState
 	teams    []Team
 	users    []User
+	projects []Project
 	nextID   int
 
 	// Tracking
@@ -162,12 +171,12 @@ func (m *Mock) AddComment(issueID string, c Comment) {
 	m.comments[issueID] = append(m.comments[issueID], c)
 }
 
-// SimulateApproval adds an "@autoralph approved" comment to the issue.
+// SimulateApproval adds an "I approve this" comment to the issue.
 // Uses a far-future timestamp so approval sorts after any AI-posted comments.
 func (m *Mock) SimulateApproval(issueID, commentID string) {
 	m.AddComment(issueID, Comment{
 		ID:        commentID,
-		Body:      "@autoralph approved",
+		Body:      "I approve this",
 		UserName:  "test-user",
 		CreatedAt: "2099-01-01T00:00:00Z",
 	})
@@ -178,6 +187,13 @@ func (m *Mock) AddTeam(team Team) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.teams = append(m.teams, team)
+}
+
+// AddProject adds a project to the mock for projects query resolution.
+func (m *Mock) AddProject(project Project) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.projects = append(m.projects, project)
 }
 
 // AddUser adds a user to the mock for users query resolution.
@@ -235,6 +251,8 @@ func (m *Mock) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		m.handleFetchStates(w, req.Variables)
 	case strings.Contains(q, "teams"):
 		m.handleFetchTeams(w)
+	case strings.Contains(q, "projects"):
+		m.handleFetchProjects(w)
 	case strings.Contains(q, "users"):
 		m.handleFetchUsers(w)
 	default:
@@ -248,6 +266,7 @@ func (m *Mock) handleFetchIssues(w http.ResponseWriter, vars map[string]any) {
 
 	teamID, _ := vars["teamID"].(string)
 	assigneeID, _ := vars["assigneeID"].(string)
+	label, _ := vars["label"].(string)
 
 	// Validate UUID format like real Linear API.
 	if teamID != "" && !isValidUUID(teamID) {
@@ -262,6 +281,10 @@ func (m *Mock) handleFetchIssues(w http.ResponseWriter, vars map[string]any) {
 	var nodes []map[string]any
 	for _, iss := range m.issues {
 		if iss.StateType == "canceled" || iss.StateType == "completed" {
+			continue
+		}
+		// Filter by label if requested.
+		if label != "" && !hasLabel(iss.Labels, label) {
 			continue
 		}
 		nodes = append(nodes, map[string]any{
@@ -280,6 +303,17 @@ func (m *Mock) handleFetchIssues(w http.ResponseWriter, vars map[string]any) {
 	writeGQLData(w, map[string]any{
 		"issues": map[string]any{"nodes": nodes},
 	})
+}
+
+// hasLabel checks if the issue has a label matching the given name (case-insensitive).
+func hasLabel(labels []string, name string) bool {
+	lower := strings.ToLower(name)
+	for _, l := range labels {
+		if strings.ToLower(l) == lower {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Mock) handleFetchComments(w http.ResponseWriter, vars map[string]any) {
@@ -484,6 +518,24 @@ func (m *Mock) handleFetchUsers(w http.ResponseWriter) {
 
 	writeGQLData(w, map[string]any{
 		"users": map[string]any{"nodes": nodes},
+	})
+}
+
+func (m *Mock) handleFetchProjects(w http.ResponseWriter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var nodes []map[string]any
+	for _, p := range m.projects {
+		nodes = append(nodes, map[string]any{
+			"id":     p.ID,
+			"slugId": p.SlugID,
+			"name":   p.Name,
+		})
+	}
+
+	writeGQLData(w, map[string]any{
+		"projects": map[string]any{"nodes": nodes},
 	})
 }
 

@@ -108,6 +108,25 @@ func (db *DB) GetIssueByLinearID(linearIssueID string) (Issue, error) {
 	return issue, nil
 }
 
+// GetIssueByLinearIDAndProject returns the issue with the given Linear issue ID
+// scoped to a specific project, or sql.ErrNoRows-wrapped error if not found.
+func (db *DB) GetIssueByLinearIDAndProject(linearIssueID, projectID string) (Issue, error) {
+	row := db.conn.QueryRow(`
+		SELECT id, project_id, linear_issue_id, identifier, title, description,
+			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
+			error_message, last_comment_id, last_review_id, created_at, updated_at
+		FROM issues WHERE linear_issue_id = ? AND project_id = ?`, linearIssueID, projectID)
+
+	issue, err := scanIssueRow(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Issue{}, fmt.Errorf("issue not found for linear_issue_id: %s in project: %s: %w", linearIssueID, projectID, sql.ErrNoRows)
+		}
+		return Issue{}, fmt.Errorf("getting issue by linear_issue_id and project: %w", err)
+	}
+	return issue, nil
+}
+
 func (db *DB) GetIssue(id string) (Issue, error) {
 	row := db.conn.QueryRow(`
 		SELECT id, project_id, linear_issue_id, identifier, title, description,

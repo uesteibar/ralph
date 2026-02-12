@@ -87,6 +87,7 @@ func StartPlayground(t *testing.T, opts ...func(*PlaygroundConfig)) *Playground 
 			GithubRepo:         "test-repo",
 			LinearTeamID:       mocklinear.TestTeamID,
 			LinearAssigneeID:   mocklinear.TestAssigneeID,
+			LinearProjectID:    "00000000-0000-4000-8000-000000proj01",
 			RalphConfigPath:    ".ralph/ralph.yaml",
 			MaxIterations:      20,
 			BranchPrefix:       "autoralph/",

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
+	"github.com/uesteibar/ralph/internal/autoralph/approve"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 )
 
@@ -57,7 +58,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("invoking AI: %w", err)
 		}
 
-		commentID, err := cfg.Poster.PostComment(context.Background(), issue.LinearIssueID, response)
+		commentID, err := cfg.Poster.PostComment(context.Background(), issue.LinearIssueID, response+approve.ApprovalHint)
 		if err != nil {
 			return fmt.Errorf("posting comment: %w", err)
 		}

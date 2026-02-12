@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/uesteibar/ralph/internal/autoralph/approve"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 )
 
@@ -123,8 +124,12 @@ func TestRefineAction_PostsCommentOnLinear(t *testing.T) {
 	if poster.calls[0].linearIssueID != "lin-123" {
 		t.Errorf("expected LinearIssueID %q, got %q", "lin-123", poster.calls[0].linearIssueID)
 	}
-	if poster.calls[0].body != aiResponse {
-		t.Errorf("expected comment body to be AI response, got %q", poster.calls[0].body)
+	expectedBody := aiResponse + approve.ApprovalHint
+	if poster.calls[0].body != expectedBody {
+		t.Errorf("expected comment body to contain AI response + approval hint, got %q", poster.calls[0].body)
+	}
+	if !strings.Contains(poster.calls[0].body, "I approve this") {
+		t.Error("expected posted body to contain approval hint")
 	}
 }
 

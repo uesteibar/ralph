@@ -687,20 +687,14 @@ func TestAPI_DeleteIssue_Success(t *testing.T) {
 		t.Fatalf("expected deleted status, got %q", result["status"])
 	}
 
-	// Verify issue is now in "dismissed" state (soft-delete).
+	// Verify issue is gone from DB.
 	getResp, getErr := http.Get(apiURL(srv, "/api/issues/"+issue.ID))
 	if getErr != nil {
 		t.Fatalf("GET after delete failed: %v", getErr)
 	}
 	defer getResp.Body.Close()
-	if getResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 after soft delete, got %d", getResp.StatusCode)
-	}
-
-	var detail map[string]any
-	json.NewDecoder(getResp.Body).Decode(&detail)
-	if detail["state"] != "dismissed" {
-		t.Fatalf("expected state dismissed, got %q", detail["state"])
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", getResp.StatusCode)
 	}
 }
 

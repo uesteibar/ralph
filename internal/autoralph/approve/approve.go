@@ -10,10 +10,13 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
 )
 
-// approvalPattern matches "@<bot-username> approved" where the bot username
-// can be any non-whitespace sequence (e.g., @autoralph, @uesteibarautoralph).
-// This handles Linear's mention format where the bot's full account name is used.
-var approvalPattern = regexp.MustCompile(`(?i)@\S+\s+approved\b`)
+// approvalPattern matches "I approve this" (case-insensitive) anywhere in the comment.
+// This explicit phrase works even when the user and autoralph share the same Linear account.
+var approvalPattern = regexp.MustCompile(`(?i)\bI approve this\b`)
+
+// ApprovalHint is appended to refinement and iteration comments to tell the
+// user how to approve the plan.
+const ApprovalHint = "\n\n---\n_To approve this plan, reply with **I approve this**. To request changes, reply with your feedback._"
 
 // Invoker invokes an AI model with a prompt and returns the response.
 // Dir sets the working directory for the AI process.
@@ -187,14 +190,16 @@ func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error 
 			return fmt.Errorf("invoking AI: %w", err)
 		}
 
+		responseWithHint := response + ApprovalHint
+
 		// Reply in thread if the user's comment was a threaded reply,
 		// otherwise post a top-level comment.
 		threadParent := findThreadParent(newComments)
 		var posted linear.Comment
 		if threadParent != "" {
-			posted, err = cfg.Comments.PostReply(context.Background(), threadParent, response)
+			posted, err = cfg.Comments.PostReply(context.Background(), threadParent, responseWithHint)
 		} else {
-			posted, err = cfg.Comments.PostComment(context.Background(), issue.LinearIssueID, response)
+			posted, err = cfg.Comments.PostComment(context.Background(), issue.LinearIssueID, responseWithHint)
 		}
 		if err != nil {
 			return fmt.Errorf("posting reply: %w", err)

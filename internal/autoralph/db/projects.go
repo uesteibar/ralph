@@ -18,11 +18,11 @@ func (db *DB) CreateProject(p Project) (Project, error) {
 
 	_, err := db.conn.Exec(`
 		INSERT INTO projects (id, name, local_path, credentials_profile, github_owner, github_repo,
-			linear_team_id, linear_assignee_id, ralph_config_path, max_iterations, branch_prefix,
+			linear_team_id, linear_assignee_id, linear_project_id, linear_label, ralph_config_path, max_iterations, branch_prefix,
 			created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Name, p.LocalPath, p.CredentialsProfile, p.GithubOwner, p.GithubRepo,
-		p.LinearTeamID, p.LinearAssigneeID, p.RalphConfigPath, p.MaxIterations, p.BranchPrefix,
+		p.LinearTeamID, p.LinearAssigneeID, p.LinearProjectID, p.LinearLabel, p.RalphConfigPath, p.MaxIterations, p.BranchPrefix,
 		p.CreatedAt.Format(time.RFC3339), p.UpdatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
@@ -34,7 +34,7 @@ func (db *DB) CreateProject(p Project) (Project, error) {
 func (db *DB) ListProjects() ([]Project, error) {
 	rows, err := db.conn.Query(`
 		SELECT id, name, local_path, credentials_profile, github_owner, github_repo,
-			linear_team_id, linear_assignee_id, ralph_config_path, max_iterations, branch_prefix,
+			linear_team_id, linear_assignee_id, linear_project_id, linear_label, ralph_config_path, max_iterations, branch_prefix,
 			created_at, updated_at
 		FROM projects ORDER BY name`)
 	if err != nil {
@@ -56,7 +56,7 @@ func (db *DB) ListProjects() ([]Project, error) {
 func (db *DB) GetProject(id string) (Project, error) {
 	row := db.conn.QueryRow(`
 		SELECT id, name, local_path, credentials_profile, github_owner, github_repo,
-			linear_team_id, linear_assignee_id, ralph_config_path, max_iterations, branch_prefix,
+			linear_team_id, linear_assignee_id, linear_project_id, linear_label, ralph_config_path, max_iterations, branch_prefix,
 			created_at, updated_at
 		FROM projects WHERE id = ?`, id)
 
@@ -73,7 +73,7 @@ func (db *DB) GetProject(id string) (Project, error) {
 func (db *DB) GetProjectByName(name string) (Project, error) {
 	row := db.conn.QueryRow(`
 		SELECT id, name, local_path, credentials_profile, github_owner, github_repo,
-			linear_team_id, linear_assignee_id, ralph_config_path, max_iterations, branch_prefix,
+			linear_team_id, linear_assignee_id, linear_project_id, linear_label, ralph_config_path, max_iterations, branch_prefix,
 			created_at, updated_at
 		FROM projects WHERE name = ?`, name)
 
@@ -92,10 +92,10 @@ func (db *DB) UpdateProject(p Project) error {
 	result, err := db.conn.Exec(`
 		UPDATE projects SET name = ?, local_path = ?, credentials_profile = ?,
 			github_owner = ?, github_repo = ?, linear_team_id = ?, linear_assignee_id = ?,
-			ralph_config_path = ?, max_iterations = ?, branch_prefix = ?, updated_at = ?
+			linear_project_id = ?, linear_label = ?, ralph_config_path = ?, max_iterations = ?, branch_prefix = ?, updated_at = ?
 		WHERE id = ?`,
 		p.Name, p.LocalPath, p.CredentialsProfile, p.GithubOwner, p.GithubRepo,
-		p.LinearTeamID, p.LinearAssigneeID, p.RalphConfigPath, p.MaxIterations,
+		p.LinearTeamID, p.LinearAssigneeID, p.LinearProjectID, p.LinearLabel, p.RalphConfigPath, p.MaxIterations,
 		p.BranchPrefix, p.UpdatedAt.Format(time.RFC3339), p.ID,
 	)
 	if err != nil {
@@ -125,7 +125,7 @@ func scanProject(rows *sql.Rows) (Project, error) {
 	var createdAt, updatedAt string
 	err := rows.Scan(&p.ID, &p.Name, &p.LocalPath, &p.CredentialsProfile,
 		&p.GithubOwner, &p.GithubRepo, &p.LinearTeamID, &p.LinearAssigneeID,
-		&p.RalphConfigPath, &p.MaxIterations, &p.BranchPrefix,
+		&p.LinearProjectID, &p.LinearLabel, &p.RalphConfigPath, &p.MaxIterations, &p.BranchPrefix,
 		&createdAt, &updatedAt)
 	if err != nil {
 		return Project{}, fmt.Errorf("scanning project: %w", err)
@@ -147,7 +147,7 @@ func (db *DB) CountActiveIssuesByProject() (map[string]int, error) {
 	rows, err := db.conn.Query(`
 		SELECT project_id, COUNT(*) as cnt
 		FROM issues
-		WHERE state NOT IN ('completed', 'failed', 'dismissed')
+		WHERE state NOT IN ('completed', 'failed')
 		GROUP BY project_id`)
 	if err != nil {
 		return nil, fmt.Errorf("counting active issues: %w", err)
@@ -195,7 +195,7 @@ func scanProjectRow(row *sql.Row) (Project, error) {
 	var createdAt, updatedAt string
 	err := row.Scan(&p.ID, &p.Name, &p.LocalPath, &p.CredentialsProfile,
 		&p.GithubOwner, &p.GithubRepo, &p.LinearTeamID, &p.LinearAssigneeID,
-		&p.RalphConfigPath, &p.MaxIterations, &p.BranchPrefix,
+		&p.LinearProjectID, &p.LinearLabel, &p.RalphConfigPath, &p.MaxIterations, &p.BranchPrefix,
 		&createdAt, &updatedAt)
 	if err != nil {
 		return Project{}, err

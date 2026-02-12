@@ -17,7 +17,7 @@ func TestMock_FetchAssignedIssues_Success(t *testing.T) {
 	srv := mock.Server(t)
 
 	client := linearClient.New("test-key", linearClient.WithEndpoint(srv.URL))
-	issues, err := client.FetchAssignedIssues(context.Background(), TestTeamID, TestAssigneeID)
+	issues, err := client.FetchAssignedIssues(context.Background(), TestTeamID, TestAssigneeID, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestMock_FetchAssignedIssues_RejectsNonUUIDTeamID(t *testing.T) {
 	srv := mock.Server(t)
 
 	client := linearClient.New("test-key", linearClient.WithEndpoint(srv.URL))
-	_, err := client.FetchAssignedIssues(context.Background(), "not-a-uuid", TestAssigneeID)
+	_, err := client.FetchAssignedIssues(context.Background(), "not-a-uuid", TestAssigneeID, "", "")
 	if err == nil {
 		t.Fatal("expected error for non-UUID teamID, got nil")
 	}
@@ -49,7 +49,7 @@ func TestMock_FetchAssignedIssues_RejectsNonUUIDAssigneeID(t *testing.T) {
 	srv := mock.Server(t)
 
 	client := linearClient.New("test-key", linearClient.WithEndpoint(srv.URL))
-	_, err := client.FetchAssignedIssues(context.Background(), TestTeamID, "human-name")
+	_, err := client.FetchAssignedIssues(context.Background(), TestTeamID, "human-name", "", "")
 	if err == nil {
 		t.Fatal("expected error for non-UUID assigneeID, got nil")
 	}
@@ -171,7 +171,7 @@ func TestMock_SimulateApproval(t *testing.T) {
 	if len(comments) != 1 {
 		t.Fatalf("expected 1 comment, got %d", len(comments))
 	}
-	if comments[0].Body != "@autoralph approved" {
+	if comments[0].Body != "I approve this" {
 		t.Errorf("expected approval body, got %q", comments[0].Body)
 	}
 }
@@ -189,7 +189,7 @@ func TestMock_CompletedIssuesExcluded(t *testing.T) {
 	srv := mock.Server(t)
 
 	client := linearClient.New("test-key", linearClient.WithEndpoint(srv.URL))
-	issues, err := client.FetchAssignedIssues(context.Background(), TestTeamID, TestAssigneeID)
+	issues, err := client.FetchAssignedIssues(context.Background(), TestTeamID, TestAssigneeID, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -261,6 +261,62 @@ func TestMock_ResolveTeamID_UUIDPassthrough(t *testing.T) {
 	}
 	if teamID != TestTeamID {
 		t.Errorf("expected %q, got %q", TestTeamID, teamID)
+	}
+}
+
+func TestMock_FetchAssignedIssues_LabelFilter(t *testing.T) {
+	mock := New()
+	mock.AddIssue(Issue{
+		ID: IssueUUID("labeled"), Identifier: "TEST-1", Title: "Labeled",
+		StateID: StateTodoID, StateName: "Todo", StateType: "unstarted",
+		Labels: []string{"autoralph"},
+	})
+	mock.AddIssue(Issue{
+		ID: IssueUUID("unlabeled"), Identifier: "TEST-2", Title: "Unlabeled",
+		StateID: StateTodoID, StateName: "Todo", StateType: "unstarted",
+	})
+	srv := mock.Server(t)
+
+	client := linearClient.New("test-key", linearClient.WithEndpoint(srv.URL))
+
+	// With label filter: only labeled issue returned.
+	issues, err := client.FetchAssignedIssues(context.Background(), TestTeamID, TestAssigneeID, "", "autoralph")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue with label filter, got %d", len(issues))
+	}
+	if issues[0].Title != "Labeled" {
+		t.Errorf("expected 'Labeled', got %q", issues[0].Title)
+	}
+
+	// Without label filter: both issues returned.
+	all, err := client.FetchAssignedIssues(context.Background(), TestTeamID, TestAssigneeID, "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 issues without label filter, got %d", len(all))
+	}
+}
+
+func TestMock_FetchAssignedIssues_LabelFilter_CaseInsensitive(t *testing.T) {
+	mock := New()
+	mock.AddIssue(Issue{
+		ID: IssueUUID("ci-label"), Identifier: "TEST-1", Title: "Mixed Case",
+		StateID: StateTodoID, StateName: "Todo", StateType: "unstarted",
+		Labels: []string{"AutoRalph"},
+	})
+	srv := mock.Server(t)
+
+	client := linearClient.New("test-key", linearClient.WithEndpoint(srv.URL))
+	issues, err := client.FetchAssignedIssues(context.Background(), TestTeamID, TestAssigneeID, "", "autoralph")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue (case-insensitive match), got %d", len(issues))
 	}
 }
 

@@ -18,6 +18,8 @@ type GithubConfig struct {
 type LinearConfig struct {
 	TeamID     string `yaml:"team_id"`
 	AssigneeID string `yaml:"assignee_id"`
+	ProjectID  string `yaml:"project_id"`
+	Label      string `yaml:"label,omitempty"`
 }
 
 type ProjectConfig struct {
@@ -110,6 +112,9 @@ func Validate(cfg ProjectConfig) error {
 	}
 	if cfg.Linear.AssigneeID == "" {
 		return fmt.Errorf("missing required field: linear.assignee_id")
+	}
+	if cfg.Linear.ProjectID == "" {
+		return fmt.Errorf("missing required field: linear.project_id")
 	}
 	return nil
 }

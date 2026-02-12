@@ -75,7 +75,7 @@ func TestClient_FetchAssignedIssues_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := New("test-key", WithEndpoint(srv.URL))
-	issues, err := c.FetchAssignedIssues(context.Background(), "team-1", "user-1")
+	issues, err := c.FetchAssignedIssues(context.Background(), "team-1", "user-1", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestClient_FetchAssignedIssues_EmptyResult(t *testing.T) {
 	defer srv.Close()
 
 	c := New("test-key", WithEndpoint(srv.URL))
-	issues, err := c.FetchAssignedIssues(context.Background(), "team-1", "user-1")
+	issues, err := c.FetchAssignedIssues(context.Background(), "team-1", "user-1", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestClient_GraphQLError(t *testing.T) {
 	defer srv.Close()
 
 	c := New("test-key", WithEndpoint(srv.URL))
-	_, err := c.FetchAssignedIssues(context.Background(), "bad", "bad")
+	_, err := c.FetchAssignedIssues(context.Background(), "bad", "bad", "", "")
 	if err == nil {
 		t.Fatal("expected error for GraphQL errors")
 	}
@@ -315,7 +315,7 @@ func TestClient_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	c := New("bad-key", WithEndpoint(srv.URL))
-	_, err := c.FetchAssignedIssues(context.Background(), "team-1", "user-1")
+	_, err := c.FetchAssignedIssues(context.Background(), "team-1", "user-1", "", "")
 	if err == nil {
 		t.Fatal("expected error for HTTP 401")
 	}
@@ -398,7 +398,7 @@ func TestClient_AuthorizationHeader(t *testing.T) {
 	defer srv.Close()
 
 	c := New("lin_api_supersecret", WithEndpoint(srv.URL))
-	c.FetchAssignedIssues(context.Background(), "t", "u")
+	c.FetchAssignedIssues(context.Background(), "t", "u", "", "")
 
 	if gotAuth != "lin_api_supersecret" {
 		t.Errorf("expected Authorization header 'lin_api_supersecret', got %q", gotAuth)
@@ -416,9 +416,158 @@ func TestClient_ContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately.
 
 	c := New("test-key", WithEndpoint(srv.URL))
-	_, err := c.FetchAssignedIssues(ctx, "team-1", "user-1")
+	_, err := c.FetchAssignedIssues(ctx, "team-1", "user-1", "", "")
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
+	}
+}
+
+func TestClient_FetchAssignedIssues_WithProjectID(t *testing.T) {
+	srv := mockLinear(t, func(query string, vars map[string]any) (any, []graphqlError) {
+		if vars["projectID"] != "proj-1" {
+			t.Errorf("expected projectID variable, got: %v", vars)
+		}
+		if !contains(query, "project: { id: { eq: $projectID } }") {
+			t.Errorf("expected project filter in query, got:\n%s", query)
+		}
+		return map[string]any{
+			"issues": map[string]any{
+				"nodes": []map[string]any{
+					{
+						"id":          "issue-1",
+						"identifier":  "ENG-42",
+						"title":       "Filtered issue",
+						"description": "",
+						"state":       map[string]any{"id": "s1", "name": "Todo", "type": "unstarted"},
+					},
+				},
+			},
+		}, nil
+	})
+	defer srv.Close()
+
+	c := New("test-key", WithEndpoint(srv.URL))
+	issues, err := c.FetchAssignedIssues(context.Background(), "team-1", "user-1", "proj-1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(issues))
+	}
+	if issues[0].Title != "Filtered issue" {
+		t.Errorf("expected 'Filtered issue', got %q", issues[0].Title)
+	}
+}
+
+func TestClient_FetchAssignedIssues_WithoutProjectID_OmitsFilter(t *testing.T) {
+	srv := mockLinear(t, func(query string, vars map[string]any) (any, []graphqlError) {
+		if _, ok := vars["projectID"]; ok {
+			t.Errorf("projectID should not be in vars when empty, got: %v", vars)
+		}
+		if contains(query, "project:") {
+			t.Errorf("query should not contain project filter when empty, got:\n%s", query)
+		}
+		return map[string]any{
+			"issues": map[string]any{
+				"nodes": []map[string]any{},
+			},
+		}, nil
+	})
+	defer srv.Close()
+
+	c := New("test-key", WithEndpoint(srv.URL))
+	_, err := c.FetchAssignedIssues(context.Background(), "team-1", "user-1", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_ResolveProjectID_UUIDPassthrough(t *testing.T) {
+	c := New("test-key", WithEndpoint("http://unused"))
+	id, err := c.ResolveProjectID(context.Background(), "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "a1b2c3d4-e5f6-7890-abcd-ef1234567890" {
+		t.Errorf("expected UUID passthrough, got %q", id)
+	}
+}
+
+func TestClient_ResolveProjectID_EmptyPassthrough(t *testing.T) {
+	c := New("test-key", WithEndpoint("http://unused"))
+	id, err := c.ResolveProjectID(context.Background(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "" {
+		t.Errorf("expected empty passthrough, got %q", id)
+	}
+}
+
+func TestClient_ResolveProjectID_ByName(t *testing.T) {
+	srv := mockLinear(t, func(query string, vars map[string]any) (any, []graphqlError) {
+		return map[string]any{
+			"projects": map[string]any{
+				"nodes": []map[string]any{
+					{"id": "proj-uuid-1", "slugId": "my-project", "name": "My Project"},
+					{"id": "proj-uuid-2", "slugId": "other", "name": "Other"},
+				},
+			},
+		}, nil
+	})
+	defer srv.Close()
+
+	c := New("test-key", WithEndpoint(srv.URL))
+
+	// By name
+	id, err := c.ResolveProjectID(context.Background(), "My Project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "proj-uuid-1" {
+		t.Errorf("expected proj-uuid-1, got %q", id)
+	}
+}
+
+func TestClient_ResolveProjectID_BySlug(t *testing.T) {
+	srv := mockLinear(t, func(query string, vars map[string]any) (any, []graphqlError) {
+		return map[string]any{
+			"projects": map[string]any{
+				"nodes": []map[string]any{
+					{"id": "proj-uuid-1", "slugId": "my-project", "name": "My Project"},
+				},
+			},
+		}, nil
+	})
+	defer srv.Close()
+
+	c := New("test-key", WithEndpoint(srv.URL))
+	id, err := c.ResolveProjectID(context.Background(), "my-project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "proj-uuid-1" {
+		t.Errorf("expected proj-uuid-1, got %q", id)
+	}
+}
+
+func TestClient_ResolveProjectID_NotFound(t *testing.T) {
+	srv := mockLinear(t, func(query string, vars map[string]any) (any, []graphqlError) {
+		return map[string]any{
+			"projects": map[string]any{
+				"nodes": []map[string]any{},
+			},
+		}, nil
+	})
+	defer srv.Close()
+
+	c := New("test-key", WithEndpoint(srv.URL))
+	_, err := c.ResolveProjectID(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent project")
+	}
+	if !contains(err.Error(), "project not found") {
+		t.Errorf("expected 'project not found' error, got: %v", err)
 	}
 }
 

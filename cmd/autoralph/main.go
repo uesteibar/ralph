@@ -193,18 +193,27 @@ func runServe(args []string) error {
 			logger.Warn("skipping project (assignee resolution)", "project", proj.Name, "assignee_id", proj.LinearAssigneeID, "error", err)
 			continue
 		}
+		resolvedProjectID, err := lc.ResolveProjectID(ctx, proj.LinearProjectID)
+		if err != nil {
+			logger.Warn("skipping project (project resolution)", "project", proj.Name, "project_id", proj.LinearProjectID, "error", err)
+			continue
+		}
 
 		// Persist resolved UUIDs so other components (build, complete) that
 		// read the project from DB get proper UUIDs instead of names/keys.
-		if resolvedTeamID != proj.LinearTeamID || resolvedAssigneeID != proj.LinearAssigneeID {
+		if resolvedTeamID != proj.LinearTeamID || resolvedAssigneeID != proj.LinearAssigneeID || resolvedProjectID != proj.LinearProjectID {
 			if resolvedTeamID != proj.LinearTeamID {
 				logger.Info("resolved team", "project", proj.Name, "from", proj.LinearTeamID, "to", resolvedTeamID)
 			}
 			if resolvedAssigneeID != proj.LinearAssigneeID {
 				logger.Info("resolved assignee", "project", proj.Name, "from", proj.LinearAssigneeID, "to", resolvedAssigneeID)
 			}
+			if resolvedProjectID != proj.LinearProjectID {
+				logger.Info("resolved linear project", "project", proj.Name, "from", proj.LinearProjectID, "to", resolvedProjectID)
+			}
 			proj.LinearTeamID = resolvedTeamID
 			proj.LinearAssigneeID = resolvedAssigneeID
+			proj.LinearProjectID = resolvedProjectID
 			if err := database.UpdateProject(proj); err != nil {
 				logger.Warn("persisting resolved IDs", "project", proj.Name, "error", err)
 			}
@@ -219,6 +228,8 @@ func runServe(args []string) error {
 			ProjectID:        proj.ID,
 			LinearTeamID:     resolvedTeamID,
 			LinearAssigneeID: resolvedAssigneeID,
+			LinearProjectID:  resolvedProjectID,
+			LinearLabel:      proj.LinearLabel,
 			LinearClient:     lc,
 		})
 
@@ -519,7 +530,7 @@ func isTerminalState(state string) bool {
 	case orchestrator.StateCompleted, orchestrator.StateFailed, orchestrator.StatePaused:
 		return true
 	default:
-		return state == "dismissed"
+		return false
 	}
 }
 

@@ -26,6 +26,8 @@ func Sync(database *db.DB, configs []ProjectConfig) error {
 				GithubRepo:         cfg.Github.Repo,
 				LinearTeamID:       cfg.Linear.TeamID,
 				LinearAssigneeID:   cfg.Linear.AssigneeID,
+				LinearProjectID:    cfg.Linear.ProjectID,
+				LinearLabel:        cfg.Linear.Label,
 				RalphConfigPath:    cfg.RalphConfigPath,
 				MaxIterations:      cfg.MaxIterations,
 				BranchPrefix:       cfg.BranchPrefix,
@@ -43,6 +45,8 @@ func Sync(database *db.DB, configs []ProjectConfig) error {
 		existing.GithubRepo = cfg.Github.Repo
 		existing.LinearTeamID = cfg.Linear.TeamID
 		existing.LinearAssigneeID = cfg.Linear.AssigneeID
+		existing.LinearProjectID = cfg.Linear.ProjectID
+		existing.LinearLabel = cfg.Linear.Label
 		existing.RalphConfigPath = cfg.RalphConfigPath
 		existing.MaxIterations = cfg.MaxIterations
 		existing.BranchPrefix = cfg.BranchPrefix

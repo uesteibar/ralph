@@ -199,7 +199,7 @@ func TestIT001_FullLifecycleHappyPath(t *testing.T) {
 		CreatedAt: "2026-01-01T00:01:00Z",
 	})
 
-	// Step 5: Register approval transitions and simulate '@autoralph approved'.
+	// Step 5: Register approval transitions and simulate 'I approve this'.
 	commentClient := linearClient // linear.Client implements approve.CommentClient
 
 	// First simulate a plan response from autoralph.
@@ -1318,6 +1318,190 @@ func startHTTPServer(t *testing.T, handler http.Handler) string {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+// --- IT-014: Label filtering ---
+
+func TestIT014_LabelFilteringOnlyPicksLabeledIssues(t *testing.T) {
+	pg := StartPlayground(t)
+	linearClient := linear.New("test-key", linear.WithEndpoint(pg.LinearURL))
+
+	projects, _ := pg.DB.ListProjects()
+	proj := projects[0]
+
+	// Set a label on the project.
+	proj.LinearLabel = "autoralph"
+	if err := pg.DB.UpdateProject(proj); err != nil {
+		t.Fatalf("updating project label: %v", err)
+	}
+
+	// Add two issues: one with the label, one without.
+	pg.Linear.AddIssue(mocklinear.Issue{
+		ID: mocklinear.IssueUUID("labeled-issue"), Identifier: "TEST-L1",
+		Title: "Labeled Issue", StateID: mocklinear.StateTodoID,
+		StateName: "Todo", StateType: "unstarted",
+		Labels: []string{"autoralph"},
+	})
+	pg.Linear.AddIssue(mocklinear.Issue{
+		ID: mocklinear.IssueUUID("unlabeled-issue"), Identifier: "TEST-L2",
+		Title: "Unlabeled Issue", StateID: mocklinear.StateTodoID,
+		StateName: "Todo", StateType: "unstarted",
+	})
+
+	// Run the poller with label filter.
+	ctx, cancel := context.WithCancel(context.Background())
+	p := poller.New(pg.DB, []poller.ProjectInfo{{
+		ProjectID:        proj.ID,
+		LinearTeamID:     proj.LinearTeamID,
+		LinearAssigneeID: proj.LinearAssigneeID,
+		LinearProjectID:  proj.LinearProjectID,
+		LinearLabel:      proj.LinearLabel,
+		LinearClient:     linearClient,
+	}}, time.Hour, nil)
+
+	go p.Run(ctx)
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	// Verify only the labeled issue was ingested.
+	issues, err := pg.DB.ListIssues(db.IssueFilter{State: "queued"})
+	if err != nil {
+		t.Fatalf("listing issues: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 queued issue (labeled only), got %d", len(issues))
+	}
+	if issues[0].Identifier != "TEST-L1" {
+		t.Errorf("expected identifier TEST-L1, got %s", issues[0].Identifier)
+	}
+}
+
+// --- IT-015: Approval with explicit "I approve this" phrase ---
+
+func TestIT015_ApprovalWithExplicitPhrase(t *testing.T) {
+	pg := StartPlayground(t)
+	linearClient := linear.New("test-key", linear.WithEndpoint(pg.LinearURL))
+
+	// Seed an issue in REFINING state.
+	avatarIssueID := mocklinear.IssueUUID("approval-test")
+	pg.Linear.AddIssue(mocklinear.Issue{
+		ID: avatarIssueID, Identifier: "TEST-A1", Title: "Approval test",
+		StateID: mocklinear.StateTodoID, StateName: "Todo", StateType: "unstarted",
+	})
+
+	issue := pg.SeedIssue("TEST-A1", "Approval test", "refining")
+	issue.LinearIssueID = avatarIssueID
+	issue.LastCommentID = mocklinear.CommentUUID("bot-plan")
+	pg.DB.UpdateIssue(issue)
+
+	// Add bot plan comment and human approval.
+	pg.Linear.AddComment(avatarIssueID, mocklinear.Comment{
+		ID: mocklinear.CommentUUID("bot-plan"), Body: "Here is the plan",
+		UserName: "autoralph", CreatedAt: "2026-01-01T00:00:00Z",
+	})
+	pg.Linear.AddComment(avatarIssueID, mocklinear.Comment{
+		ID: mocklinear.CommentUUID("approval"), Body: "I approve this",
+		UserName: "test-user", CreatedAt: "2026-01-01T00:01:00Z",
+	})
+
+	// Check that the approval condition fires.
+	commentClient := linearClient
+	cond := approve.IsApproval(commentClient)
+	if !cond(issue) {
+		t.Fatal("expected IsApproval to return true for 'I approve this'")
+	}
+
+	// Execute approval transition.
+	sm := orchestrator.New(pg.DB)
+	sm.Register(orchestrator.Transition{
+		From:      orchestrator.StateRefining,
+		To:        orchestrator.StateApproved,
+		Condition: approve.IsApproval(commentClient),
+		Action:    approve.NewApprovalAction(approve.Config{Comments: commentClient, Projects: pg.DB}),
+	})
+
+	issue, _ = pg.DB.GetIssue(issue.ID)
+	tr, ok := sm.Evaluate(issue)
+	if !ok {
+		t.Fatal("expected REFINING -> APPROVED transition")
+	}
+	if err := sm.Execute(tr, issue); err != nil {
+		t.Fatalf("executing approval: %v", err)
+	}
+
+	issue, _ = pg.DB.GetIssue(issue.ID)
+	if issue.State != "approved" {
+		t.Errorf("expected state approved, got %s", issue.State)
+	}
+	if issue.PlanText == "" {
+		t.Error("expected plan text to be stored")
+	}
+}
+
+// --- IT-016: Refinement comment contains approval hint ---
+
+func TestIT016_RefinementCommentContainsApprovalHint(t *testing.T) {
+	pg := StartPlayground(t)
+	linearClient := linear.New("test-key", linear.WithEndpoint(pg.LinearURL))
+
+	// Seed an issue.
+	issueID := mocklinear.IssueUUID("hint-test")
+	pg.Linear.AddIssue(mocklinear.Issue{
+		ID: issueID, Identifier: "TEST-H1", Title: "Hint test",
+		StateID: mocklinear.StateTodoID, StateName: "Todo", StateType: "unstarted",
+	})
+
+	// Ingest via poller.
+	projects, _ := pg.DB.ListProjects()
+	proj := projects[0]
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p := poller.New(pg.DB, []poller.ProjectInfo{{
+		ProjectID:        proj.ID,
+		LinearTeamID:     proj.LinearTeamID,
+		LinearAssigneeID: proj.LinearAssigneeID,
+		LinearProjectID:  proj.LinearProjectID,
+		LinearClient:     linearClient,
+	}}, time.Hour, nil)
+	go p.Run(ctx)
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	issues, _ := pg.DB.ListIssues(db.IssueFilter{State: "queued"})
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 queued issue, got %d", len(issues))
+	}
+	issue := issues[0]
+
+	// Transition QUEUED -> REFINING.
+	aiInvoker := &mockInvoker{response: "Here is my analysis of the issue."}
+	sm := orchestrator.New(pg.DB)
+	sm.Register(orchestrator.Transition{
+		From: orchestrator.StateQueued,
+		To:   orchestrator.StateRefining,
+		Action: refine.NewAction(refine.Config{
+			Invoker:  aiInvoker,
+			Poster:   &linearCommentPoster{client: linearClient},
+			Projects: pg.DB,
+		}),
+	})
+
+	tr, _ := sm.Evaluate(issue)
+	if err := sm.Execute(tr, issue); err != nil {
+		t.Fatalf("executing refine transition: %v", err)
+	}
+
+	// Verify the comment posted to Linear contains the approval hint.
+	if len(pg.Linear.ReceivedComments) == 0 {
+		t.Fatal("expected at least 1 comment posted to Linear")
+	}
+	lastComment := pg.Linear.ReceivedComments[len(pg.Linear.ReceivedComments)-1]
+	if !strings.Contains(lastComment.Body, "I approve this") {
+		t.Errorf("expected posted comment to contain approval hint, got: %s", lastComment.Body[:min(len(lastComment.Body), 200)])
+	}
+	if !strings.Contains(lastComment.Body, "To approve this plan") {
+		t.Errorf("expected posted comment to contain approval instruction, got: %s", lastComment.Body[:min(len(lastComment.Body), 200)])
+	}
 }
 
 func findProjectRoot(t *testing.T) string {

@@ -195,12 +195,35 @@ func truncate(s string, n int) string {
 }
 
 // FetchAssignedIssues returns issues assigned to assigneeID in the given team.
-func (c *Client) FetchAssignedIssues(ctx context.Context, teamID, assigneeID string) ([]Issue, error) {
-	const query = `query($teamID: ID!, $assigneeID: ID!) {
+// If projectID is non-empty, results are further filtered to that Linear project.
+// If label is non-empty, results are further filtered to issues with that label.
+func (c *Client) FetchAssignedIssues(ctx context.Context, teamID, assigneeID, projectID, label string) ([]Issue, error) {
+	// Build the query dynamically based on which optional filters are set.
+	var queryParams []string
+	var filterParts []string
+	vars := map[string]any{"teamID": teamID, "assigneeID": assigneeID}
+
+	queryParams = append(queryParams, "$teamID: ID!", "$assigneeID: ID!")
+	filterParts = append(filterParts,
+		"team: { id: { eq: $teamID } }",
+		"assignee: { id: { eq: $assigneeID } }",
+		"state: { type: { nin: [\"canceled\", \"completed\"] } }",
+	)
+
+	if projectID != "" {
+		queryParams = append(queryParams, "$projectID: ID!")
+		filterParts = append(filterParts, "project: { id: { eq: $projectID } }")
+		vars["projectID"] = projectID
+	}
+	if label != "" {
+		queryParams = append(queryParams, "$label: String!")
+		filterParts = append(filterParts, "labels: { name: { eqIgnoreCase: $label } }")
+		vars["label"] = label
+	}
+
+	query := "query(" + strings.Join(queryParams, ", ") + `) {
   issues(filter: {
-    team: { id: { eq: $teamID } }
-    assignee: { id: { eq: $assigneeID } }
-    state: { type: { nin: ["canceled", "completed"] } }
+    ` + strings.Join(filterParts, "\n    ") + `
   }) {
     nodes {
       id
@@ -211,7 +234,7 @@ func (c *Client) FetchAssignedIssues(ctx context.Context, teamID, assigneeID str
     }
   }
 }`
-	vars := map[string]any{"teamID": teamID, "assigneeID": assigneeID}
+
 	data, err := c.execute(ctx, query, vars)
 	if err != nil {
 		return nil, fmt.Errorf("fetching assigned issues: %w", err)
@@ -500,6 +523,46 @@ func (c *Client) ResolveUserID(ctx context.Context, identifier string) (string, 
 		}
 	}
 	return "", fmt.Errorf("user not found: %q (tried matching displayName, name, and email)", identifier)
+}
+
+// ResolveProjectID resolves a project identifier (UUID, slug/key, or name) to a project UUID.
+// If the identifier is already a UUID, it is returned as-is.
+// An empty identifier is returned as-is (no project filter).
+func (c *Client) ResolveProjectID(ctx context.Context, identifier string) (string, error) {
+	if identifier == "" || isUUID(identifier) {
+		return identifier, nil
+	}
+
+	const query = `query {
+  projects {
+    nodes { id slugId name }
+  }
+}`
+	data, err := c.execute(ctx, query, nil)
+	if err != nil {
+		return "", fmt.Errorf("fetching projects: %w", err)
+	}
+
+	var result struct {
+		Projects struct {
+			Nodes []struct {
+				ID     string `json:"id"`
+				SlugID string `json:"slugId"`
+				Name   string `json:"name"`
+			} `json:"nodes"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", fmt.Errorf("decoding projects: %w", err)
+	}
+
+	lower := strings.ToLower(identifier)
+	for _, p := range result.Projects.Nodes {
+		if strings.ToLower(p.SlugID) == lower || strings.ToLower(p.Name) == lower {
+			return p.ID, nil
+		}
+	}
+	return "", fmt.Errorf("project not found: %q (tried matching slugId and name)", identifier)
 }
 
 func isUUID(s string) bool {
