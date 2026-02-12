@@ -22,6 +22,7 @@ Usage:
   ralph new <name> [--project-config path]                Alias for ralph workspaces new
   ralph eject [--project-config path]              Export prompt templates to .ralph/prompts/ for customization
   ralph tui [--project-config path]            Multi-workspace overview TUI
+  ralph attach [--project-config path] [--workspace name] [--no-tui]  Attach to a running daemon's viewer
   ralph stop [<name>] [--project-config path] [--workspace name]   Stop a running daemon
   ralph done [--project-config path] [--workspace name]   Squash-merge and clean up
   ralph status [--project-config path] [--short] Show workspace and story progress
@@ -81,6 +82,8 @@ func main() {
 		err = commands.Eject(rest)
 	case "tui":
 		err = commands.Tui(rest)
+	case "attach":
+		err = commands.Attach(rest)
 	case "stop":
 		err = commands.Stop(rest)
 	case "done":
