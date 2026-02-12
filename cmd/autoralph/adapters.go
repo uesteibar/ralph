@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -211,40 +210,51 @@ func (p *prdReaderAdapter) ReadPRD(path string) (pr.PRDInfo, error) {
 
 // gitOpsAdapter wraps gitops functions to satisfy feedback.GitOps, pr.GitPusher,
 // pr.DiffStatter, and pr.Rebaser.
-type gitOpsAdapter struct{}
+type gitOpsAdapter struct {
+	gitAuthorName  string
+	gitAuthorEmail string
+}
+
+func (g *gitOpsAdapter) gitEnv() []string {
+	return []string{
+		"GIT_AUTHOR_NAME=" + g.gitAuthorName,
+		"GIT_AUTHOR_EMAIL=" + g.gitAuthorEmail,
+		"GIT_COMMITTER_NAME=" + g.gitAuthorName,
+		"GIT_COMMITTER_EMAIL=" + g.gitAuthorEmail,
+	}
+}
 
 func (g *gitOpsAdapter) Commit(ctx context.Context, workDir, message string) error {
-	r := &shell.Runner{Dir: workDir}
+	r := &shell.Runner{Dir: workDir, Env: g.gitEnv()}
 	return gitops.Commit(ctx, r, message)
 }
 
 func (g *gitOpsAdapter) PushBranch(ctx context.Context, workDir, branch string) error {
-	r := &shell.Runner{Dir: workDir}
+	r := &shell.Runner{Dir: workDir, Env: g.gitEnv()}
 	return gitops.PushBranch(ctx, r, branch)
 }
 
 func (g *gitOpsAdapter) HeadSHA(ctx context.Context, workDir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
+	r := &shell.Runner{Dir: workDir, Env: g.gitEnv()}
+	out, err := r.Run(ctx, "git", "rev-parse", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSpace(out), nil
 }
 
 func (g *gitOpsAdapter) DiffStats(ctx context.Context, workDir, base string) (string, error) {
-	r := &shell.Runner{Dir: workDir}
+	r := &shell.Runner{Dir: workDir, Env: g.gitEnv()}
 	return gitops.DiffStats(ctx, r, base)
 }
 
 func (g *gitOpsAdapter) FetchBranch(ctx context.Context, workDir, branch string) error {
-	r := &shell.Runner{Dir: workDir}
+	r := &shell.Runner{Dir: workDir, Env: g.gitEnv()}
 	return gitops.FetchBranch(ctx, r, branch)
 }
 
 func (g *gitOpsAdapter) StartRebase(ctx context.Context, workDir, onto string) (pr.RebaseResult, error) {
-	r := &shell.Runner{Dir: workDir}
+	r := &shell.Runner{Dir: workDir, Env: g.gitEnv()}
 	result, err := gitops.StartRebase(ctx, r, onto)
 	if err != nil {
 		return pr.RebaseResult{}, err
@@ -256,12 +266,12 @@ func (g *gitOpsAdapter) StartRebase(ctx context.Context, workDir, onto string) (
 }
 
 func (g *gitOpsAdapter) AbortRebase(ctx context.Context, workDir string) error {
-	r := &shell.Runner{Dir: workDir}
+	r := &shell.Runner{Dir: workDir, Env: g.gitEnv()}
 	return gitops.AbortRebase(ctx, r)
 }
 
 func (g *gitOpsAdapter) ConflictFiles(ctx context.Context, workDir string) ([]string, error) {
-	r := &shell.Runner{Dir: workDir}
+	r := &shell.Runner{Dir: workDir, Env: g.gitEnv()}
 	return gitops.ConflictFiles(ctx, r)
 }
 
