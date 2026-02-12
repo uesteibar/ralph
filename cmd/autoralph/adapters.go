@@ -24,13 +24,18 @@ import (
 
 // claudeInvoker wraps claude.Invoke to satisfy the Invoker interface used by
 // refine, approve, build, feedback, and pr packages.
-type claudeInvoker struct{}
+type claudeInvoker struct {
+	// DisallowedTools prevents the AI from using specific tools.
+	// Used to block write operations during read-only phases like refinement.
+	DisallowedTools []string
+}
 
 func (c *claudeInvoker) Invoke(ctx context.Context, prompt, dir string) (string, error) {
 	return claude.Invoke(ctx, claude.InvokeOpts{
-		Prompt: prompt,
-		Dir:    dir,
-		Print:  true,
+		Prompt:          prompt,
+		Dir:             dir,
+		Print:           true,
+		DisallowedTools: c.DisallowedTools,
 	})
 }
 

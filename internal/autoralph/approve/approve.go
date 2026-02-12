@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
@@ -28,7 +29,7 @@ type Invoker interface {
 type CommentClient interface {
 	FetchIssueComments(ctx context.Context, issueID string) ([]linear.Comment, error)
 	PostComment(ctx context.Context, issueID, body string) (linear.Comment, error)
-	PostReply(ctx context.Context, parentID, body string) (linear.Comment, error)
+	PostReply(ctx context.Context, issueID, parentID, body string) (linear.Comment, error)
 }
 
 // ProjectGetter fetches a project from the database.
@@ -197,7 +198,7 @@ func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error 
 		threadParent := findThreadParent(newComments)
 		var posted linear.Comment
 		if threadParent != "" {
-			posted, err = cfg.Comments.PostReply(context.Background(), threadParent, responseWithHint)
+			posted, err = cfg.Comments.PostReply(context.Background(), issue.LinearIssueID, threadParent, responseWithHint)
 		} else {
 			posted, err = cfg.Comments.PostComment(context.Background(), issue.LinearIssueID, responseWithHint)
 		}
@@ -238,6 +239,8 @@ func findThreadParent(newComments []linear.Comment) string {
 
 // commentsAfter returns comments that appear after the one with lastID.
 // If lastID is empty, returns all comments.
+// If lastID is set but not found (e.g. eventual consistency lag), returns nil
+// to avoid false positives from stale comments.
 func commentsAfter(comments []linear.Comment, lastID string) []linear.Comment {
 	if lastID == "" {
 		return comments
@@ -247,14 +250,16 @@ func commentsAfter(comments []linear.Comment, lastID string) []linear.Comment {
 			return comments[i+1:]
 		}
 	}
-	// lastID not found — treat all as new (defensive)
-	return comments
+	// lastID not found — return nil to avoid false positives.
+	// The comment will appear on the next poll cycle once consistent.
+	return nil
 }
 
 // containsApproval checks if text contains an approval mention (case-insensitive).
-// Matches "@<username> approved" where username is any non-whitespace sequence.
+// It strips the bot's own ApprovalHint before matching to prevent self-approval.
 func containsApproval(text string) bool {
-	return approvalPattern.MatchString(text)
+	cleaned := strings.Replace(text, ApprovalHint, "", 1)
+	return approvalPattern.MatchString(cleaned)
 }
 
 // extractPlanText finds the most recent autoralph comment (the bot's last

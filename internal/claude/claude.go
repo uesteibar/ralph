@@ -44,6 +44,10 @@ type InvokeOpts struct {
 	// Continue resumes the most recent conversation (passes --continue to Claude CLI).
 	Continue bool
 
+	// DisallowedTools is a list of tool names that Claude cannot use (--disallowedTools flag).
+	// Use this to prevent write operations during read-only phases like refinement.
+	DisallowedTools []string
+
 	// EventHandler receives structured events during stream processing.
 	// If nil, events are silently discarded.
 	EventHandler events.EventHandler
@@ -92,6 +96,10 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 
 	if opts.MaxTurns > 0 {
 		args = append(args, "--max-turns", strconv.Itoa(opts.MaxTurns))
+	}
+
+	if len(opts.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(opts.DisallowedTools, ","))
 	}
 
 	// Get absolute working dir for relative path calculation
@@ -420,6 +428,10 @@ func buildArgs(opts InvokeOpts) []string {
 
 	if opts.MaxTurns > 0 {
 		args = append(args, "--max-turns", strconv.Itoa(opts.MaxTurns))
+	}
+
+	if len(opts.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(opts.DisallowedTools, ","))
 	}
 
 	if opts.Prompt != "" && !opts.Print {

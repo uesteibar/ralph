@@ -300,12 +300,21 @@ func (c *Client) FetchIssueComments(ctx context.Context, issueID string) ([]Comm
 	}
 
 	// Flatten: for each top-level comment, append it and then its children.
+	// Deduplicate because Linear may return child comments both in the
+	// top-level nodes array and in the parent's children array.
+	seen := make(map[string]bool)
 	var comments []Comment
 	for _, n := range result.Issue.Comments.Nodes {
-		comments = append(comments, n.toComment())
+		if !seen[n.ID] {
+			comments = append(comments, n.toComment())
+			seen[n.ID] = true
+		}
 		if n.Children != nil {
 			for _, child := range n.Children.Nodes {
-				comments = append(comments, child.toComment())
+				if !seen[child.ID] {
+					comments = append(comments, child.toComment())
+					seen[child.ID] = true
+				}
 			}
 		}
 	}
@@ -348,9 +357,9 @@ func (c *Client) PostComment(ctx context.Context, issueID, body string) (Comment
 }
 
 // PostReply creates a threaded reply under the given parent comment.
-func (c *Client) PostReply(ctx context.Context, parentID, body string) (Comment, error) {
-	const query = `mutation($parentID: String!, $body: String!) {
-  commentCreate(input: { parentId: $parentID, body: $body }) {
+func (c *Client) PostReply(ctx context.Context, issueID, parentID, body string) (Comment, error) {
+	const query = `mutation($issueID: String!, $parentID: String!, $body: String!) {
+  commentCreate(input: { issueId: $issueID, parentId: $parentID, body: $body }) {
     comment {
       id
       parentId
@@ -360,7 +369,7 @@ func (c *Client) PostReply(ctx context.Context, parentID, body string) (Comment,
     }
   }
 }`
-	vars := map[string]any{"parentID": parentID, "body": body}
+	vars := map[string]any{"issueID": issueID, "parentID": parentID, "body": body}
 	data, err := c.execute(ctx, query, vars)
 	if err != nil {
 		return Comment{}, fmt.Errorf("posting reply: %w", err)

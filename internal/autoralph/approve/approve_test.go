@@ -69,6 +69,7 @@ type postCall struct {
 }
 
 type replyCall struct {
+	issueID  string
 	parentID string
 	body     string
 }
@@ -86,8 +87,8 @@ func (m *mockCommentClient) PostComment(ctx context.Context, issueID, body strin
 	return linear.Comment{ID: id, Body: body}, m.postErr
 }
 
-func (m *mockCommentClient) PostReply(ctx context.Context, parentID, body string) (linear.Comment, error) {
-	m.replies = append(m.replies, replyCall{parentID: parentID, body: body})
+func (m *mockCommentClient) PostReply(ctx context.Context, issueID, parentID, body string) (linear.Comment, error) {
+	m.replies = append(m.replies, replyCall{issueID: issueID, parentID: parentID, body: body})
 	id := m.postID
 	if id == "" {
 		id = "posted-reply-id"
@@ -565,15 +566,15 @@ func TestCommentsAfter_EmptyLastID(t *testing.T) {
 	}
 }
 
-func TestCommentsAfter_LastIDNotFound(t *testing.T) {
+func TestCommentsAfter_LastIDNotFound_ReturnsNil(t *testing.T) {
 	comments := []linear.Comment{
 		{ID: "c1", Body: "first"},
 		{ID: "c2", Body: "second"},
 	}
 
 	after := commentsAfter(comments, "unknown")
-	if len(after) != 2 {
-		t.Fatalf("expected all comments when lastID not found, got %d", len(after))
+	if after != nil {
+		t.Fatalf("expected nil when lastID not found, got %d comments", len(after))
 	}
 }
 
@@ -594,6 +595,9 @@ func TestContainsApproval_Variants(t *testing.T) {
 		{"@autoralph approved", false},
 		{"some random comment", false},
 		{"I don't approve this", false},
+		// Bot's own comment with ApprovalHint must not self-trigger
+		{"Here is the updated plan." + ApprovalHint, false},
+		{"## Plan\n\n1. Do stuff" + ApprovalHint, false},
 	}
 
 	for _, tt := range tests {
@@ -626,5 +630,62 @@ func TestExtractPlanText_ApprovalIsFirst_ReturnsEmpty(t *testing.T) {
 	plan := extractPlanText(comments)
 	if plan != "" {
 		t.Errorf("expected empty plan text, got %q", plan)
+	}
+}
+
+// --- Self-approval prevention tests ---
+
+func TestIsApproval_BotReplyWithHint_DoesNotSelfApprove(t *testing.T) {
+	// Simulate: bot posted iteration reply (c2) with ApprovalHint, lastCommentID = c2.
+	// On the next tick, FetchIssueComments returns c2 due to consistency lag
+	// where c2 is still the latest. No new comments → should NOT approve.
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "draft plan" + ApprovalHint, UserName: "autoralph"},
+			{ID: "c2", Body: "Updated plan with feedback" + ApprovalHint, UserName: "autoralph"},
+		},
+	}
+
+	cond := IsApproval(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c2"}
+
+	if cond(issue) {
+		t.Error("expected IsApproval to return false — no new comments after lastCommentID")
+	}
+}
+
+func TestIsApproval_LastCommentIDNotInList_ReturnsFalse(t *testing.T) {
+	// Simulate eventual consistency: lastCommentID (c3) was just posted
+	// but hasn't appeared in FetchIssueComments yet. The old fallback
+	// returned ALL comments, triggering false approval from the hint text.
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "draft plan" + ApprovalHint, UserName: "autoralph"},
+			{ID: "c2", Body: "Can you add caching?", UserName: "human"},
+		},
+	}
+
+	cond := IsApproval(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c3-not-yet-visible"}
+
+	if cond(issue) {
+		t.Error("expected IsApproval to return false when lastCommentID not found (eventual consistency)")
+	}
+}
+
+func TestIsIteration_LastCommentIDNotInList_ReturnsFalse(t *testing.T) {
+	// Same consistency scenario for iteration check.
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "feedback", UserName: "human"},
+		},
+	}
+
+	cond := IsIteration(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c3-not-yet-visible"}
+
+	if cond(issue) {
+		t.Error("expected IsIteration to return false when lastCommentID not found")
 	}
 }

@@ -251,13 +251,18 @@ func runServe(args []string) error {
 
 	if firstLinear != nil {
 		invoker := &claudeInvoker{}
+		// readOnlyInvoker blocks write tools so the AI can only read the
+		// codebase during refinement and iteration — no code changes.
+		readOnlyInvoker := &claudeInvoker{
+			DisallowedTools: []string{"Edit", "Write", "Bash", "NotebookEdit"},
+		}
 
 		// QUEUED → REFINING
 		sm.Register(orchestrator.Transition{
 			From: orchestrator.StateQueued,
 			To:   orchestrator.StateRefining,
 			Action: refine.NewAction(refine.Config{
-				Invoker:  invoker,
+				Invoker:  readOnlyInvoker,
 				Poster:   &linearCommentPoster{client: firstLinear},
 				Projects: database,
 			}),
@@ -280,7 +285,7 @@ func runServe(args []string) error {
 			To:        orchestrator.StateRefining,
 			Condition: approve.IsIteration(firstLinear),
 			Action: approve.NewIterationAction(approve.Config{
-				Invoker:  invoker,
+				Invoker:  readOnlyInvoker,
 				Comments: firstLinear,
 				Projects: database,
 			}),
