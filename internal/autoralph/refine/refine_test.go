@@ -54,6 +54,22 @@ func (m *mockInvoker) Invoke(ctx context.Context, prompt, dir string) (string, e
 	return m.response, m.err
 }
 
+// mockGitPuller records calls to PullDefaultBase.
+type mockGitPuller struct {
+	calls []gitPullerCall
+	err   error
+}
+
+type gitPullerCall struct {
+	repoPath        string
+	ralphConfigPath string
+}
+
+func (m *mockGitPuller) PullDefaultBase(ctx context.Context, repoPath, ralphConfigPath string) error {
+	m.calls = append(m.calls, gitPullerCall{repoPath: repoPath, ralphConfigPath: ralphConfigPath})
+	return m.err
+}
+
 // mockPoster records calls to PostComment.
 type mockPoster struct {
 	calls []posterCall
@@ -234,6 +250,132 @@ func TestRefineAction_WithOverrideDir(t *testing.T) {
 	}
 
 	// Should still work (falls back to embedded template)
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called")
+	}
+}
+
+func TestRefineAction_PullsBeforeInvokingAI(t *testing.T) {
+	d := testDB(t)
+	p, err := d.CreateProject(db.Project{Name: "test-project", LocalPath: "/tmp/test", RalphConfigPath: ".ralph/ralph.yaml"})
+	if err != nil {
+		t.Fatalf("creating test project: %v", err)
+	}
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:     p.ID,
+		LinearIssueID: "lin-123",
+		Identifier:    "PROJ-42",
+		Title:         "Add user avatars",
+		Description:   "Users should be able to upload profile pictures.",
+		State:         "queued",
+	})
+	if err != nil {
+		t.Fatalf("creating test issue: %v", err)
+	}
+
+	puller := &mockGitPuller{}
+	invoker := &mockInvoker{response: "AI output"}
+	poster := &mockPoster{}
+
+	action := NewAction(Config{
+		Invoker:   invoker,
+		Poster:    poster,
+		Projects:  d,
+		GitPuller: puller,
+	})
+
+	err = action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(puller.calls) != 1 {
+		t.Fatalf("expected 1 PullDefaultBase call, got %d", len(puller.calls))
+	}
+	if puller.calls[0].repoPath != "/tmp/test" {
+		t.Errorf("expected repoPath %q, got %q", "/tmp/test", puller.calls[0].repoPath)
+	}
+	if puller.calls[0].ralphConfigPath != ".ralph/ralph.yaml" {
+		t.Errorf("expected ralphConfigPath %q, got %q", ".ralph/ralph.yaml", puller.calls[0].ralphConfigPath)
+	}
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called after pull")
+	}
+}
+
+func TestRefineAction_PullFails_LogsWarningAndProceeds(t *testing.T) {
+	d := testDB(t)
+	p, err := d.CreateProject(db.Project{Name: "test-project", LocalPath: "/tmp/test", RalphConfigPath: ".ralph/ralph.yaml"})
+	if err != nil {
+		t.Fatalf("creating test project: %v", err)
+	}
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:     p.ID,
+		LinearIssueID: "lin-123",
+		Identifier:    "PROJ-42",
+		Title:         "Add user avatars",
+		Description:   "Users should be able to upload profile pictures.",
+		State:         "queued",
+	})
+	if err != nil {
+		t.Fatalf("creating test issue: %v", err)
+	}
+
+	puller := &mockGitPuller{err: fmt.Errorf("diverged history")}
+	invoker := &mockInvoker{response: "AI output"}
+	poster := &mockPoster{}
+
+	action := NewAction(Config{
+		Invoker:   invoker,
+		Poster:    poster,
+		Projects:  d,
+		GitPuller: puller,
+	})
+
+	err = action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error when pull fails, got: %v", err)
+	}
+
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called even when pull fails")
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	foundWarning := false
+	for _, e := range entries {
+		if e.EventType == "warning" && strings.Contains(e.Detail, "diverged history") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Error("expected a warning activity log entry about the pull failure")
+	}
+}
+
+func TestRefineAction_NilGitPuller_SkipsPull(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "queued")
+
+	invoker := &mockInvoker{response: "AI output"}
+	poster := &mockPoster{}
+
+	action := NewAction(Config{
+		Invoker:  invoker,
+		Poster:   poster,
+		Projects: d,
+		// GitPuller is nil — should be skipped
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	if invoker.lastPrompt == "" {
 		t.Fatal("expected AI invoker to be called")
 	}
