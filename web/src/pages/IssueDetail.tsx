@@ -286,9 +286,9 @@ export default function IssueDetail() {
         streamIdCounter.current += 1
         const syntheticActivity: Activity = {
           id: `stream-${streamIdCounter.current}`,
-          issue_id: payload.issue_id,
+          issue_id: id!,
           event_type: 'build_event',
-          detail: payload.detail,
+          detail: payload.detail ?? '',
           created_at: msg.timestamp || new Date().toISOString(),
         }
         setStreamEvents(prev => [...prev, syntheticActivity])
