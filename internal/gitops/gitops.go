@@ -236,6 +236,15 @@ func FetchBranch(ctx context.Context, r *shell.Runner, branch string) error {
 	return nil
 }
 
+// PullFFOnly pulls the given branch from origin using fast-forward only.
+func PullFFOnly(ctx context.Context, r *shell.Runner, branch string) error {
+	_, err := r.Run(ctx, "git", "pull", "--ff-only", "origin", branch)
+	if err != nil {
+		return fmt.Errorf("pulling origin/%s (ff-only): %w", branch, err)
+	}
+	return nil
+}
+
 // RebaseResult describes the outcome of a rebase operation.
 type RebaseResult struct {
 	Success      bool
