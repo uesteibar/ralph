@@ -355,6 +355,18 @@ func runServe(args []string) error {
 		Projects:   database,
 		PR:         prAction,
 		Logger:     logger,
+		OnBuildEvent: func(issueID, detail string) {
+			if hub == nil {
+				return
+			}
+			msg, err := server.NewWSMessage(server.MsgBuildEvent, map[string]string{
+				"issue_id": issueID,
+				"detail":   detail,
+			})
+			if err == nil {
+				hub.Broadcast(msg)
+			}
+		},
 	})
 
 	// --- 9. Start pollers ---

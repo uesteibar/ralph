@@ -273,11 +273,19 @@ func TestBuildAction_ReadsPRDAfterAIWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listing activity: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 activity entry, got %d", len(entries))
+	if len(entries) < 1 {
+		t.Fatalf("expected at least 1 activity entry, got %d", len(entries))
 	}
-	if !strings.Contains(entries[0].Detail, "1 stories") {
-		t.Errorf("expected activity to mention story count, got: %s", entries[0].Detail)
+	// The "workspace_created" entry (most recent, i.e. first in the list) should mention story count.
+	var found bool
+	for _, e := range entries {
+		if strings.Contains(e.Detail, "1 stories") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected activity to mention story count")
 	}
 }
 
@@ -349,16 +357,32 @@ func TestBuildAction_LogsActivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listing activity: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 activity entry, got %d", len(entries))
+	if len(entries) < 2 {
+		t.Fatalf("expected at least 2 activity entries (Creating PRD + workspace_created), got %d", len(entries))
 	}
-	if entries[0].EventType != "workspace_created" {
-		t.Errorf("expected event_type %q, got %q", "workspace_created", entries[0].EventType)
+	// Find the workspace_created entry.
+	var wsEntry *db.ActivityEntry
+	var prdEntry *db.ActivityEntry
+	for i := range entries {
+		switch entries[i].EventType {
+		case "workspace_created":
+			wsEntry = &entries[i]
+		case "build_event":
+			if strings.Contains(entries[i].Detail, "Creating PRD") {
+				prdEntry = &entries[i]
+			}
+		}
 	}
-	if !strings.Contains(entries[0].Detail, "proj-42") {
+	if prdEntry == nil {
+		t.Error("expected 'Creating PRD...' build_event activity entry")
+	}
+	if wsEntry == nil {
+		t.Fatal("expected workspace_created activity entry")
+	}
+	if !strings.Contains(wsEntry.Detail, "proj-42") {
 		t.Error("expected activity detail to contain workspace name")
 	}
-	if !strings.Contains(entries[0].Detail, "autoralph/proj-42") {
+	if !strings.Contains(wsEntry.Detail, "autoralph/proj-42") {
 		t.Error("expected activity detail to contain branch name")
 	}
 }

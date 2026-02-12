@@ -53,6 +53,12 @@ type Config struct {
 	PR           PRCreator
 	EventHandler events.EventHandler
 	Logger       *slog.Logger
+
+	// OnBuildEvent is called whenever a build event is logged to the activity
+	// table. The callback receives the issue ID and event detail string. This
+	// allows the caller (e.g. main.go) to broadcast real-time updates via
+	// WebSocket without the worker package importing the server package.
+	OnBuildEvent func(issueID, detail string)
 }
 
 // Dispatcher manages build worker goroutines. It limits the number of
@@ -64,6 +70,7 @@ type Dispatcher struct {
 	projects     ProjectGetter
 	pr           PRCreator
 	handler      events.EventHandler
+	onBuildEvent func(issueID, detail string)
 	logger       *slog.Logger
 
 	mu       sync.Mutex
@@ -83,15 +90,16 @@ func New(cfg Config) *Dispatcher {
 		logger = slog.Default()
 	}
 	return &Dispatcher{
-		db:         cfg.DB,
-		maxWorkers: maxWorkers,
-		runner:     cfg.LoopRunner,
-		projects:   cfg.Projects,
-		pr:         cfg.PR,
-		handler:    cfg.EventHandler,
-		logger:     logger,
-		active:     make(map[string]context.CancelFunc),
-		sem:        make(chan struct{}, maxWorkers),
+		db:           cfg.DB,
+		maxWorkers:   maxWorkers,
+		runner:       cfg.LoopRunner,
+		projects:     cfg.Projects,
+		pr:           cfg.PR,
+		handler:      cfg.EventHandler,
+		onBuildEvent: cfg.OnBuildEvent,
+		logger:       logger,
+		active:       make(map[string]context.CancelFunc),
+		sem:          make(chan struct{}, maxWorkers),
 	}
 }
 
@@ -197,9 +205,10 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 	}()
 
 	handler := &buildEventHandler{
-		db:        d.db,
-		issueID:   issue.ID,
-		upstream:  d.handler,
+		db:           d.db,
+		issueID:      issue.ID,
+		upstream:     d.handler,
+		onBuildEvent: d.onBuildEvent,
 	}
 
 	loopCfg := LoopConfig{
@@ -302,9 +311,10 @@ func (d *Dispatcher) handleFailure(issue db.Issue, buildErr error) {
 // activity log, and forwards them to an optional upstream handler (e.g.
 // WebSocket hub).
 type buildEventHandler struct {
-	db       *db.DB
-	issueID  string
-	upstream events.EventHandler
+	db           *db.DB
+	issueID      string
+	upstream     events.EventHandler
+	onBuildEvent func(issueID, detail string)
 }
 
 func (h *buildEventHandler) Handle(e events.Event) {
@@ -312,6 +322,11 @@ func (h *buildEventHandler) Handle(e events.Event) {
 	detail := formatEventDetail(e)
 	if detail != "" {
 		_ = h.db.LogActivity(h.issueID, "build_event", "", "", detail)
+
+		// Notify caller (e.g. WebSocket broadcast) for real-time streaming.
+		if h.onBuildEvent != nil {
+			h.onBuildEvent(h.issueID, detail)
+		}
 	}
 
 	// Forward to upstream handler (e.g. WebSocket hub)
@@ -324,6 +339,11 @@ func (h *buildEventHandler) Handle(e events.Event) {
 // activity log. Returns empty string for events that shouldn't be logged.
 func formatEventDetail(e events.Event) string {
 	switch ev := e.(type) {
+	case events.ToolUse:
+		if ev.Detail != "" {
+			return fmt.Sprintf("→ %s %s", ev.Name, ev.Detail)
+		}
+		return fmt.Sprintf("→ %s", ev.Name)
 	case events.IterationStart:
 		return fmt.Sprintf("Iteration %d/%d started", ev.Iteration, ev.MaxIterations)
 	case events.StoryStarted:

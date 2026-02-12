@@ -118,6 +118,8 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 
 		// Reuse existing PRD if one was already generated.
 		if _, err := os.Stat(prdPath); os.IsNotExist(err) {
+			_ = database.LogActivity(issue.ID, "build_event", "", "", "Creating PRD...")
+
 			prompt, err := ai.RenderGeneratePRD(ai.GeneratePRDData{
 				PlanText:    issue.PlanText,
 				ProjectName: ralphCfg.Project,

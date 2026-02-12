@@ -256,12 +256,17 @@ export default function IssueDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionPending, setActionPending] = useState(false)
+  // Accumulate real-time build events from WebSocket to avoid re-fetching the
+  // entire issue on every tool use event. Cleared when a full reload happens.
+  const [streamEvents, setStreamEvents] = useState<Activity[]>([])
+  const streamIdCounter = useRef(0)
 
   const loadIssue = useCallback(async () => {
     if (!id) return
     try {
       const data = await fetchIssue(id)
       setIssue(data)
+      setStreamEvents([]) // API response includes all persisted events
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load issue')
@@ -274,9 +279,25 @@ export default function IssueDetail() {
     loadIssue()
   }, [loadIssue])
 
-  const handleWSMessage = useCallback((_msg: WSMessage) => {
+  const handleWSMessage = useCallback((msg: WSMessage) => {
+    if (msg.type === 'build_event') {
+      const payload = msg.payload as { issue_id?: string; detail?: string }
+      if (payload.issue_id === id) {
+        streamIdCounter.current += 1
+        const syntheticActivity: Activity = {
+          id: `stream-${streamIdCounter.current}`,
+          issue_id: payload.issue_id,
+          event_type: 'build_event',
+          detail: payload.detail,
+          created_at: msg.timestamp || new Date().toISOString(),
+        }
+        setStreamEvents(prev => [...prev, syntheticActivity])
+      }
+      return
+    }
+    // For state changes and other events, do a full reload.
     loadIssue()
-  }, [loadIssue])
+  }, [id, loadIssue])
 
   useWebSocket(handleWSMessage)
 
@@ -468,7 +489,7 @@ export default function IssueDetail() {
           <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#374151', marginBottom: '12px' }}>
             Live Build
           </h2>
-          <BuildLog activities={issue.activity} />
+          <BuildLog activities={[...issue.activity, ...streamEvents]} />
         </section>
       )}
 
