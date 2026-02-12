@@ -1,0 +1,632 @@
+package approve
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/autoralph/linear"
+)
+
+func testDB(t *testing.T) *db.DB {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening test db: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
+}
+
+func createTestIssue(t *testing.T, d *db.DB, state, lastCommentID string) db.Issue {
+	t.Helper()
+	p, err := d.CreateProject(db.Project{Name: "test-project", LocalPath: "/tmp/test"})
+	if err != nil {
+		t.Fatalf("creating test project: %v", err)
+	}
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:     p.ID,
+		LinearIssueID: "lin-123",
+		Identifier:    "PROJ-42",
+		Title:         "Add user avatars",
+		Description:   "Users should be able to upload profile pictures.",
+		State:         state,
+		LastCommentID: lastCommentID,
+	})
+	if err != nil {
+		t.Fatalf("creating test issue: %v", err)
+	}
+	return issue
+}
+
+type mockInvoker struct {
+	lastPrompt string
+	response   string
+	err        error
+}
+
+func (m *mockInvoker) Invoke(ctx context.Context, prompt, dir string) (string, error) {
+	m.lastPrompt = prompt
+	return m.response, m.err
+}
+
+type mockCommentClient struct {
+	comments []linear.Comment
+	fetchErr error
+	posted   []postCall
+	replies  []replyCall
+	postErr  error
+	postID   string
+}
+
+type postCall struct {
+	issueID string
+	body    string
+}
+
+type replyCall struct {
+	parentID string
+	body     string
+}
+
+func (m *mockCommentClient) FetchIssueComments(ctx context.Context, issueID string) ([]linear.Comment, error) {
+	return m.comments, m.fetchErr
+}
+
+func (m *mockCommentClient) PostComment(ctx context.Context, issueID, body string) (linear.Comment, error) {
+	m.posted = append(m.posted, postCall{issueID: issueID, body: body})
+	id := m.postID
+	if id == "" {
+		id = "posted-comment-id"
+	}
+	return linear.Comment{ID: id, Body: body}, m.postErr
+}
+
+func (m *mockCommentClient) PostReply(ctx context.Context, parentID, body string) (linear.Comment, error) {
+	m.replies = append(m.replies, replyCall{parentID: parentID, body: body})
+	id := m.postID
+	if id == "" {
+		id = "posted-reply-id"
+	}
+	return linear.Comment{ID: id, ParentID: parentID, Body: body}, m.postErr
+}
+
+// --- Condition tests ---
+
+func TestIsApproval_DetectsApprovalComment(t *testing.T) {
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Here is the plan", UserName: "autoralph"},
+			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+		},
+	}
+
+	cond := IsApproval(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c1"}
+
+	if !cond(issue) {
+		t.Error("expected IsApproval to return true when approval comment exists")
+	}
+}
+
+func TestIsApproval_CaseInsensitive(t *testing.T) {
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "plan draft", UserName: "autoralph"},
+			{ID: "c2", Body: "@AutoRalph Approved", UserName: "human"},
+		},
+	}
+
+	cond := IsApproval(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c1"}
+
+	if !cond(issue) {
+		t.Error("expected IsApproval to be case-insensitive")
+	}
+}
+
+func TestIsApproval_NoNewComments_ReturnsFalse(t *testing.T) {
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "plan draft", UserName: "autoralph"},
+		},
+	}
+
+	cond := IsApproval(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c1"}
+
+	if cond(issue) {
+		t.Error("expected IsApproval to return false when no new comments")
+	}
+}
+
+func TestIsApproval_FetchError_ReturnsFalse(t *testing.T) {
+	client := &mockCommentClient{
+		fetchErr: fmt.Errorf("network error"),
+	}
+
+	cond := IsApproval(client)
+	issue := db.Issue{LinearIssueID: "lin-123"}
+
+	if cond(issue) {
+		t.Error("expected IsApproval to return false on fetch error")
+	}
+}
+
+func TestIsIteration_NewHumanComments_ReturnsTrue(t *testing.T) {
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "plan draft", UserName: "autoralph"},
+			{ID: "c2", Body: "Can you add caching?", UserName: "human"},
+		},
+	}
+
+	cond := IsIteration(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c1"}
+
+	if !cond(issue) {
+		t.Error("expected IsIteration to return true for new non-approval comments")
+	}
+}
+
+func TestIsIteration_ApprovalComment_ReturnsFalse(t *testing.T) {
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "plan draft", UserName: "autoralph"},
+			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+		},
+	}
+
+	cond := IsIteration(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c1"}
+
+	if cond(issue) {
+		t.Error("expected IsIteration to return false when approval comment present")
+	}
+}
+
+func TestIsIteration_NoNewComments_ReturnsFalse(t *testing.T) {
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "plan draft", UserName: "autoralph"},
+		},
+	}
+
+	cond := IsIteration(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c1"}
+
+	if cond(issue) {
+		t.Error("expected IsIteration to return false when no new comments")
+	}
+}
+
+func TestHasNewComments_EmptyLastCommentID_ReturnsTrue(t *testing.T) {
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Some comment", UserName: "human"},
+		},
+	}
+
+	cond := HasNewComments(client)
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: ""}
+
+	if !cond(issue) {
+		t.Error("expected HasNewComments to return true when LastCommentID is empty and comments exist")
+	}
+}
+
+// --- Approval action tests ---
+
+func TestApprovalAction_StoresPlanText(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "## Implementation Plan\n\n1. Add avatar upload endpoint\n2. Resize images", UserName: "autoralph"},
+			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+		},
+	}
+
+	action := NewApprovalAction(Config{Comments: client})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.PlanText == "" {
+		t.Error("expected plan_text to be stored")
+	}
+	if !strings.Contains(updated.PlanText, "Implementation Plan") {
+		t.Error("expected plan_text to contain the plan from the comment before approval")
+	}
+}
+
+func TestApprovalAction_UpdatesLastCommentID(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "The plan", UserName: "autoralph"},
+			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+		},
+	}
+
+	action := NewApprovalAction(Config{Comments: client})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.LastCommentID != "c2" {
+		t.Errorf("expected LastCommentID %q, got %q", "c2", updated.LastCommentID)
+	}
+}
+
+func TestApprovalAction_LogsActivity(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Plan text", UserName: "autoralph"},
+			{ID: "c2", Body: "@autoralph approved", UserName: "human"},
+		},
+	}
+
+	action := NewApprovalAction(Config{Comments: client})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 activity entry, got %d", len(entries))
+	}
+	if entries[0].EventType != "approval_detected" {
+		t.Errorf("expected event_type %q, got %q", "approval_detected", entries[0].EventType)
+	}
+	if !strings.Contains(entries[0].Detail, "Plan approved") {
+		t.Error("expected detail to mention plan approval")
+	}
+}
+
+func TestApprovalAction_FetchError_ReturnsError(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		fetchErr: fmt.Errorf("Linear API error"),
+	}
+
+	action := NewApprovalAction(Config{Comments: client})
+
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error when fetching comments fails")
+	}
+	if !strings.Contains(err.Error(), "Linear API error") {
+		t.Errorf("expected error to contain failure message, got: %v", err)
+	}
+}
+
+// --- Iteration action tests ---
+
+func TestIterationAction_InvokesAIWithFullThread(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Here is a draft plan", UserName: "autoralph", CreatedAt: "2026-01-01T00:00:00Z"},
+			{ID: "c2", Body: "Can you add caching?", UserName: "alice", CreatedAt: "2026-01-01T01:00:00Z"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: "Updated plan with caching"}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI to be invoked")
+	}
+	if !strings.Contains(invoker.lastPrompt, "Add user avatars") {
+		t.Error("expected prompt to contain issue title")
+	}
+	if !strings.Contains(invoker.lastPrompt, "Here is a draft plan") {
+		t.Error("expected prompt to contain existing comments")
+	}
+	if !strings.Contains(invoker.lastPrompt, "Can you add caching?") {
+		t.Error("expected prompt to contain human feedback")
+	}
+}
+
+func TestIterationAction_PostsAIResponse(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	aiResponse := "## Updated Plan\n\n1. Add caching layer"
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: aiResponse}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(client.posted) != 1 {
+		t.Fatalf("expected 1 posted comment, got %d", len(client.posted))
+	}
+	if client.posted[0].issueID != "lin-123" {
+		t.Errorf("expected issue ID %q, got %q", "lin-123", client.posted[0].issueID)
+	}
+	if client.posted[0].body != aiResponse {
+		t.Errorf("expected posted body to be AI response")
+	}
+}
+
+func TestIterationAction_UpdatesLastCommentID(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft", UserName: "autoralph"},
+			{ID: "c2", Body: "Feedback", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.LastCommentID != "c3" {
+		t.Errorf("expected LastCommentID %q, got %q", "c3", updated.LastCommentID)
+	}
+}
+
+func TestIterationAction_LogsActivity(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft", UserName: "autoralph"},
+			{ID: "c2", Body: "Feedback", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) < 2 {
+		t.Fatalf("expected at least 2 activity entries, got %d", len(entries))
+	}
+	// Most recent entry is the plan iteration result (ListActivity returns DESC).
+	if entries[0].EventType != "plan_iteration" {
+		t.Errorf("expected event_type %q, got %q", "plan_iteration", entries[0].EventType)
+	}
+	if !strings.Contains(entries[0].Detail, "Updated plan") {
+		t.Error("expected detail to contain AI response")
+	}
+}
+
+func TestIterationAction_AIError_ReturnsError(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft", UserName: "autoralph"},
+			{ID: "c2", Body: "Feedback", UserName: "human"},
+		},
+	}
+	invoker := &mockInvoker{err: fmt.Errorf("AI service unavailable")}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error when AI invocation fails")
+	}
+	if !strings.Contains(err.Error(), "AI service unavailable") {
+		t.Errorf("expected error message, got: %v", err)
+	}
+}
+
+func TestIterationAction_PostError_ReturnsError(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft", UserName: "autoralph"},
+			{ID: "c2", Body: "Feedback", UserName: "human"},
+		},
+		postErr: fmt.Errorf("Linear API error"),
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error when posting comment fails")
+	}
+	if !strings.Contains(err.Error(), "Linear API error") {
+		t.Errorf("expected error message, got: %v", err)
+	}
+}
+
+// --- Helper function tests ---
+
+func TestCommentsAfter_WithLastID(t *testing.T) {
+	comments := []linear.Comment{
+		{ID: "c1", Body: "first"},
+		{ID: "c2", Body: "second"},
+		{ID: "c3", Body: "third"},
+	}
+
+	after := commentsAfter(comments, "c1")
+	if len(after) != 2 {
+		t.Fatalf("expected 2 comments after c1, got %d", len(after))
+	}
+	if after[0].ID != "c2" || after[1].ID != "c3" {
+		t.Error("expected comments c2 and c3")
+	}
+}
+
+func TestCommentsAfter_EmptyLastID(t *testing.T) {
+	comments := []linear.Comment{
+		{ID: "c1", Body: "first"},
+		{ID: "c2", Body: "second"},
+	}
+
+	after := commentsAfter(comments, "")
+	if len(after) != 2 {
+		t.Fatalf("expected all comments when lastID is empty, got %d", len(after))
+	}
+}
+
+func TestCommentsAfter_LastIDNotFound(t *testing.T) {
+	comments := []linear.Comment{
+		{ID: "c1", Body: "first"},
+		{ID: "c2", Body: "second"},
+	}
+
+	after := commentsAfter(comments, "unknown")
+	if len(after) != 2 {
+		t.Fatalf("expected all comments when lastID not found, got %d", len(after))
+	}
+}
+
+func TestContainsApproval_Variants(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"@autoralph approved", true},
+		{"@AutoRalph Approved", true},
+		{"@AUTORALPH APPROVED", true},
+		{"Looks good! @autoralph approved", true},
+		{"@autoralph approved, let's go!", true},
+		// Linear mention format — full bot account name
+		{"@uesteibarautoralph approved", true},
+		{"@UesteibarAutoralph Approved", true},
+		// Any bot username should work
+		{"@mybot approved", true},
+		// Negative cases
+		{"@autoralph not approved", false},
+		{"autoralph approved", false},
+		{"@autoralph approve", false},
+		{"some random comment", false},
+	}
+
+	for _, tt := range tests {
+		got := containsApproval(tt.text)
+		if got != tt.want {
+			t.Errorf("containsApproval(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestExtractPlanText_ReturnsCommentBeforeApproval(t *testing.T) {
+	comments := []linear.Comment{
+		{ID: "c1", Body: "What image formats?", UserName: "autoralph"},
+		{ID: "c2", Body: "PNG and JPEG", UserName: "human"},
+		{ID: "c3", Body: "## Plan\n\n1. Add upload\n2. Resize", UserName: "autoralph"},
+		{ID: "c4", Body: "@autoralph approved", UserName: "human"},
+	}
+
+	plan := extractPlanText(comments)
+	if plan != "## Plan\n\n1. Add upload\n2. Resize" {
+		t.Errorf("expected plan text from c3, got %q", plan)
+	}
+}
+
+func TestExtractPlanText_ApprovalIsFirst_ReturnsEmpty(t *testing.T) {
+	comments := []linear.Comment{
+		{ID: "c1", Body: "@autoralph approved", UserName: "human"},
+	}
+
+	plan := extractPlanText(comments)
+	if plan != "" {
+		t.Errorf("expected empty plan text, got %q", plan)
+	}
+}

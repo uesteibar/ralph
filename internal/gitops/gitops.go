@@ -28,6 +28,17 @@ func DeleteBranch(ctx context.Context, r *shell.Runner, branch string) error {
 	return nil
 }
 
+// WorktreePrune removes stale worktree registrations (where the directory
+// no longer exists). This prevents "already registered worktree" errors
+// when re-creating workspaces after a failed previous attempt.
+func WorktreePrune(ctx context.Context, r *shell.Runner) error {
+	_, err := r.Run(ctx, "git", "worktree", "prune")
+	if err != nil {
+		return fmt.Errorf("pruning worktrees: %w", err)
+	}
+	return nil
+}
+
 // RemoveWorktree removes a git worktree.
 func RemoveWorktree(ctx context.Context, r *shell.Runner, repoPath, worktreePath string) error {
 	repoRunner := &shell.Runner{Dir: repoPath}
@@ -196,6 +207,24 @@ func IsAncestor(ctx context.Context, r *shell.Runner, ancestor, descendant strin
 		return false, fmt.Errorf("checking ancestry: %w", err)
 	}
 	return true, nil
+}
+
+// PushBranch pushes a local branch to the origin remote.
+func PushBranch(ctx context.Context, r *shell.Runner, branch string) error {
+	_, err := r.Run(ctx, "git", "push", "-u", "origin", branch)
+	if err != nil {
+		return fmt.Errorf("pushing branch %s: %w", branch, err)
+	}
+	return nil
+}
+
+// DiffStats returns the --stat output comparing the given base ref to HEAD.
+func DiffStats(ctx context.Context, r *shell.Runner, base string) (string, error) {
+	out, err := r.Run(ctx, "git", "diff", "--stat", base+"...HEAD")
+	if err != nil {
+		return "", fmt.Errorf("getting diff stats against %s: %w", base, err)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // FetchBranch fetches origin/<branch>.

@@ -14,6 +14,7 @@ const (
 	typeStoryStarted    = "story_started"
 	typeQAPhaseStarted  = "qa_phase_started"
 	typeUsageLimitWait  = "usage_limit_wait"
+	typeLogMessage      = "log_message"
 	typePRDRefresh      = "prd_refresh"
 )
 
@@ -41,6 +42,8 @@ func MarshalEvent(e Event) ([]byte, error) {
 		typeName = typeQAPhaseStarted
 	case UsageLimitWait:
 		typeName = typeUsageLimitWait
+	case LogMessage:
+		typeName = typeLogMessage
 	case PRDRefresh:
 		typeName = typePRDRefresh
 	default:
@@ -106,6 +109,12 @@ func UnmarshalEvent(b []byte) (Event, error) {
 		return e, nil
 	case typeUsageLimitWait:
 		var e UsageLimitWait
+		if err := json.Unmarshal(env.Data, &e); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case typeLogMessage:
+		var e LogMessage
 		if err := json.Unmarshal(env.Data, &e); err != nil {
 			return nil, err
 		}

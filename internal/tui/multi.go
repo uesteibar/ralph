@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -56,6 +57,9 @@ type multiDaemonResumedMsg struct {
 	err   error
 }
 
+// prdRefreshTickMsg is sent periodically to re-read PRDs and running state.
+type prdRefreshTickMsg struct{}
+
 // MultiModel is the BubbleTea model for the multi-workspace overview.
 type MultiModel struct {
 	workspaces []WorkspaceInfo
@@ -98,7 +102,13 @@ func NewMultiModel(workspaces []WorkspaceInfo) MultiModel {
 }
 
 func (m MultiModel) Init() tea.Cmd {
-	return nil
+	return prdRefreshTick()
+}
+
+func prdRefreshTick() tea.Cmd {
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return prdRefreshTickMsg{}
+	})
 }
 
 func (m MultiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -257,6 +267,19 @@ func (m MultiModel) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logViewport.Width = vpWidth
 			m.logViewport.Height = logHeight
 		}
+
+	case prdRefreshTickMsg:
+		for i := range m.workspaces {
+			ws := &m.workspaces[i]
+			ws.Running = isRunningFn(ws.WsPath)
+			if ws.WsPath != "" {
+				prdPath := ws.WsPath + "/prd.json"
+				if p, err := prd.Read(prdPath); err == nil {
+					ws.PRD = p
+				}
+			}
+		}
+		return m, prdRefreshTick()
 
 	case multiPrdLoadedMsg:
 		if msg.index >= 0 && msg.index < len(m.workspaces) && msg.prd != nil {

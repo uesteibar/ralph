@@ -1284,3 +1284,110 @@ func TestRenderMultiHelpOverlay_ContainsResumeShortcut(t *testing.T) {
 		t.Error("expected help overlay to contain 'Resume' description")
 	}
 }
+
+func TestMultiModel_Init_ReturnsTickCmd(t *testing.T) {
+	m := NewMultiModel(makeTestWorkspaces())
+	cmd := m.Init()
+	if cmd == nil {
+		t.Error("expected Init to return a tick command for PRD refresh")
+	}
+}
+
+func TestMultiModel_PrdRefreshTick_ReReadsPRDFromDisk(t *testing.T) {
+	// Create a temp PRD file with initial state (no stories passing)
+	dir := t.TempDir()
+	prdPath := dir + "/prd.json"
+	initialPRD := &prd.PRD{
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Login", Passes: false},
+		},
+	}
+	if err := prd.Write(prdPath, initialPRD); err != nil {
+		t.Fatalf("writing initial PRD: %v", err)
+	}
+
+	// Override isRunningFn to avoid filesystem checks
+	origIsRunning := isRunningFn
+	isRunningFn = func(string) bool { return true }
+	t.Cleanup(func() { isRunningFn = origIsRunning })
+
+	workspaces := []WorkspaceInfo{
+		{Name: "test-ws", WsPath: dir, Running: false, PRD: initialPRD},
+	}
+	m := NewMultiModel(workspaces)
+	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = ready.(MultiModel)
+
+	// Verify initial state
+	if m.Workspaces()[0].PRD.UserStories[0].Passes {
+		t.Fatal("expected initial PRD to have US-001 not passing")
+	}
+	if m.Workspaces()[0].Running {
+		t.Fatal("expected initial running to be false")
+	}
+
+	// Update PRD file on disk — mark US-001 as passing
+	updatedPRD := &prd.PRD{
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Login", Passes: true},
+		},
+	}
+	if err := prd.Write(prdPath, updatedPRD); err != nil {
+		t.Fatalf("writing updated PRD: %v", err)
+	}
+
+	// Send prdRefreshTickMsg
+	updated, cmd := m.Update(prdRefreshTickMsg{})
+	m = updated.(MultiModel)
+
+	// PRD should be re-read from disk
+	if !m.Workspaces()[0].PRD.UserStories[0].Passes {
+		t.Error("expected PRD refresh to pick up updated story status from disk")
+	}
+
+	// Running should be updated from isRunningFn
+	if !m.Workspaces()[0].Running {
+		t.Error("expected running state to be updated from isRunningFn")
+	}
+
+	// Should return a new tick command
+	if cmd == nil {
+		t.Error("expected prdRefreshTickMsg to return a new tick command")
+	}
+}
+
+func TestMultiModel_PrdRefreshTick_HandlesNonExistentPRD(t *testing.T) {
+	// Override isRunningFn
+	origIsRunning := isRunningFn
+	isRunningFn = func(string) bool { return false }
+	t.Cleanup(func() { isRunningFn = origIsRunning })
+
+	initialPRD := &prd.PRD{
+		UserStories: []prd.Story{{ID: "US-001", Passes: false}},
+	}
+	workspaces := []WorkspaceInfo{
+		{Name: "test-ws", WsPath: "/nonexistent/path", Running: true, PRD: initialPRD},
+	}
+	m := NewMultiModel(workspaces)
+	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = ready.(MultiModel)
+
+	// Send tick — should not panic, should keep existing PRD
+	updated, cmd := m.Update(prdRefreshTickMsg{})
+	m = updated.(MultiModel)
+
+	// PRD should still be the original (read failed, no update)
+	if m.Workspaces()[0].PRD == nil {
+		t.Error("expected PRD to remain set when disk read fails")
+	}
+
+	// Running should be updated from isRunningFn
+	if m.Workspaces()[0].Running {
+		t.Error("expected running to be updated to false")
+	}
+
+	// Should still return a new tick command
+	if cmd == nil {
+		t.Error("expected tick to return next tick command even on PRD read failure")
+	}
+}

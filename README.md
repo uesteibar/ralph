@@ -6,6 +6,11 @@ checks and committing after each step -- until the feature is done.
 
 You work from your terminal. Ralph works in an isolated workspace.
 
+This repository also contains **[AutoRalph](docs/autoralph.md)** -- an
+autonomous daemon that watches Linear for assigned issues and drives them
+through a complete development lifecycle (refine, plan, build, open PR, address
+review feedback) using Ralph under the hood.
+
 ---
 
 ## Table of Contents
@@ -34,6 +39,7 @@ You work from your terminal. Ralph works in an isolated workspace.
 - [Configuration](#configuration)
 - [PRD Format](#prd-format)
 - [Prompt Customization](#prompt-customization)
+- [AutoRalph](#autoralph)
 - [Architecture](#architecture)
 - [Development](#development)
 
@@ -151,6 +157,14 @@ ralph overview               # See progress across all workspaces
 
 ## Installation
 
+### Ralph
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/uesteibar/ralph/main/install-ralph.sh | sh
+```
+
+Or install from source:
+
 ```bash
 go install github.com/uesteibar/ralph/cmd/ralph@latest
 ```
@@ -162,6 +176,23 @@ git clone https://github.com/uesteibar/ralph.git
 cd ralph
 just install    # requires https://github.com/casey/just
 ```
+
+### AutoRalph
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/uesteibar/ralph/main/install-autoralph.sh | sh
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/uesteibar/ralph.git
+cd ralph
+just web-build    # Build the React dashboard
+just autoralph    # Build the Go binary
+```
+
+See [AutoRalph documentation](docs/autoralph.md) for configuration and usage.
 
 ---
 
@@ -830,10 +861,62 @@ Templates use Go's `text/template` syntax with `{{ .FieldName }}` placeholders.
 
 ---
 
+## AutoRalph
+
+AutoRalph is an autonomous daemon that watches Linear for assigned issues and
+drives them through a complete lifecycle without human intervention:
+
+```
+Linear issue assigned  -->  AI refinement  -->  User approves plan
+  -->  Workspace created  -->  Ralph builds feature  -->  PR opened
+  -->  Review feedback addressed  -->  PR merged  -->  Done
+```
+
+It includes a **web dashboard** at `http://127.0.0.1:7749` with real-time
+status, a REST API, and WebSocket updates.
+
+**Full documentation**: [docs/autoralph.md](docs/autoralph.md)
+
+**Quick start**:
+
+```bash
+# 1. Install
+curl -fsSL https://raw.githubusercontent.com/uesteibar/ralph/main/install-autoralph.sh | sh
+
+# 2. Configure credentials (token or GitHub App — see docs/autoralph.md)
+mkdir -p ~/.autoralph
+cat > ~/.autoralph/credentials.yaml << 'EOF'
+default_profile: default
+profiles:
+  default:
+    linear_api_key: lin_api_xxxxxxxxxxxxx
+    github_token: ghp_xxxxxxxxxxxxx          # or use github_app_* fields
+EOF
+
+# 3. Configure a project
+mkdir -p ~/.autoralph/projects
+cat > ~/.autoralph/projects/my-project.yaml << 'EOF'
+name: my-project
+local_path: ~/code/my-project
+github:
+  owner: myorg
+  repo: my-project
+linear:
+  team_id: "your-team-uuid"
+  assignee_id: "your-user-uuid"
+EOF
+
+# 4. Run
+autoralph serve
+```
+
+---
+
 ## Architecture
 
 ```
 cmd/ralph/main.go              Entry point + CLI dispatch
+cmd/autoralph/main.go          AutoRalph entry point
 internal/
   config/                      YAML config types + loading + discovery
   shell/                       Subprocess runner (exec.Command wrapper)
@@ -846,6 +929,27 @@ internal/
   events/                      Event system (EventHandler interface + event types)
   tui/                         BubbleTea-based terminal UI
   commands/                    One file per CLI command
+  autoralph/                   AutoRalph-specific packages:
+    server/                      HTTP server, SPA, API, WebSocket hub
+    db/                          SQLite persistence layer
+    orchestrator/                State machine framework
+    linear/                      Linear GraphQL client
+    github/                      GitHub REST client
+    poller/                      Linear issue poller
+    ghpoller/                    GitHub review/merge poller
+    worker/                      Build worker pool
+    refine/                      AI refinement action
+    approve/                     Approval detection action
+    build/                       Workspace + PRD creation action
+    pr/                          PR creation action
+    feedback/                    Review feedback action
+    complete/                    Cleanup action
+    credentials/                 Credential profile management
+    projects/                    Project config loading
+    ai/                          AI prompt templates
+    retry/                       Retry with exponential backoff
+web/                           React SPA for AutoRalph dashboard
+test/e2e/                      E2E tests + mock servers + playground
 ```
 
 ### Design Decisions
@@ -869,13 +973,29 @@ internal/
 Requires [just](https://github.com/casey/just) for task running.
 
 ```bash
+# Ralph
 just build          # Build the ralph binary
+just install        # Install to $GOPATH/bin
+
+# AutoRalph
+just autoralph      # Build the autoralph binary
+just web-build      # Build the React SPA
+just dev-web        # Start Vite dev server (hot reload)
+just dev-autoralph  # Build + run with --dev flag (proxies to Vite)
+
+# Quality
 just test           # Run all tests
 just test-verbose   # Run tests with verbose output
 just vet            # Run go vet
 just check          # Build + test + vet
 just fmt            # Format all Go files
-just install        # Install to $GOPATH/bin
+just shellcheck     # Lint installer scripts
+
+# E2E
+just e2e-setup      # Install Playwright browsers (once)
+just e2e            # Run E2E / integration tests
+
+# Utilities
 just clean          # Remove build artifacts
 just smoke          # Quick smoke test (build + vet + help)
 ```

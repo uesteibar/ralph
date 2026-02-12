@@ -66,14 +66,14 @@ func (g *gitRunner) hasUncommittedChanges(ctx context.Context) (bool, error) {
 
 // checkGitClean verifies the working tree has no uncommitted changes before exit.
 // Returns true if clean (safe to exit), false if dirty (should continue loop).
-func checkGitClean(ctx context.Context, dir string) bool {
+func checkGitClean(ctx context.Context, dir string, h events.EventHandler) bool {
 	hasChanges, err := gitHasUncommittedChangesFn(ctx, dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to check git status: %v — continuing loop\n", err)
+		emitWarn(h, "failed to check git status: %v — continuing loop", err)
 		return false
 	}
 	if hasChanges {
-		fmt.Fprintln(os.Stderr, "warning: uncommitted changes detected — continuing loop to allow commit")
+		emitWarn(h, "uncommitted changes detected — continuing loop to allow commit")
 		return false
 	}
 	return true
@@ -104,7 +104,7 @@ func invokeWithUsageLimitWait(ctx context.Context, opts invokeOpts) (string, err
 			WaitDuration: waitDur.Round(time.Second),
 			ResetAt:      ulErr.ResetAt,
 		})
-		fmt.Fprintf(os.Stderr, "usage limit reached — waiting %s until %s\n",
+		emitLog(opts.eventHandler, "usage limit reached — waiting %s until %s",
 			waitDur.Round(time.Second), ulErr.ResetAt.Format(time.RFC3339))
 
 		select {
@@ -121,6 +121,16 @@ func emitEvent(h events.EventHandler, e events.Event) {
 	if h != nil {
 		h.Handle(e)
 	}
+}
+
+// emitLog emits an info-level LogMessage event.
+func emitLog(h events.EventHandler, format string, args ...any) {
+	emitEvent(h, events.LogMessage{Level: "info", Message: fmt.Sprintf(format, args...)})
+}
+
+// emitWarn emits a warning-level LogMessage event.
+func emitWarn(h events.EventHandler, format string, args ...any) {
+	emitEvent(h, events.LogMessage{Level: "warning", Message: fmt.Sprintf(format, args...)})
 }
 
 // Config holds the parameters for a Ralph execution loop.
@@ -165,46 +175,46 @@ func Run(ctx context.Context, cfg Config) error {
 		if story == nil {
 			// All user stories pass — check if QA verification is needed
 			if len(currentPRD.IntegrationTests) == 0 {
-				if !checkGitClean(ctx, cfg.WorkDir) {
+				if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
 					if i < cfg.MaxIterations {
 						time.Sleep(iterationDelay)
 					}
 					continue
 				}
-				fmt.Fprintln(os.Stderr, "all stories pass, no integration tests — done")
+				emitLog(cfg.EventHandler, "all stories pass, no integration tests — done")
 				return nil
 			}
 
 			if prd.AllIntegrationTestsPass(currentPRD) {
-				if !checkGitClean(ctx, cfg.WorkDir) {
+				if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
 					if i < cfg.MaxIterations {
 						time.Sleep(iterationDelay)
 					}
 					continue
 				}
-				fmt.Fprintln(os.Stderr, "all stories and integration tests pass — done")
+				emitLog(cfg.EventHandler, "all stories and integration tests pass — done")
 				return nil
 			}
 
 			// Run QA verification phase
 			emitEvent(cfg.EventHandler, events.QAPhaseStarted{Phase: "verification"})
 			if err := runQAVerification(ctx, cfg); err != nil {
-				fmt.Fprintf(os.Stderr, "QA verification error: %v\n", err)
+				emitWarn(cfg.EventHandler, "QA verification error: %v", err)
 			}
 			emitEvent(cfg.EventHandler, events.PRDRefresh{})
 
 			// Re-read PRD after QA verification and check if all tests pass
 			verifyPRD, err := prd.Read(cfg.PRDPath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to read PRD after QA: %v — continuing loop\n", err)
+				emitWarn(cfg.EventHandler, "failed to read PRD after QA: %v — continuing loop", err)
 			} else if prd.AllIntegrationTestsPass(verifyPRD) {
-				if !checkGitClean(ctx, cfg.WorkDir) {
+				if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
 					if i < cfg.MaxIterations {
 						time.Sleep(iterationDelay)
 					}
 					continue
 				}
-				fmt.Fprintln(os.Stderr, "QA verification complete — all integration tests pass")
+				emitLog(cfg.EventHandler, "QA verification complete — all integration tests pass")
 				return nil
 			}
 
@@ -213,7 +223,7 @@ func Run(ctx context.Context, cfg Config) error {
 			if len(failedTests) > 0 {
 				emitEvent(cfg.EventHandler, events.QAPhaseStarted{Phase: "fix"})
 				if err := runQAFix(ctx, cfg, failedTests); err != nil {
-					fmt.Fprintf(os.Stderr, "QA fix error: %v\n", err)
+					emitWarn(cfg.EventHandler, "QA fix error: %v", err)
 				}
 				emitEvent(cfg.EventHandler, events.PRDRefresh{})
 			}
@@ -242,7 +252,7 @@ func Run(ctx context.Context, cfg Config) error {
 			eventHandler: cfg.EventHandler,
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Claude returned error on %s: %v\n", story.ID, err)
+			emitWarn(cfg.EventHandler, "Claude returned error on %s: %v", story.ID, err)
 			// Non-fatal — Claude may have partially succeeded.
 			// The next iteration will re-read prd.json and pick up where we left off.
 		}
@@ -250,44 +260,44 @@ func Run(ctx context.Context, cfg Config) error {
 		emitEvent(cfg.EventHandler, events.PRDRefresh{})
 
 		if claude.ContainsComplete(output) {
-			fmt.Fprintln(os.Stderr, "Ralph signaled COMPLETE — verifying PRD state")
+			emitLog(cfg.EventHandler, "Ralph signaled COMPLETE — verifying PRD state")
 
 			// Re-read PRD to verify all stories and integration tests actually pass.
 			// This guards against Claude hallucinating completion or stale data.
 			verifyPRD, err := prd.Read(cfg.PRDPath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to verify PRD: %v — continuing loop\n", err)
+				emitWarn(cfg.EventHandler, "failed to verify PRD: %v — continuing loop", err)
 				continue
 			}
 
 			if !prd.AllPass(verifyPRD) {
-				fmt.Fprintln(os.Stderr, "COMPLETE signal received but not all user stories pass — continuing loop")
+				emitLog(cfg.EventHandler, "COMPLETE signal received but not all user stories pass — continuing loop")
 				continue
 			}
 
 			if len(verifyPRD.IntegrationTests) == 0 {
-				if !checkGitClean(ctx, cfg.WorkDir) {
+				if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
 					if i < cfg.MaxIterations {
 						time.Sleep(iterationDelay)
 					}
 					continue
 				}
-				fmt.Fprintln(os.Stderr, "verified: all stories pass, no integration tests — done")
+				emitLog(cfg.EventHandler, "verified: all stories pass, no integration tests — done")
 				return nil
 			}
 
 			if !prd.AllIntegrationTestsPass(verifyPRD) {
-				fmt.Fprintln(os.Stderr, "COMPLETE signal received but not all integration tests pass — continuing loop")
+				emitLog(cfg.EventHandler, "COMPLETE signal received but not all integration tests pass — continuing loop")
 				continue
 			}
 
-			if !checkGitClean(ctx, cfg.WorkDir) {
+			if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
 				if i < cfg.MaxIterations {
 					time.Sleep(iterationDelay)
 				}
 				continue
 			}
-			fmt.Fprintln(os.Stderr, "verified: all stories and integration tests pass — done")
+			emitLog(cfg.EventHandler, "verified: all stories and integration tests pass — done")
 			return nil
 		}
 

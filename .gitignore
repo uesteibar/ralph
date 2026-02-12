@@ -4,5 +4,11 @@
 .ralph/workspaces/
 .ralph/state/
 
-.claude
+# Build artifacts
+/ralph
+/autoralph
+
+.claude/*
+!.claude/skills/
+!.claude/commands/
 .mcp.json

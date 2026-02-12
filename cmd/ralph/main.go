@@ -7,6 +7,8 @@ import (
 	"github.com/uesteibar/ralph/internal/commands"
 )
 
+var version = "dev"
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `Ralph — autonomous coding agent loop
 
@@ -92,6 +94,9 @@ func main() {
 		err = commands.ShellInit(rest)
 	case "_daemon":
 		err = commands.Daemon(rest)
+	case "--version", "version":
+		fmt.Println("ralph " + version)
+		return
 	case "help", "-h", "--help":
 		usage()
 		return

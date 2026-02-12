@@ -67,6 +67,16 @@ type UsageLimitWait struct {
 
 func (UsageLimitWait) eventTag() {}
 
+// LogMessage is emitted for diagnostic messages that were previously written
+// to stderr. This allows library callers to capture loop status messages
+// without relying on stderr.
+type LogMessage struct {
+	Level   string `json:"level"`   // "info" or "warning"
+	Message string `json:"message"`
+}
+
+func (LogMessage) eventTag() {}
+
 // PRDRefresh is emitted after events that may have changed the PRD on disk
 // (e.g. after each invocation or iteration). The TUI uses this signal to
 // re-read prd.json and update the story/test list.

@@ -86,13 +86,18 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Discover walks up from the current directory looking for .ralph/ralph.yaml.
+// Discover walks up from workDir looking for .ralph/ralph.yaml. When workDir
+// is empty it defaults to the current working directory (os.Getwd).
 // It skips configs found inside workspace trees (where a workspace.json exists
 // in the parent directory) to ensure Repo.Path always points to the real repo root.
-func Discover() (*Config, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("getting working directory: %w", err)
+func Discover(workDir string) (*Config, error) {
+	dir := workDir
+	if dir == "" {
+		var err error
+		dir, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("getting working directory: %w", err)
+		}
 	}
 
 	for {
@@ -122,11 +127,12 @@ func isInsideWorkspaceTree(dir string) bool {
 }
 
 // Resolve tries the explicit path first, then falls back to Discover.
-func Resolve(explicitPath string) (*Config, error) {
+// When workDir is empty, Discover uses the current working directory.
+func Resolve(explicitPath, workDir string) (*Config, error) {
 	if explicitPath != "" {
 		return Load(explicitPath)
 	}
-	return Discover()
+	return Discover(workDir)
 }
 
 func (c *Config) validate() error {

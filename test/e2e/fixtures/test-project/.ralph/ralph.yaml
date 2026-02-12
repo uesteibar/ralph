@@ -1,0 +1,9 @@
+project: test-project
+
+repo:
+  default_base: main
+  branch_pattern: "^autoralph/[a-zA-Z0-9._-]+$"
+
+quality_checks:
+  - "go test ./..."
+  - "go vet ./..."

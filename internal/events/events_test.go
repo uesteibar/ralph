@@ -151,6 +151,30 @@ func TestPlainTextHandler_ImplementsEventHandler(t *testing.T) {
 	_ = h // Compile-time check that PlainTextHandler satisfies EventHandler
 }
 
+func TestPlainTextHandler_LogMessage_Info(t *testing.T) {
+	var buf bytes.Buffer
+	h := &PlainTextHandler{W: &buf}
+
+	h.Handle(LogMessage{Level: "info", Message: "all stories pass"})
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "all stories pass") {
+		t.Errorf("expected message in output, got %q", output)
+	}
+}
+
+func TestPlainTextHandler_LogMessage_Warning(t *testing.T) {
+	var buf bytes.Buffer
+	h := &PlainTextHandler{W: &buf}
+
+	h.Handle(LogMessage{Level: "warning", Message: "git check failed"})
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "git check failed") {
+		t.Errorf("expected message in output, got %q", output)
+	}
+}
+
 func TestEventTypes_ImplementEvent(t *testing.T) {
 	// Compile-time verification that all event types implement Event
 	var _ Event = ToolUse{}
@@ -160,4 +184,5 @@ func TestEventTypes_ImplementEvent(t *testing.T) {
 	var _ Event = StoryStarted{}
 	var _ Event = QAPhaseStarted{}
 	var _ Event = UsageLimitWait{}
+	var _ Event = LogMessage{}
 }

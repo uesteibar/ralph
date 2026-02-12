@@ -44,6 +44,8 @@ func (h *PlainTextHandler) Handle(event Event) {
 		h.handleQAPhaseStarted(e)
 	case UsageLimitWait:
 		h.handleUsageLimitWait(e)
+	case LogMessage:
+		h.handleLogMessage(e)
 	}
 }
 
@@ -93,4 +95,12 @@ func (h *PlainTextHandler) handleUsageLimitWait(e UsageLimitWait) {
 	detail := infoStyle.Render(fmt.Sprintf("— waiting %s (until %s)",
 		e.WaitDuration, e.ResetAt.Format("3:04pm MST")))
 	fmt.Fprintf(h.W, "\n  %s %s %s\n\n", icon, msg, detail)
+}
+
+func (h *PlainTextHandler) handleLogMessage(e LogMessage) {
+	if e.Level == "warning" {
+		fmt.Fprintf(h.W, "%s\n", waitStyle.Render(e.Message))
+	} else {
+		fmt.Fprintf(h.W, "%s\n", infoStyle.Render(e.Message))
+	}
 }

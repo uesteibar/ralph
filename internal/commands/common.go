@@ -40,7 +40,7 @@ func resolveWorkContextFromFlags(workspaceFlag string, repoPath string) (workspa
 
 // ResolveConfig loads the project config from the explicit flag value or by discovery.
 func ResolveConfig(flagValue string) (*config.Config, error) {
-	return config.Resolve(flagValue)
+	return config.Resolve(flagValue, "")
 }
 
 // RequirePositionalInt extracts a required integer positional argument.
@@ -120,7 +120,7 @@ func printWorkspaceHeader(wc workspace.WorkContext, repoPath string) {
 // .ralph/worktrees/ directory exists. Tries to discover the repo path from config;
 // silently does nothing if config is not available.
 func CheckLegacyWorktrees() {
-	cfg, err := config.Resolve("")
+	cfg, err := config.Resolve("", "")
 	if err != nil {
 		return
 	}

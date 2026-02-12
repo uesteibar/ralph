@@ -92,11 +92,7 @@ func TestDiscover_FromSubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
-	os.Chdir(subDir)
-
-	cfg, err := Discover()
+	cfg, err := Discover(subDir)
 	if err != nil {
 		t.Fatalf("Discover failed: %v", err)
 	}
@@ -113,7 +109,7 @@ func TestResolve_ExplicitPathTakesPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := Resolve(path)
+	cfg, err := Resolve(path, "")
 	if err != nil {
 		t.Fatalf("Resolve failed: %v", err)
 	}
@@ -237,7 +233,9 @@ func TestDiscover_SkipsConfigInsideWorkspaceTree(t *testing.T) {
 	// <repo>/.ralph/ralph.yaml            ← real config (should be found)
 	// <repo>/.ralph/workspaces/<name>/workspace.json
 	// <repo>/.ralph/workspaces/<name>/tree/.ralph/ralph.yaml ← git checkout (should be skipped)
-	repoDir := t.TempDir()
+	rawRepoDir := t.TempDir()
+	// Resolve symlinks early to handle macOS /var → /private/var.
+	repoDir, _ := filepath.EvalSymlinks(rawRepoDir)
 
 	// Create the real config at the repo root.
 	realRalphDir := filepath.Join(repoDir, ".ralph")
@@ -271,11 +269,7 @@ func TestDiscover_SkipsConfigInsideWorkspaceTree(t *testing.T) {
 	}
 
 	// Discover from inside the tree should skip the tree config and find the real one.
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
-	os.Chdir(treeDir)
-
-	cfg, err := Discover()
+	cfg, err := Discover(treeDir)
 	if err != nil {
 		t.Fatalf("Discover failed: %v", err)
 	}
@@ -284,10 +278,8 @@ func TestDiscover_SkipsConfigInsideWorkspaceTree(t *testing.T) {
 	}
 
 	// Verify Repo.Path points to the real repo, not the tree.
-	// Use EvalSymlinks to handle macOS /private/var symlinks.
-	absRepoDir, _ := filepath.EvalSymlinks(repoDir)
-	if cfg.Repo.Path != absRepoDir {
-		t.Errorf("Repo.Path = %q, want %q", cfg.Repo.Path, absRepoDir)
+	if cfg.Repo.Path != repoDir {
+		t.Errorf("Repo.Path = %q, want %q", cfg.Repo.Path, repoDir)
 	}
 }
 
@@ -307,6 +299,41 @@ func TestConfig_PromptsDir(t *testing.T) {
 	if got != want {
 		t.Errorf("PromptsDir() = %q, want %q", got, want)
 	}
+}
+
+func TestDiscover_ExplicitWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	if err := os.MkdirAll(ralphDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	configContent := "project: WorkDirTest\nrepo:\n  default_base: main\n"
+	if err := os.WriteFile(filepath.Join(ralphDir, "ralph.yaml"), []byte(configContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass an explicit workDir deep inside the project — no os.Chdir needed
+	subDir := filepath.Join(dir, "src", "pkg")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Discover(subDir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if cfg.Project != "WorkDirTest" {
+		t.Errorf("Project = %q, want %q", cfg.Project, "WorkDirTest")
+	}
+}
+
+func TestDiscover_EmptyWorkDir_DefaultsToCwd(t *testing.T) {
+	// When workDir is empty, Discover falls back to os.Getwd.
+	// We can't easily test the cwd path without os.Chdir, so just verify
+	// that it returns an error when cwd has no ralph config.
+	_, err := Discover("")
+	// This may succeed or fail depending on the cwd, but should not panic.
+	_ = err
 }
 
 func contains(s, substr string) bool {

@@ -1443,3 +1443,191 @@ func TestRun_EmitsQAPhaseStartedEvent(t *testing.T) {
 		t.Error("expected QAPhaseStarted event")
 	}
 }
+
+func TestRun_EmitsLogMessageOnCompletion(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		t.Error("should not invoke Claude when all stories pass")
+		return "", nil
+	}
+
+	handler := &recordingHandler{}
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		EventHandler:  handler,
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Should have a LogMessage with "done" indicating completion
+	var found bool
+	for _, e := range handler.events {
+		if lm, ok := e.(events.LogMessage); ok {
+			if lm.Level == "info" && contains(lm.Message, "done") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Error("expected info LogMessage containing 'done'")
+	}
+}
+
+func TestRun_EmitsWarningLogOnClaudeError(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	callCount := 0
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		callCount++
+		if callCount == 1 {
+			// First call: return an error (non-fatal)
+			return "", fmt.Errorf("something went wrong")
+		}
+		// Second call: succeed and mark story as passed
+		testPRD.UserStories[0].Passes = true
+		prd.Write(prdPath, testPRD)
+		return "", nil
+	}
+
+	handler := &recordingHandler{}
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		EventHandler:  handler,
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Should have a warning LogMessage about Claude error
+	var found bool
+	for _, e := range handler.events {
+		if lm, ok := e.(events.LogMessage); ok {
+			if lm.Level == "warning" && contains(lm.Message, "Claude returned error") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Error("expected warning LogMessage about Claude error")
+	}
+}
+
+func TestRun_EmitsWarningLogOnGitCheckFailure(t *testing.T) {
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	gitCheckCount := 0
+	origGitFn := gitHasUncommittedChangesFn
+	defer func() { gitHasUncommittedChangesFn = origGitFn }()
+
+	gitHasUncommittedChangesFn = func(ctx context.Context, dir string) (bool, error) {
+		gitCheckCount++
+		if gitCheckCount == 1 {
+			return false, fmt.Errorf("git not available")
+		}
+		return false, nil
+	}
+
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		return "", nil
+	}
+
+	handler := &recordingHandler{}
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		EventHandler:  handler,
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Should have a warning LogMessage about git check failure
+	var found bool
+	for _, e := range handler.events {
+		if lm, ok := e.(events.LogMessage); ok {
+			if lm.Level == "warning" && contains(lm.Message, "failed to check git status") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Error("expected warning LogMessage about git status check failure")
+	}
+}

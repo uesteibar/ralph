@@ -87,6 +87,16 @@ func TestMarshalUnmarshal_RoundTrip(t *testing.T) {
 			},
 		},
 		{
+			name:  "LogMessage",
+			event: LogMessage{Level: "warning", Message: "something happened"},
+			check: func(t *testing.T, got Event) {
+				e := got.(LogMessage)
+				if e.Level != "warning" || e.Message != "something happened" {
+					t.Errorf("LogMessage mismatch: %+v", e)
+				}
+			},
+		},
+		{
 			name:  "PRDRefresh",
 			event: PRDRefresh{},
 			check: func(t *testing.T, got Event) {
