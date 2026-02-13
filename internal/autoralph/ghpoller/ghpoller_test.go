@@ -55,17 +55,24 @@ func testIssue(t *testing.T, d *db.DB, proj db.Project, state string, prNumber i
 	return issue
 }
 
-// mockGitHub implements ReviewFetcher and MergeChecker for testing.
+// mockGitHub implements GitHubClient for testing.
 type mockGitHub struct {
-	reviews     []github.Review
-	merged      bool
-	fetchErr    error
-	mergeErr    error
-	fetchCalls  int
-	mergeCalls  int
-	lastOwner   string
-	lastRepo    string
-	lastPR      int
+	reviews    []github.Review
+	merged     bool
+	fetchErr   error
+	mergeErr   error
+	fetchCalls int
+	mergeCalls int
+	lastOwner  string
+	lastRepo   string
+	lastPR     int
+
+	pr         github.PR
+	prErr      error
+	prCalls    int
+	checkRuns  []github.CheckRun
+	checkErr   error
+	checkCalls int
 }
 
 func (m *mockGitHub) FetchPRReviews(_ context.Context, owner, repo string, prNumber int) ([]github.Review, error) {
@@ -84,12 +91,23 @@ func (m *mockGitHub) IsPRMerged(_ context.Context, owner, repo string, prNumber 
 	return m.merged, m.mergeErr
 }
 
+func (m *mockGitHub) FetchPR(_ context.Context, owner, repo string, prNumber int) (github.PR, error) {
+	m.prCalls++
+	return m.pr, m.prErr
+}
+
+func (m *mockGitHub) FetchCheckRuns(_ context.Context, owner, repo, ref string) ([]github.CheckRun, error) {
+	m.checkCalls++
+	return m.checkRuns, m.checkErr
+}
+
 func TestPollProject_ChangesRequestedReview_TransitionsToAddressingFeedback(t *testing.T) {
 	d := testDB(t)
 	proj := testProject(t, d)
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix the tests", User: "reviewer"},
 		},
@@ -151,6 +169,7 @@ func TestPollProject_CommentedReview_TransitionsToAddressingFeedback(t *testing.
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 100, State: "COMMENTED", Body: "", User: "reviewer"},
 		},
@@ -184,6 +203,7 @@ func TestPollProject_ApprovedReview_NoTransition(t *testing.T) {
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 200, State: "APPROVED", Body: "LGTM", User: "reviewer"},
 		},
@@ -231,6 +251,7 @@ func TestPollProject_SkipsAlreadySeenReviews(t *testing.T) {
 	}
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 100, State: "CHANGES_REQUESTED", Body: "Old review", User: "reviewer"},
 		},
@@ -323,6 +344,7 @@ func TestPollProject_LogsActivity(t *testing.T) {
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 300, State: "CHANGES_REQUESTED", Body: "Fix it", User: "reviewer"},
 		},
@@ -443,6 +465,7 @@ func TestPollProject_MultipleNewReviews_UsesLatest(t *testing.T) {
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 10, State: "COMMENTED", Body: "Looks good overall", User: "reviewer1"},
 			{ID: 20, State: "CHANGES_REQUESTED", Body: "Fix line 5", User: "reviewer2"},
@@ -481,6 +504,7 @@ func TestPollProject_MergeCheckedFirst(t *testing.T) {
 	// Both merged AND has changes_requested review — merge should win
 	mock := &mockGitHub{
 		merged: true,
+		pr:     github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 500, State: "CHANGES_REQUESTED", Body: "Fix it", User: "reviewer"},
 		},
@@ -529,6 +553,7 @@ func TestPoll_MultipleProjects(t *testing.T) {
 
 	mock1 := &mockGitHub{merged: true}
 	mock2 := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 10, State: "CHANGES_REQUESTED", Body: "Fix", User: "rev"},
 		},
@@ -599,6 +624,7 @@ func TestPollProject_BotReview_DoesNotTransition(t *testing.T) {
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 1)
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 100, State: "COMMENTED", User: "my-bot[bot]"},
 		},
@@ -678,6 +704,7 @@ func TestPollProject_TrustedUserFeedback_TransitionsToAddressingFeedback(t *test
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "trusted-user", UserID: 12345},
 		},
@@ -720,6 +747,7 @@ func TestPollProject_UntrustedFeedback_SkippedAndLogged(t *testing.T) {
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "untrusted-user", UserID: 99999},
 		},
@@ -768,6 +796,7 @@ func TestPollProject_TrustedUserID_Zero_BackwardCompatible(t *testing.T) {
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
 
 	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
 		reviews: []github.Review{
 			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix", User: "anyone", UserID: 55555},
 		},
@@ -791,5 +820,463 @@ func TestPollProject_TrustedUserID_Zero_BackwardCompatible(t *testing.T) {
 	}
 	if updated.State != string(orchestrator.StateAddressingFeedback) {
 		t.Errorf("expected state %q, got %q", orchestrator.StateAddressingFeedback, updated.State)
+	}
+}
+
+func TestPollProject_ChecksFailedOnNewSHA_TransitionsToFixingChecks(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "deadbeef1234567"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "build", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "test", Status: "completed", Conclusion: "failure"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != string(orchestrator.StateFixingChecks) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateFixingChecks, updated.State)
+	}
+	if updated.LastCheckSHA != "deadbeef1234567" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "deadbeef1234567", updated.LastCheckSHA)
+	}
+
+	// Verify activity was logged
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 activity entry, got %d", len(entries))
+	}
+	if entries[0].EventType != "checks_failed" {
+		t.Errorf("expected event_type %q, got %q", "checks_failed", entries[0].EventType)
+	}
+	if entries[0].FromState != string(orchestrator.StateInReview) {
+		t.Errorf("expected from_state %q, got %q", orchestrator.StateInReview, entries[0].FromState)
+	}
+	if entries[0].ToState != string(orchestrator.StateFixingChecks) {
+		t.Errorf("expected to_state %q, got %q", orchestrator.StateFixingChecks, entries[0].ToState)
+	}
+}
+
+func TestPollProject_ChecksFailedSameSHA_NoRetrigger(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+
+	// Create issue already in fixing_checks with LastCheckSHA matching current head
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:     proj.ID,
+		LinearIssueID: "lin-fixing",
+		Identifier:    "TEST-FIX",
+		Title:         "Fixing issue",
+		State:         string(orchestrator.StateFixingChecks),
+		PRNumber:      42,
+		LastCheckSHA:  "same-sha-123",
+	})
+	if err != nil {
+		t.Fatalf("creating issue: %v", err)
+	}
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "same-sha-123"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "test", Status: "completed", Conclusion: "failure"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// State should remain fixing_checks — no duplicate transition
+	if updated.State != string(orchestrator.StateFixingChecks) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateFixingChecks, updated.State)
+	}
+
+	// No activity should be logged for same-SHA check failure
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 activity entries, got %d", len(entries))
+	}
+}
+
+func TestPollProject_ChecksPending_NoTransition(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "pending-sha"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "build", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "test", Status: "in_progress", Conclusion: ""},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// State should remain in_review — checks still pending
+	if updated.State != string(orchestrator.StateInReview) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateInReview, updated.State)
+	}
+	// Reviews should NOT have been fetched since checks are pending
+	if mock.fetchCalls != 0 {
+		t.Errorf("expected 0 review fetch calls, got %d", mock.fetchCalls)
+	}
+}
+
+func TestPollProject_AllChecksPass_ReviewsEvaluated(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "pass-sha"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "build", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "test", Status: "completed", Conclusion: "success"},
+		},
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "reviewer"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// Checks passed, so reviews should have been evaluated → addressing_feedback
+	if updated.State != string(orchestrator.StateAddressingFeedback) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateAddressingFeedback, updated.State)
+	}
+	if updated.LastCheckSHA != "pass-sha" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "pass-sha", updated.LastCheckSHA)
+	}
+}
+
+func TestPollProject_ChecksFailedTakesPriorityOverFeedback(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	// Both check failures AND review feedback — check failures should win
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "fail-sha"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "test", Status: "completed", Conclusion: "failure"},
+		},
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "reviewer"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// Check failure should take priority over review feedback
+	if updated.State != string(orchestrator.StateFixingChecks) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateFixingChecks, updated.State)
+	}
+	// Reviews should NOT have been fetched at all
+	if mock.fetchCalls != 0 {
+		t.Errorf("expected 0 review fetch calls, got %d", mock.fetchCalls)
+	}
+}
+
+func TestPollProject_ExternalSHAChange_ResetsCheckFixAttempts(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+
+	// Create issue in in_review with 2 prior fix attempts and old SHA
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:        proj.ID,
+		LinearIssueID:    "lin-reset",
+		Identifier:       "TEST-RST",
+		Title:            "Reset attempts",
+		State:            string(orchestrator.StateInReview),
+		PRNumber:         42,
+		LastCheckSHA:     "old-sha",
+		CheckFixAttempts: 2,
+	})
+	if err != nil {
+		t.Fatalf("creating issue: %v", err)
+	}
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "new-sha"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "build", Status: "completed", Conclusion: "success"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// CheckFixAttempts should be reset to 0
+	if updated.CheckFixAttempts != 0 {
+		t.Errorf("expected CheckFixAttempts 0, got %d", updated.CheckFixAttempts)
+	}
+	// SHA should be updated
+	if updated.LastCheckSHA != "new-sha" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "new-sha", updated.LastCheckSHA)
+	}
+	// State remains in_review (checks passed)
+	if updated.State != string(orchestrator.StateInReview) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateInReview, updated.State)
+	}
+}
+
+func TestPollProject_FixingChecks_NoReviewEvaluation(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+
+	// Issue in fixing_checks with all checks passing on a new SHA
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:     proj.ID,
+		LinearIssueID: "lin-fc",
+		Identifier:    "TEST-FC",
+		Title:         "Fixing checks",
+		State:         string(orchestrator.StateFixingChecks),
+		PRNumber:      42,
+		LastCheckSHA:  "old-sha",
+	})
+	if err != nil {
+		t.Fatalf("creating issue: %v", err)
+	}
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "new-sha"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "build", Status: "completed", Conclusion: "success"},
+		},
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "reviewer"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// State should stay fixing_checks — reviews not evaluated for this state
+	if updated.State != string(orchestrator.StateFixingChecks) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateFixingChecks, updated.State)
+	}
+	// Reviews should NOT have been fetched
+	if mock.fetchCalls != 0 {
+		t.Errorf("expected 0 review fetch calls, got %d", mock.fetchCalls)
+	}
+}
+
+func TestPollProject_AddressingFeedback_ChecksFailed_TransitionsToFixingChecks(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateAddressingFeedback), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "af-fail-sha"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "lint", Status: "completed", Conclusion: "failure"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != string(orchestrator.StateFixingChecks) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateFixingChecks, updated.State)
+	}
+}
+
+func TestEvaluateCheckRuns_AllCompleted_OneFailed(t *testing.T) {
+	runs := []github.CheckRun{
+		{Status: "completed", Conclusion: "success"},
+		{Status: "completed", Conclusion: "failure"},
+	}
+	allCompleted, hasFailed := evaluateCheckRuns(runs)
+	if !allCompleted {
+		t.Error("expected allCompleted to be true")
+	}
+	if !hasFailed {
+		t.Error("expected hasFailed to be true")
+	}
+}
+
+func TestEvaluateCheckRuns_NotAllCompleted(t *testing.T) {
+	runs := []github.CheckRun{
+		{Status: "completed", Conclusion: "success"},
+		{Status: "in_progress", Conclusion: ""},
+	}
+	allCompleted, hasFailed := evaluateCheckRuns(runs)
+	if allCompleted {
+		t.Error("expected allCompleted to be false")
+	}
+	if hasFailed {
+		t.Error("expected hasFailed to be false")
+	}
+}
+
+func TestEvaluateCheckRuns_AllPassed(t *testing.T) {
+	runs := []github.CheckRun{
+		{Status: "completed", Conclusion: "success"},
+		{Status: "completed", Conclusion: "success"},
+	}
+	allCompleted, hasFailed := evaluateCheckRuns(runs)
+	if !allCompleted {
+		t.Error("expected allCompleted to be true")
+	}
+	if hasFailed {
+		t.Error("expected hasFailed to be false")
+	}
+}
+
+func TestEvaluateCheckRuns_Empty(t *testing.T) {
+	allCompleted, hasFailed := evaluateCheckRuns(nil)
+	if !allCompleted {
+		t.Error("expected allCompleted to be true for empty slice")
+	}
+	if hasFailed {
+		t.Error("expected hasFailed to be false for empty slice")
+	}
+}
+
+func TestPollProject_FixingChecks_NoCheckFixAttemptsReset(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+
+	// Issue in fixing_checks with 2 attempts and a new SHA pushed by the fix action
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:        proj.ID,
+		LinearIssueID:    "lin-fc-nrst",
+		Identifier:       "TEST-NRST",
+		Title:            "No reset in fixing_checks",
+		State:            string(orchestrator.StateFixingChecks),
+		PRNumber:         42,
+		LastCheckSHA:     "old-sha",
+		CheckFixAttempts: 2,
+	})
+	if err != nil {
+		t.Fatalf("creating issue: %v", err)
+	}
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "new-sha-from-fix"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "test", Status: "completed", Conclusion: "failure"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// CheckFixAttempts should NOT be reset because issue is in fixing_checks
+	if updated.CheckFixAttempts != 2 {
+		t.Errorf("expected CheckFixAttempts 2 (no reset in fixing_checks), got %d", updated.CheckFixAttempts)
 	}
 }
