@@ -162,4 +162,45 @@ describe('Dashboard', () => {
       expect(screen.getByText('No active issues')).toBeInTheDocument()
     })
   })
+
+  it('project cards link to /projects/:id', async () => {
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('my-project')).toBeInTheDocument()
+    })
+    const projectLink = screen.getByText('my-project').closest('a')
+    expect(projectLink).toHaveAttribute('href', '/projects/p1')
+  })
+
+  it('project card links have no underline', async () => {
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('my-project')).toBeInTheDocument()
+    })
+    const projectLink = screen.getByText('my-project').closest('a')
+    expect(projectLink).toHaveStyle({ textDecoration: 'none' })
+  })
+
+  it('each project card links to its own detail page', async () => {
+    vi.mocked(fetchProjects).mockResolvedValue([
+      ...mockProjects,
+      {
+        id: 'p2',
+        name: 'second-project',
+        local_path: '/tmp/proj2',
+        github_owner: 'octocat',
+        github_repo: 'second-repo',
+        active_issue_count: 0,
+        state_breakdown: {},
+      },
+    ])
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('second-project')).toBeInTheDocument()
+    })
+    const firstLink = screen.getByText('my-project').closest('a')
+    const secondLink = screen.getByText('second-project').closest('a')
+    expect(firstLink).toHaveAttribute('href', '/projects/p1')
+    expect(secondLink).toHaveAttribute('href', '/projects/p2')
+  })
 })

@@ -171,7 +171,9 @@ export default function Dashboard() {
           <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#374151', marginBottom: '12px' }}>Projects</h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
             {projects.map(p => (
-              <ProjectCard key={p.id} project={p} />
+              <Link key={p.id} to={`/projects/${p.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                <ProjectCard project={p} />
+              </Link>
             ))}
           </div>
         </section>
