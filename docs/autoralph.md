@@ -341,6 +341,8 @@ github:
 linear:
   team_id: "abc-123-def"
   assignee_id: "user-456-ghi"
+  project_id: "proj-789-jkl"
+  # label: "autoralph"  # Optional: only pick up issues with this label (case-insensitive)
 
 # Optional (shown with defaults)
 ralph_config_path: .ralph/ralph.yaml
@@ -357,6 +359,8 @@ branch_prefix: "autoralph/"
 | `github.repo` | yes | | GitHub repository name |
 | `linear.team_id` | yes | | Linear team UUID |
 | `linear.assignee_id` | yes | | Linear user UUID to watch for assigned issues |
+| `linear.project_id` | yes | | Linear project UUID |
+| `linear.label` | no | _(none)_ | Label name to filter issue ingestion; only issues with a matching label are picked up (case-insensitive) |
 | `ralph_config_path` | no | `.ralph/ralph.yaml` | Path to Ralph config (relative to `local_path`) |
 | `max_iterations` | no | `20` | Max Ralph loop iterations per build |
 | `branch_prefix` | no | `autoralph/` | Branch name prefix |
