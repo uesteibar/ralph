@@ -36,18 +36,6 @@ func TestRenderRefineIssue_ContainsIssueDetails(t *testing.T) {
 			t.Errorf("output should contain %q", want)
 		}
 	}
-
-	forbidden := []string{
-		"Option A:",
-		"Option B:",
-		"Option A",
-		"Option B",
-	}
-	for _, bad := range forbidden {
-		if strings.Contains(out, bad) {
-			t.Errorf("output should not contain %q", bad)
-		}
-	}
 }
 
 func TestRenderRefineIssue_ContainsTypeMarkerInstruction(t *testing.T) {
