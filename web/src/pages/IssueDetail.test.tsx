@@ -120,10 +120,10 @@ describe('IssueDetail', () => {
     expect(screen.getByText('Plan approved')).toBeInTheDocument()
   })
 
-  it('shows build log when state is building', async () => {
+  it('shows Agent Logs when build events exist', async () => {
     renderIssueDetail()
     await waitFor(() => {
-      expect(screen.getByText('Live Build')).toBeInTheDocument()
+      expect(screen.getByText('Agent Logs')).toBeInTheDocument()
     })
   })
 
@@ -243,15 +243,57 @@ describe('IssueDetail', () => {
     })
   })
 
-  it('does not show build section when not building', async () => {
-    const completedIssue = { ...mockIssue, state: 'completed', build_active: false, activity: [], stories: [], integration_tests: [] }
+  it('shows Agent Logs for non-building states when build events exist', async () => {
+    const completedIssue = {
+      ...mockIssue,
+      state: 'completed',
+      build_active: false,
+      activity: [
+        {
+          id: 'act-b1',
+          issue_id: 'iss1',
+          event_type: 'build_event',
+          detail: 'Story US-001: Upload avatar',
+          created_at: '2025-02-11T12:20:00Z',
+        },
+      ],
+      stories: [],
+      integration_tests: [],
+    }
     vi.mocked(fetchIssue).mockResolvedValue(completedIssue)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Agent Logs')).toBeInTheDocument()
+    })
+  })
+
+  it('hides Agent Logs when no build events exist', async () => {
+    const queuedIssue = {
+      ...mockIssue,
+      state: 'queued',
+      build_active: false,
+      activity: [
+        {
+          id: 'act-sc1',
+          issue_id: 'iss1',
+          event_type: 'state_change',
+          from_state: 'queued',
+          to_state: 'refining',
+          detail: 'Auto refinement',
+          created_at: '2025-02-11T12:00:00Z',
+        },
+      ],
+      stories: [],
+      integration_tests: [],
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(queuedIssue)
 
     renderIssueDetail()
     await waitFor(() => {
       expect(screen.getByText('Add user avatars')).toBeInTheDocument()
     })
-    expect(screen.queryByText('Live Build')).not.toBeInTheDocument()
+    expect(screen.queryByText('Agent Logs')).not.toBeInTheDocument()
   })
 
   it('shows empty timeline message when no activity', async () => {

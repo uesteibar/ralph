@@ -451,11 +451,11 @@ export default function IssueDetail() {
         currentStory={issue.state === 'building' ? issue.current_story : undefined}
       />
 
-      {/* Build section — only when building */}
-      {issue.state === 'building' && (
+      {/* Agent Logs — visible whenever build events exist */}
+      {[...issue.activity, ...streamEvents].some(a => a.event_type === 'build_event') && (
         <section style={{ marginBottom: '24px' }}>
           <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#374151', marginBottom: '12px' }}>
-            Live Build
+            Agent Logs
           </h2>
           <BuildLog activities={[...issue.activity, ...streamEvents]} />
         </section>
