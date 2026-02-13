@@ -531,6 +531,18 @@ func runOrchestratorLoop(
 					continue
 				}
 
+				// Re-dispatch BUILDING issues that aren't actively running.
+				// This handles retries (state set back to building via API)
+				// without requiring a process restart.
+				if issue.State == string(orchestrator.StateBuilding) && !dispatcher.IsRunning(issue.ID) {
+					if err := dispatcher.Dispatch(ctx, issue); err != nil {
+						logger.Warn("re-dispatching building issue", "issue", issue.Identifier, "error", err)
+					} else {
+						logger.Info("re-dispatched building issue", "issue", issue.Identifier)
+					}
+					continue
+				}
+
 				tr, ok := sm.Evaluate(issue)
 				if !ok {
 					continue
