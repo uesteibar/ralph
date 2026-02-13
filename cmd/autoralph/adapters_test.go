@@ -3,14 +3,24 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/uesteibar/ralph/internal/autoralph/checks"
+	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/autoralph/ghpoller"
+	"github.com/uesteibar/ralph/internal/autoralph/github"
+	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
+
+// Compile-time check: gitOpsAdapter satisfies checks.GitOps.
+var _ checks.GitOps = (*gitOpsAdapter)(nil)
 
 func initTestRepo(t *testing.T) string {
 	t.Helper()
@@ -313,4 +323,208 @@ func TestGitOpsAdapter_GitEnv_SetsAllFourVars(t *testing.T) {
 	if len(env) != len(want) {
 		t.Errorf("gitEnv() returned %d entries, want %d", len(env), len(want))
 	}
+}
+
+// mockGitHubClient implements ghpoller.GitHubClient and the checks package interfaces.
+type mockGitHubClient struct {
+	reviews   []github.Review
+	merged    bool
+	checkRuns []github.CheckRun
+	pr        github.PR
+	logs      map[int64][]byte
+	comments  []github.Comment
+}
+
+func (m *mockGitHubClient) FetchPRReviews(_ context.Context, _, _ string, _ int) ([]github.Review, error) {
+	return m.reviews, nil
+}
+func (m *mockGitHubClient) IsPRMerged(_ context.Context, _, _ string, _ int) (bool, error) {
+	return m.merged, nil
+}
+func (m *mockGitHubClient) FetchCheckRuns(_ context.Context, _, _, _ string) ([]github.CheckRun, error) {
+	return m.checkRuns, nil
+}
+func (m *mockGitHubClient) FetchPR(_ context.Context, _, _ string, _ int) (github.PR, error) {
+	return m.pr, nil
+}
+func (m *mockGitHubClient) FetchCheckRunLog(_ context.Context, _, _ string, id int64) ([]byte, error) {
+	if m.logs != nil {
+		return m.logs[id], nil
+	}
+	return nil, nil
+}
+func (m *mockGitHubClient) PostPRComment(_ context.Context, _, _ string, _ int, body string) (github.Comment, error) {
+	c := github.Comment{ID: 1, Body: body}
+	m.comments = append(m.comments, c)
+	return c, nil
+}
+
+// TestEndToEnd_CheckFailure_FixApplied_ChecksPass verifies the full lifecycle
+// from check failure detection through fixing to re-evaluation (IT-008).
+func TestEndToEnd_CheckFailure_FixApplied_ChecksPass(t *testing.T) {
+	// 1. Set up database with a project and issue in in_review state.
+	database := openTestDB(t)
+
+	project := db.Project{
+		Name:        "test-project",
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		LocalPath:   t.TempDir(),
+	}
+	project, err := database.CreateProject(project)
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	issue := db.Issue{
+		ProjectID:     project.ID,
+		Identifier:    "TEST-1",
+		Title:         "Test issue",
+		State:         string(orchestrator.StateInReview),
+		PRNumber:      42,
+		WorkspaceName: "ws-1",
+		BranchName:    "autoralph/test-1",
+	}
+	issue, err = database.CreateIssue(issue)
+	if err != nil {
+		t.Fatalf("creating issue: %v", err)
+	}
+
+	// 2. Mock GitHub: first poll returns failed checks.
+	mock := &mockGitHubClient{
+		pr: github.PR{Number: 42, HeadSHA: "sha-1"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "build", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "test", Status: "completed", Conclusion: "failure"},
+		},
+	}
+
+	// 3. Run poller: issue transitions to fixing_checks.
+	poller := ghpoller.New(database, []ghpoller.ProjectInfo{{
+		ProjectID:   project.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, time.Minute, slog.Default(), nil)
+
+	ctx := context.Background()
+	runSinglePollCycle(t, poller, ctx)
+
+	// Verify issue is now in fixing_checks.
+	got, err := database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if got.State != string(orchestrator.StateFixingChecks) {
+		t.Fatalf("expected state fixing_checks, got %s", got.State)
+	}
+
+	// 4. Run orchestrator with the check-fixing action.
+	actionExecuted := false
+	sm := orchestrator.New(database)
+	sm.Register(orchestrator.Transition{
+		From: orchestrator.StateFixingChecks,
+		To:   orchestrator.StateInReview,
+		Action: func(issue db.Issue, database *db.DB) error {
+			actionExecuted = true
+			return nil
+		},
+	})
+
+	tr, ok := sm.Evaluate(got)
+	if !ok {
+		t.Fatal("expected a matching transition for fixing_checks")
+	}
+	if err := sm.Execute(tr, got); err != nil {
+		t.Fatalf("executing transition: %v", err)
+	}
+	if !actionExecuted {
+		t.Fatal("expected check-fixing action to be executed")
+	}
+
+	// Verify issue is back in in_review.
+	got, err = database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if got.State != string(orchestrator.StateInReview) {
+		t.Fatalf("expected state in_review, got %s", got.State)
+	}
+
+	// 5. Run poller with passing checks: issue stays in in_review.
+	mock.checkRuns = []github.CheckRun{
+		{ID: 3, Name: "build", Status: "completed", Conclusion: "success"},
+		{ID: 4, Name: "test", Status: "completed", Conclusion: "success"},
+	}
+	mock.pr = github.PR{Number: 42, HeadSHA: "sha-2"}
+
+	runSinglePollCycle(t, poller, ctx)
+
+	got, err = database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if got.State != string(orchestrator.StateInReview) {
+		t.Fatalf("expected state in_review after passing checks, got %s", got.State)
+	}
+
+	// Verify activity log shows the complete flow.
+	activities, err := database.ListActivity(issue.ID, 100, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+	if len(activities) == 0 {
+		t.Fatal("expected at least one activity log entry")
+	}
+
+	hasChecksFailedEvent := false
+	for _, a := range activities {
+		if a.EventType == "checks_failed" {
+			hasChecksFailedEvent = true
+		}
+	}
+	if !hasChecksFailedEvent {
+		t.Fatal("expected a checks_failed activity log entry")
+	}
+}
+
+// TestGitHubClientSatisfiesPollerInterface verifies that the mock (and by
+// extension the real github.Client via compile-time checks in adapters.go)
+// satisfies the ghpoller.GitHubClient interface.
+func TestGitHubClientSatisfiesPollerInterface(t *testing.T) {
+	var client ghpoller.GitHubClient = &mockGitHubClient{}
+	if client == nil {
+		t.Fatal("mock should satisfy GitHubClient interface")
+	}
+}
+
+// TestGitHubClientSatisfiesChecksInterfaces verifies the mock satisfies
+// the checks package interfaces (mirroring the compile-time checks for
+// the real github.Client in adapters.go).
+func TestGitHubClientSatisfiesChecksInterfaces(t *testing.T) {
+	mock := &mockGitHubClient{}
+	var _ checks.CheckRunFetcher = mock
+	var _ checks.LogFetcher = mock
+	var _ checks.PRFetcher = mock
+	var _ checks.PRCommenter = mock
+}
+
+func openTestDB(t *testing.T) *db.DB {
+	t.Helper()
+	path := fmt.Sprintf("%s/test.db", t.TempDir())
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening test db: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
+}
+
+// runSinglePollCycle uses the poller's exported Run in a cancellable context
+// to execute a single poll cycle. The poller runs one cycle immediately on start.
+func runSinglePollCycle(t *testing.T, p *ghpoller.Poller, ctx context.Context) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	p.Run(ctx)
 }
