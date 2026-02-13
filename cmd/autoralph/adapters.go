@@ -313,9 +313,10 @@ func (r *rebaseRunnerAdapter) RunRebase(ctx context.Context, base, workspaceName
 	if buildCmd == nil {
 		buildCmd = exec.CommandContext
 	}
-	cmd := buildCmd(ctx, "ralph", "rebase", base,
+	cmd := buildCmd(ctx, "ralph", "rebase",
 		"--workspace", workspaceName,
 		"--project-config", projectConfigPath,
+		base,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ralph rebase: %w\n%s", err, out)

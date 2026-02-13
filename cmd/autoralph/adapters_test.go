@@ -140,9 +140,10 @@ func TestRebaseRunnerAdapter_RunRebase_BuildsCorrectCommand(t *testing.T) {
 	}
 
 	expected := []string{
-		"ralph", "rebase", "main",
+		"ralph", "rebase",
 		"--workspace", "proj-42",
 		"--project-config", "/config/.ralph/ralph.yaml",
+		"main",
 	}
 	if len(capturedArgs) != len(expected) {
 		t.Fatalf("expected %d args, got %d: %v", len(expected), len(capturedArgs), capturedArgs)
