@@ -756,6 +756,99 @@ func TestPullFFOnly_FailsOnDivergedHistory(t *testing.T) {
 	}
 }
 
+func TestForcePushBranch_Success(t *testing.T) {
+	// Create a "remote" bare repo and a clone, then force push a rebased branch.
+	remoteDir := t.TempDir()
+	ctx := context.Background()
+
+	// Init a bare repo to act as remote.
+	remoteRunner := &shell.Runner{Dir: remoteDir}
+	if _, err := remoteRunner.Run(ctx, "git", "init", "--bare"); err != nil {
+		t.Fatalf("init bare repo: %v", err)
+	}
+
+	// Clone it.
+	cloneDir := t.TempDir()
+	os.RemoveAll(cloneDir)
+	parentRunner := &shell.Runner{Dir: filepath.Dir(cloneDir)}
+	if _, err := parentRunner.Run(ctx, "git", "clone", remoteDir, cloneDir); err != nil {
+		t.Fatalf("cloning: %v", err)
+	}
+	cloneRunner := &shell.Runner{Dir: cloneDir}
+	if _, err := cloneRunner.Run(ctx, "git", "config", "user.email", "test@test.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "config", "user.name", "Test"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create initial commit and push.
+	if err := os.WriteFile(filepath.Join(cloneDir, "README.md"), []byte("# test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "commit", "-m", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := CurrentBranch(ctx, cloneRunner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PushBranch(ctx, cloneRunner, branch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a feature branch and push it.
+	if _, err := cloneRunner.Run(ctx, "git", "checkout", "-b", "feature"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cloneDir, "a.txt"), []byte("a"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "commit", "-m", "feature commit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := PushBranch(ctx, cloneRunner, "feature"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Amend the commit (simulating a rebase that rewrites history).
+	if err := os.WriteFile(filepath.Join(cloneDir, "a.txt"), []byte("amended"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "commit", "--amend", "-m", "feature amended"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Normal push would fail here. ForcePushBranch should succeed.
+	if err := ForcePushBranch(ctx, cloneRunner, "feature"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestForcePushBranch_ErrorWrapping(t *testing.T) {
+	// Pushing to a non-existent remote should return a wrapped error.
+	dir := t.TempDir()
+	r := initRepo(t, dir)
+	ctx := context.Background()
+
+	err := ForcePushBranch(ctx, r, "nonexistent-branch")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "force pushing branch nonexistent-branch") {
+		t.Fatalf("expected wrapped error with branch name, got: %v", err)
+	}
+}
+
 func TestCopyGlobPatterns_LiteralPath(t *testing.T) {
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
