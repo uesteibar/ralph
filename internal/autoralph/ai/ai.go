@@ -23,6 +23,7 @@ var TemplateNames = []string{
 	"generate_prd.md",
 	"pr_description.md",
 	"address_feedback.md",
+	"fix_checks.md",
 }
 
 // --- Data structs ---
@@ -78,6 +79,18 @@ type AddressFeedbackData struct {
 	CodeContext string
 }
 
+// FailedCheckRun represents a single failed CI check run.
+type FailedCheckRun struct {
+	Name       string
+	Conclusion string
+	Log        string
+}
+
+// FixChecksData holds the context for rendering the fix_checks prompt.
+type FixChecksData struct {
+	FailedChecks []FailedCheckRun
+}
+
 // --- Render functions ---
 
 // RenderRefineIssue renders the prompt for issue refinement.
@@ -100,6 +113,11 @@ func RenderPRDescription(data PRDescriptionData, overrideDir string) (string, er
 // RenderAddressFeedback renders the prompt for addressing review feedback.
 func RenderAddressFeedback(data AddressFeedbackData, overrideDir string) (string, error) {
 	return render("templates/address_feedback.md", data, overrideDir)
+}
+
+// RenderFixChecks renders the prompt for fixing CI check failures.
+func RenderFixChecks(data FixChecksData, overrideDir string) (string, error) {
+	return render("templates/fix_checks.md", data, overrideDir)
 }
 
 // --- Internal rendering ---
