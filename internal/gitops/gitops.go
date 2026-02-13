@@ -218,6 +218,16 @@ func PushBranch(ctx context.Context, r *shell.Runner, branch string) error {
 	return nil
 }
 
+// ForcePushBranch force-pushes a local branch to origin using --force-with-lease
+// for safety (fails if the remote has unexpected commits).
+func ForcePushBranch(ctx context.Context, r *shell.Runner, branch string) error {
+	_, err := r.Run(ctx, "git", "push", "--force-with-lease", "-u", "origin", branch)
+	if err != nil {
+		return fmt.Errorf("force pushing branch %s: %w", branch, err)
+	}
+	return nil
+}
+
 // DiffStats returns the --stat output comparing the given base ref to HEAD.
 func DiffStats(ctx context.Context, r *shell.Runner, base string) (string, error) {
 	out, err := r.Run(ctx, "git", "diff", "--stat", base+"...HEAD")

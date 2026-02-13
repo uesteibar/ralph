@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"testing"
 
 	"github.com/uesteibar/ralph/internal/shell"
@@ -121,4 +122,59 @@ func TestWorkspaceCreatorAdapter_Create_SkipsPullWhenNilFn(t *testing.T) {
 
 	// Should not panic — nil pullFn is simply skipped.
 	_ = adapter.Create(context.Background(), t.TempDir(), workspace.Workspace{Name: "test-ws"}, "main", nil)
+}
+
+func TestRebaseRunnerAdapter_RunRebase_BuildsCorrectCommand(t *testing.T) {
+	var capturedArgs []string
+	adapter := &rebaseRunnerAdapter{
+		cmdFn: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			capturedArgs = append([]string{name}, args...)
+			// Return a command that succeeds immediately
+			return exec.CommandContext(ctx, "true")
+		},
+	}
+
+	err := adapter.RunRebase(context.Background(), "main", "proj-42", "/config/.ralph/ralph.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []string{
+		"ralph", "rebase", "main",
+		"--workspace", "proj-42",
+		"--project-config", "/config/.ralph/ralph.yaml",
+	}
+	if len(capturedArgs) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %v", len(expected), len(capturedArgs), capturedArgs)
+	}
+	for i, want := range expected {
+		if capturedArgs[i] != want {
+			t.Errorf("arg[%d]: expected %q, got %q", i, want, capturedArgs[i])
+		}
+	}
+}
+
+func TestRebaseRunnerAdapter_RunRebase_ReturnsErrorOnFailure(t *testing.T) {
+	adapter := &rebaseRunnerAdapter{
+		cmdFn: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "false")
+		},
+	}
+
+	err := adapter.RunRebase(context.Background(), "main", "proj-42", "/config/.ralph/ralph.yaml")
+	if err == nil {
+		t.Fatal("expected error when command fails")
+	}
+}
+
+func TestRebaseRunnerAdapter_RunRebase_DefaultUsesExecCommand(t *testing.T) {
+	adapter := &rebaseRunnerAdapter{}
+
+	// With nil cmdFn, it defaults to exec.CommandContext.
+	// This will fail because "ralph" binary likely isn't available in tests,
+	// but we verify it doesn't panic and returns an error.
+	err := adapter.RunRebase(context.Background(), "main", "proj-42", "/config/ralph.yaml")
+	if err == nil {
+		t.Fatal("expected error when ralph binary is not available")
+	}
 }
