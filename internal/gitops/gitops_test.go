@@ -790,6 +790,12 @@ func TestPullFFOnly_FailsOnDivergedHistory(t *testing.T) {
 		t.Fatalf("cloning: %v", err)
 	}
 	cloneRunner := &shell.Runner{Dir: cloneDir}
+	if _, err := cloneRunner.Run(ctx, "git", "config", "user.email", "test@test.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "config", "user.name", "Test"); err != nil {
+		t.Fatal(err)
+	}
 
 	branch, err := CurrentBranch(ctx, cloneRunner)
 	if err != nil {

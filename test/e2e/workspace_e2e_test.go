@@ -138,7 +138,7 @@ func setupTestRepo(t *testing.T) string {
 		}
 	}
 
-	gitCmd("init")
+	gitCmd("init", "-b", "main")
 	gitCmd("add", "-A")
 	gitCmd("commit", "-m", "initial commit")
 

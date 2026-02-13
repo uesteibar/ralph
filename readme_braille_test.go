@@ -67,7 +67,7 @@ func TestReadme_ContainsBrailleArt(t *testing.T) {
 			if strings.Contains(line, "⠀⠀⠀⠀⠀⠀⣀⣤⣶⡶⢛⠟⡿⠻⢻⢿⢶⢦⣄⡀") && artIdx == -1 {
 				artIdx = i
 			}
-			if strings.HasPrefix(line, "> **Note:**") && disclaimerIdx == -1 {
+			if strings.Contains(line, "**Note:**") && strings.HasPrefix(line, ">") && disclaimerIdx == -1 {
 				disclaimerIdx = i
 			}
 		}
@@ -79,7 +79,7 @@ func TestReadme_ContainsBrailleArt(t *testing.T) {
 			t.Fatal("could not find Braille art")
 		}
 		if disclaimerIdx == -1 {
-			t.Fatal("could not find '> **Note:**' disclaimer")
+			t.Fatal("could not find '> ... **Note:**' disclaimer")
 		}
 
 		if artIdx <= headingIdx {
