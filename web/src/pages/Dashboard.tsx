@@ -4,39 +4,7 @@ import type { Project, Issue } from '../api'
 import { fetchProjects, fetchIssues } from '../api'
 import { useWebSocket } from '../useWebSocket'
 import type { WSMessage } from '../useWebSocket'
-
-const STATE_COLORS: Record<string, string> = {
-  queued: '#6b7280',
-  refining: '#8b5cf6',
-  approved: '#3b82f6',
-  building: '#f59e0b',
-  in_review: '#10b981',
-  addressing_feedback: '#ef4444',
-  completed: '#22c55e',
-  failed: '#dc2626',
-  paused: '#9ca3af',
-}
-
-function StateBadge({ state }: { state: string }) {
-  const color = STATE_COLORS[state] || '#6b7280'
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        padding: '2px 8px',
-        borderRadius: '12px',
-        fontSize: '12px',
-        fontWeight: 600,
-        color: '#fff',
-        backgroundColor: color,
-        textTransform: 'uppercase',
-        letterSpacing: '0.5px',
-      }}
-    >
-      {state.replace(/_/g, ' ')}
-    </span>
-  )
-}
+import { StateBadge, STATE_COLORS } from '../components/StateBadge'
 
 function ProjectCard({ project }: { project: Project }) {
   const breakdown = project.state_breakdown || {}
@@ -203,7 +171,9 @@ export default function Dashboard() {
           <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#374151', marginBottom: '12px' }}>Projects</h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
             {projects.map(p => (
-              <ProjectCard key={p.id} project={p} />
+              <Link key={p.id} to={`/projects/${p.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                <ProjectCard project={p} />
+              </Link>
             ))}
           </div>
         </section>
