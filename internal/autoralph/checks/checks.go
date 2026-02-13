@@ -109,13 +109,13 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return nil
 		}
 
-		// Fetch logs for each failed check run, truncating to last 500 lines
+		// Fetch logs for each failed check run, truncating to last 200 lines
 		var failedChecks []ai.FailedCheckRun
 		for _, cr := range failed {
 			logBytes, err := cfg.Logs.FetchCheckRunLog(ctx, project.GithubOwner, project.GithubRepo, cr.ID)
 			var logStr string
 			if err == nil && len(logBytes) > 0 {
-				logStr = truncateLog(string(logBytes), 500)
+				logStr = truncateLog(string(logBytes), 200)
 			}
 			failedChecks = append(failedChecks, ai.FailedCheckRun{
 				Name:       cr.Name,

@@ -419,9 +419,9 @@ func TestNewAction_TruncatesLogs(t *testing.T) {
 	issue := createTestIssue(t, d, project, 0)
 	cfg, inv, _, logFetcher, _, _, _ := defaultMocks(project)
 
-	// Create a log with more than 500 lines
+	// Create a log with more than 200 lines
 	var lines []string
-	for i := 0; i < 600; i++ {
+	for i := 0; i < 300; i++ {
 		lines = append(lines, "log line")
 	}
 	logFetcher.logs = map[int64][]byte{
@@ -435,10 +435,10 @@ func TestNewAction_TruncatesLogs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// The prompt should not contain all 600 lines — it should be truncated
+	// The prompt should not contain all 300 lines — it should be truncated to 200
 	lineCount := strings.Count(inv.lastPrompt, "log line")
-	if lineCount > 500 {
-		t.Errorf("expected at most 500 'log line' occurrences, got %d", lineCount)
+	if lineCount > 200 {
+		t.Errorf("expected at most 200 'log line' occurrences, got %d", lineCount)
 	}
 }
 

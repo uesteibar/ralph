@@ -37,8 +37,9 @@ Acceptance Criteria:
 2. Implement story `{{.StoryID}}` fully. Keep changes focused and minimal.
 3. Write tests for new functionality (prefer TDD).
 4. Run quality checks:
-{{range .QualityChecks}}   - `{{.}}`
+{{range .QualityChecks}}   - `ralph check {{.}}`
 {{end}}
+   > **Note:** `ralph check` wraps each command with compact pass/fail output. Full output is saved to the log file path shown in the output. If the truncated output is insufficient for debugging, you can grep or read the full log file.
 5. If all checks pass:
    - Update `{{.PRDPath}}`: set `passes: true` for story `{{.StoryID}}`
    - Append a progress entry to `{{.ProgressPath}}` (see format below)
