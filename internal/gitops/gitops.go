@@ -13,6 +13,19 @@ import (
 	"github.com/uesteibar/ralph/internal/shell"
 )
 
+// ConfigureGitIdentity sets repo-local user.name and user.email in the
+// given directory. This uses --local scope so it only affects the repository
+// (or worktree) at the runner's Dir and does not touch the global config.
+func ConfigureGitIdentity(ctx context.Context, r *shell.Runner, name, email string) error {
+	if _, err := r.Run(ctx, "git", "config", "--local", "user.name", name); err != nil {
+		return fmt.Errorf("setting git user.name: %w", err)
+	}
+	if _, err := r.Run(ctx, "git", "config", "--local", "user.email", email); err != nil {
+		return fmt.Errorf("setting git user.email: %w", err)
+	}
+	return nil
+}
+
 // BranchExistsLocally checks whether a branch exists in the local repo.
 func BranchExistsLocally(ctx context.Context, r *shell.Runner, branch string) bool {
 	_, err := r.Run(ctx, "git", "rev-parse", "--verify", "refs/heads/"+branch)

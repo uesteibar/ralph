@@ -3,12 +3,51 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
+
+func initTestRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	cmds := [][]string{
+		{"git", "init"},
+		{"git", "config", "user.name", "Test User"},
+		{"git", "config", "user.email", "test@example.com"},
+	}
+	for _, args := range cmds {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	// Create an initial commit so the repo has HEAD.
+	f, err := os.Create(dir + "/init.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	for _, args := range [][]string{
+		{"git", "add", "-A"},
+		{"git", "commit", "-m", "initial"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	return dir
+}
 
 func TestGitPullerAdapter_PullDefaultBase_Success(t *testing.T) {
 	var pulledBranch string
@@ -177,5 +216,101 @@ func TestRebaseRunnerAdapter_RunRebase_DefaultUsesExecCommand(t *testing.T) {
 	err := adapter.RunRebase(context.Background(), "main", "proj-42", "/config/ralph.yaml")
 	if err == nil {
 		t.Fatal("expected error when ralph binary is not available")
+	}
+}
+
+func TestGitOpsAdapter_Commit_UsesConfiguredIdentity(t *testing.T) {
+	dir := initTestRepo(t)
+	ctx := context.Background()
+
+	adapter := &gitOpsAdapter{
+		gitAuthorName:  "test-autoralph",
+		gitAuthorEmail: "test@autoralph.dev",
+	}
+
+	// Create a file to commit.
+	if err := os.WriteFile(dir+"/hello.txt", []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := adapter.Commit(ctx, dir, "test commit"); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	// Verify author identity.
+	cmd := exec.Command("git", "log", "-1", "--format=%an <%ae>")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git log failed: %v", err)
+	}
+	got := strings.TrimSpace(string(out))
+	want := "test-autoralph <test@autoralph.dev>"
+	if got != want {
+		t.Errorf("author = %q, want %q", got, want)
+	}
+
+	// Verify committer identity.
+	cmd = exec.Command("git", "log", "-1", "--format=%cn <%ce>")
+	cmd.Dir = dir
+	out, err = cmd.Output()
+	if err != nil {
+		t.Fatalf("git log failed: %v", err)
+	}
+	got = strings.TrimSpace(string(out))
+	if got != want {
+		t.Errorf("committer = %q, want %q", got, want)
+	}
+}
+
+func TestGitOpsAdapter_HeadSHA_UsesConfiguredIdentity(t *testing.T) {
+	dir := initTestRepo(t)
+	ctx := context.Background()
+
+	adapter := &gitOpsAdapter{
+		gitAuthorName:  "test-autoralph",
+		gitAuthorEmail: "test@autoralph.dev",
+	}
+
+	sha, err := adapter.HeadSHA(ctx, dir)
+	if err != nil {
+		t.Fatalf("HeadSHA failed: %v", err)
+	}
+	if len(sha) != 40 {
+		t.Errorf("HeadSHA returned %q, want 40-char SHA", sha)
+	}
+}
+
+func TestGitOpsAdapter_GitEnv_SetsAllFourVars(t *testing.T) {
+	adapter := &gitOpsAdapter{
+		gitAuthorName:  "ralph",
+		gitAuthorEmail: "ralph@test.dev",
+	}
+
+	env := adapter.gitEnv()
+
+	want := map[string]string{
+		"GIT_AUTHOR_NAME":     "ralph",
+		"GIT_AUTHOR_EMAIL":    "ralph@test.dev",
+		"GIT_COMMITTER_NAME":  "ralph",
+		"GIT_COMMITTER_EMAIL": "ralph@test.dev",
+	}
+
+	got := make(map[string]string)
+	for _, e := range env {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 {
+			got[parts[0]] = parts[1]
+		}
+	}
+
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("env %s = %q, want %q", k, got[k], v)
+		}
+	}
+
+	if len(env) != len(want) {
+		t.Errorf("gitEnv() returned %d entries, want %d", len(env), len(want))
 	}
 }

@@ -145,11 +145,17 @@ func runServe(args []string) error {
 		return fmt.Errorf("listing projects: %w", err)
 	}
 
+	type gitIdentity struct {
+		name  string
+		email string
+	}
+
 	var (
 		pollerProjects   []poller.ProjectInfo
 		ghPollerProjects []ghpoller.ProjectInfo
 		firstLinear      *linear.Client
 		firstGitHub      *ghclient.Client
+		firstGitID       *gitIdentity
 	)
 
 	for _, proj := range dbProjects {
@@ -224,6 +230,7 @@ func runServe(args []string) error {
 		if firstLinear == nil {
 			firstLinear = lc
 			firstGitHub = gc
+			firstGitID = &gitIdentity{name: creds.GitAuthorName, email: creds.GitAuthorEmail}
 		}
 
 		pollerProjects = append(pollerProjects, poller.ProjectInfo{
@@ -263,6 +270,11 @@ func runServe(args []string) error {
 		puller := &gitPullerAdapter{
 			defaultBaseFn: cfgLoader.DefaultBase,
 			pullFn:        gitops.PullFFOnly,
+		}
+
+		gitOps := &gitOpsAdapter{
+			gitAuthorName:  firstGitID.name,
+			gitAuthorEmail: firstGitID.email,
 		}
 
 		// QUEUED → REFINING
@@ -325,7 +337,7 @@ func runServe(args []string) error {
 					Invoker:  invoker,
 					Comments: firstGitHub,
 					Replier:  firstGitHub,
-					Git:      &gitOpsAdapter{},
+					Git:      gitOps,
 					Projects: database,
 				}),
 			})
@@ -352,16 +364,20 @@ func runServe(args []string) error {
 	// --- 7. PR and complete actions ---
 	var prAction worker.PRCreator
 	if firstLinear != nil && firstGitHub != nil {
+		gitOps := &gitOpsAdapter{
+			gitAuthorName:  firstGitID.name,
+			gitAuthorEmail: firstGitID.email,
+		}
 		prAction = &prActionAdapter{pr.NewAction(pr.Config{
 			Invoker:    &claudeInvoker{},
-			Git:        &gitOpsAdapter{},
-			Diff:       &gitOpsAdapter{},
+			Git:        gitOps,
+			Diff:       gitOps,
 			PRD:        &prdReaderAdapter{},
 			GitHub:     &ghPRCreatorAdapter{client: firstGitHub},
 			Linear:     &linearPoster{client: firstLinear},
 			Projects:   database,
 			ConfigLoad: &configLoaderAdapter{},
-			Rebase:     &gitOpsAdapter{},
+			Rebase:     gitOps,
 		})}
 	}
 
@@ -375,13 +391,20 @@ func runServe(args []string) error {
 	}
 
 	// --- 8. Build worker dispatcher ---
+	var dispatcherGitName, dispatcherGitEmail string
+	if firstGitID != nil {
+		dispatcherGitName = firstGitID.name
+		dispatcherGitEmail = firstGitID.email
+	}
 	dispatcher := worker.New(worker.Config{
-		DB:         database,
-		MaxWorkers: 2,
-		LoopRunner: &loopRunnerAdapter{},
-		Projects:   database,
-		PR:         prAction,
-		Logger:     logger,
+		DB:             database,
+		MaxWorkers:     2,
+		LoopRunner:     &loopRunnerAdapter{},
+		Projects:       database,
+		PR:             prAction,
+		GitAuthorName:  dispatcherGitName,
+		GitAuthorEmail: dispatcherGitEmail,
+		Logger:         logger,
 		OnBuildEvent: func(issueID, detail string) {
 			if hub == nil {
 				return

@@ -18,6 +18,9 @@ type Credentials struct {
 	GithubAppPrivateKeyPath string
 
 	GithubUserID int64
+
+	GitAuthorName  string
+	GitAuthorEmail string
 }
 
 // HasGithubApp returns true if GitHub App credentials are configured.
@@ -32,6 +35,8 @@ type profileEntry struct {
 	GithubAppInstallationID int64  `yaml:"github_app_installation_id"`
 	GithubAppPrivateKeyPath string `yaml:"github_app_private_key_path"`
 	GithubUserID            int64  `yaml:"github_user_id"`
+	GitAuthorName           string `yaml:"git_author_name"`
+	GitAuthorEmail          string `yaml:"git_author_email"`
 }
 
 type credentialsFile struct {
@@ -69,7 +74,12 @@ func Resolve(configDir, profileName string) (Credentials, error) {
 		if envLinear == "" || envGithub == "" {
 			return Credentials{}, fmt.Errorf("credentials file not found (%s) and environment variables LINEAR_API_KEY/GITHUB_TOKEN not set", filePath)
 		}
-		return Credentials{LinearAPIKey: envLinear, GithubToken: envGithub}, nil
+		return Credentials{
+			LinearAPIKey:   envLinear,
+			GithubToken:    envGithub,
+			GitAuthorName:  gitAuthorNameWithDefault(os.Getenv("AUTORALPH_GIT_AUTHOR_NAME")),
+			GitAuthorEmail: gitAuthorEmailWithDefault(os.Getenv("AUTORALPH_GIT_AUTHOR_EMAIL")),
+		}, nil
 	}
 
 	var cf credentialsFile
@@ -100,6 +110,8 @@ func Resolve(configDir, profileName string) (Credentials, error) {
 		GithubAppInstallationID: profile.GithubAppInstallationID,
 		GithubAppPrivateKeyPath: profile.GithubAppPrivateKeyPath,
 		GithubUserID:            profile.GithubUserID,
+		GitAuthorName:           gitAuthorNameWithDefault(profile.GitAuthorName),
+		GitAuthorEmail:          gitAuthorEmailWithDefault(profile.GitAuthorEmail),
 	}
 
 	if envLinear != "" {
@@ -112,8 +124,28 @@ func Resolve(configDir, profileName string) (Credentials, error) {
 		creds.GithubAppInstallationID = 0
 		creds.GithubAppPrivateKeyPath = ""
 	}
+	if v := os.Getenv("AUTORALPH_GIT_AUTHOR_NAME"); v != "" {
+		creds.GitAuthorName = v
+	}
+	if v := os.Getenv("AUTORALPH_GIT_AUTHOR_EMAIL"); v != "" {
+		creds.GitAuthorEmail = v
+	}
 
 	return creds, nil
+}
+
+func gitAuthorNameWithDefault(v string) string {
+	if v == "" {
+		return "autoralph"
+	}
+	return v
+}
+
+func gitAuthorEmailWithDefault(v string) string {
+	if v == "" {
+		return "autoralph@noreply"
+	}
+	return v
 }
 
 // validateGithubAppFields checks that if any github_app_* field is set, all

@@ -331,6 +331,154 @@ profiles:
 	}
 }
 
+func TestResolve_GitIdentity_FromProfile(t *testing.T) {
+	dir := t.TempDir()
+	writeCredentialsFile(t, dir, `
+default_profile: work
+profiles:
+  work:
+    linear_api_key: work-linear
+    github_token: work-github
+    git_author_name: my-bot
+    git_author_email: my-bot@example.com
+`)
+	t.Setenv("LINEAR_API_KEY", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_NAME", "")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_EMAIL", "")
+
+	creds, err := Resolve(dir, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GitAuthorName != "my-bot" {
+		t.Errorf("GitAuthorName = %q, want %q", creds.GitAuthorName, "my-bot")
+	}
+	if creds.GitAuthorEmail != "my-bot@example.com" {
+		t.Errorf("GitAuthorEmail = %q, want %q", creds.GitAuthorEmail, "my-bot@example.com")
+	}
+}
+
+func TestResolve_GitIdentity_DefaultsWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeCredentialsFile(t, dir, `
+default_profile: work
+profiles:
+  work:
+    linear_api_key: work-linear
+    github_token: work-github
+`)
+	t.Setenv("LINEAR_API_KEY", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_NAME", "")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_EMAIL", "")
+
+	creds, err := Resolve(dir, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GitAuthorName != "autoralph" {
+		t.Errorf("GitAuthorName = %q, want %q", creds.GitAuthorName, "autoralph")
+	}
+	if creds.GitAuthorEmail != "autoralph@noreply" {
+		t.Errorf("GitAuthorEmail = %q, want %q", creds.GitAuthorEmail, "autoralph@noreply")
+	}
+}
+
+func TestResolve_GitIdentity_EnvVarsOverrideProfile(t *testing.T) {
+	dir := t.TempDir()
+	writeCredentialsFile(t, dir, `
+default_profile: work
+profiles:
+  work:
+    linear_api_key: work-linear
+    github_token: work-github
+    git_author_name: yaml-bot
+    git_author_email: yaml-bot@example.com
+`)
+	t.Setenv("LINEAR_API_KEY", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_NAME", "env-bot")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_EMAIL", "env-bot@example.com")
+
+	creds, err := Resolve(dir, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GitAuthorName != "env-bot" {
+		t.Errorf("GitAuthorName = %q, want %q", creds.GitAuthorName, "env-bot")
+	}
+	if creds.GitAuthorEmail != "env-bot@example.com" {
+		t.Errorf("GitAuthorEmail = %q, want %q", creds.GitAuthorEmail, "env-bot@example.com")
+	}
+}
+
+func TestResolve_GitIdentity_PartialEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeCredentialsFile(t, dir, `
+default_profile: work
+profiles:
+  work:
+    linear_api_key: work-linear
+    github_token: work-github
+    git_author_name: yaml-bot
+    git_author_email: yaml-bot@example.com
+`)
+	t.Setenv("LINEAR_API_KEY", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_NAME", "env-bot")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_EMAIL", "")
+
+	creds, err := Resolve(dir, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GitAuthorName != "env-bot" {
+		t.Errorf("GitAuthorName = %q, want %q", creds.GitAuthorName, "env-bot")
+	}
+	if creds.GitAuthorEmail != "yaml-bot@example.com" {
+		t.Errorf("GitAuthorEmail = %q, want %q", creds.GitAuthorEmail, "yaml-bot@example.com")
+	}
+}
+
+func TestResolve_GitIdentity_FileMissing_EnvVarsFallback_UsesDefaults(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LINEAR_API_KEY", "env-linear")
+	t.Setenv("GITHUB_TOKEN", "env-github")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_NAME", "")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_EMAIL", "")
+
+	creds, err := Resolve(dir, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GitAuthorName != "autoralph" {
+		t.Errorf("GitAuthorName = %q, want %q", creds.GitAuthorName, "autoralph")
+	}
+	if creds.GitAuthorEmail != "autoralph@noreply" {
+		t.Errorf("GitAuthorEmail = %q, want %q", creds.GitAuthorEmail, "autoralph@noreply")
+	}
+}
+
+func TestResolve_GitIdentity_FileMissing_EnvVarsFallback_WithGitEnvVars(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LINEAR_API_KEY", "env-linear")
+	t.Setenv("GITHUB_TOKEN", "env-github")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_NAME", "env-bot")
+	t.Setenv("AUTORALPH_GIT_AUTHOR_EMAIL", "env-bot@example.com")
+
+	creds, err := Resolve(dir, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GitAuthorName != "env-bot" {
+		t.Errorf("GitAuthorName = %q, want %q", creds.GitAuthorName, "env-bot")
+	}
+	if creds.GitAuthorEmail != "env-bot@example.com" {
+		t.Errorf("GitAuthorEmail = %q, want %q", creds.GitAuthorEmail, "env-bot@example.com")
+	}
+}
+
 func TestDefaultPath(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
