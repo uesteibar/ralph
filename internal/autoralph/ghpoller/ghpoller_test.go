@@ -629,7 +629,7 @@ func TestHasFeedback_IgnoresBotReviews(t *testing.T) {
 		{ID: 1, State: "COMMENTED", User: "autoralph[bot]"},
 		{ID: 2, State: "APPROVED", User: "human-reviewer"},
 	}
-	if hasFeedback(reviews) {
+	if hasFeedback(reviews, 0) {
 		t.Error("expected hasFeedback to return false when only bot has COMMENTED")
 	}
 }
@@ -639,7 +639,157 @@ func TestHasFeedback_HumanCommentedTriggersFeedback(t *testing.T) {
 		{ID: 1, State: "COMMENTED", User: "autoralph[bot]"},
 		{ID: 2, State: "COMMENTED", User: "human-reviewer"},
 	}
-	if !hasFeedback(reviews) {
+	if !hasFeedback(reviews, 0) {
 		t.Error("expected hasFeedback to return true when human has COMMENTED")
+	}
+}
+
+func TestHasFeedback_TrustedUserID_OnlyTrustedUserTriggers(t *testing.T) {
+	reviews := []github.Review{
+		{ID: 1, State: "CHANGES_REQUESTED", User: "untrusted", UserID: 99999},
+		{ID: 2, State: "COMMENTED", User: "trusted", UserID: 12345},
+	}
+	if !hasFeedback(reviews, 12345) {
+		t.Error("expected hasFeedback to return true when trusted user has feedback")
+	}
+}
+
+func TestHasFeedback_TrustedUserID_UntrustedUserIgnored(t *testing.T) {
+	reviews := []github.Review{
+		{ID: 1, State: "CHANGES_REQUESTED", User: "untrusted", UserID: 99999},
+	}
+	if hasFeedback(reviews, 12345) {
+		t.Error("expected hasFeedback to return false when only untrusted user has feedback")
+	}
+}
+
+func TestHasFeedback_TrustedUserID_Zero_AllNonBotTrusted(t *testing.T) {
+	reviews := []github.Review{
+		{ID: 1, State: "CHANGES_REQUESTED", User: "anyone", UserID: 99999},
+	}
+	if !hasFeedback(reviews, 0) {
+		t.Error("expected hasFeedback to return true when trustedUserID is 0 (backward compat)")
+	}
+}
+
+func TestPollProject_TrustedUserFeedback_TransitionsToAddressingFeedback(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "trusted-user", UserID: 12345},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:     proj.ID,
+		GithubOwner:   "owner",
+		GithubRepo:    "repo",
+		GitHub:        mock,
+		TrustedUserID: 12345,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != string(orchestrator.StateAddressingFeedback) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateAddressingFeedback, updated.State)
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 activity entry, got %d", len(entries))
+	}
+	if entries[0].EventType != "changes_requested" {
+		t.Errorf("expected event_type %q, got %q", "changes_requested", entries[0].EventType)
+	}
+}
+
+func TestPollProject_UntrustedFeedback_SkippedAndLogged(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "untrusted-user", UserID: 99999},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:     proj.ID,
+		GithubOwner:   "owner",
+		GithubRepo:    "repo",
+		GitHub:        mock,
+		TrustedUserID: 12345,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// State should NOT transition
+	if updated.State != string(orchestrator.StateInReview) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateInReview, updated.State)
+	}
+	// LastReviewID should still advance past the untrusted review
+	if updated.LastReviewID != "100" {
+		t.Errorf("expected last_review_id %q, got %q", "100", updated.LastReviewID)
+	}
+
+	// Activity log should have the skip entry
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 activity entry, got %d", len(entries))
+	}
+	if entries[0].EventType != "untrusted_feedback_skipped" {
+		t.Errorf("expected event_type %q, got %q", "untrusted_feedback_skipped", entries[0].EventType)
+	}
+}
+
+func TestPollProject_TrustedUserID_Zero_BackwardCompatible(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix", User: "anyone", UserID: 55555},
+		},
+	}
+
+	// TrustedUserID is 0 (default/unset) — all non-bot reviews should be trusted
+	p := New(d, []ProjectInfo{{
+		ProjectID:     proj.ID,
+		GithubOwner:   "owner",
+		GithubRepo:    "repo",
+		GitHub:        mock,
+		TrustedUserID: 0,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != string(orchestrator.StateAddressingFeedback) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateAddressingFeedback, updated.State)
 	}
 }

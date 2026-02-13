@@ -27,10 +27,11 @@ type PR struct {
 
 // Review represents a GitHub pull request review.
 type Review struct {
-	ID    int64
-	State string
-	Body  string
-	User  string
+	ID     int64
+	State  string
+	Body   string
+	User   string
+	UserID int64
 }
 
 // Comment represents a GitHub pull request comment (review comment or issue comment).
@@ -282,10 +283,11 @@ func prFromGH(pr *gh.PullRequest) PR {
 
 func reviewFromGH(r *gh.PullRequestReview) Review {
 	return Review{
-		ID:    r.GetID(),
-		State: r.GetState(),
-		Body:  r.GetBody(),
-		User:  r.GetUser().GetLogin(),
+		ID:     r.GetID(),
+		State:  r.GetState(),
+		Body:   r.GetBody(),
+		User:   r.GetUser().GetLogin(),
+		UserID: r.GetUser().GetID(),
 	}
 }
 

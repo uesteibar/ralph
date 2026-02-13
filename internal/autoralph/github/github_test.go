@@ -76,13 +76,13 @@ func TestClient_FetchPRReviews_Success(t *testing.T) {
 				"id":    1,
 				"state": "APPROVED",
 				"body":  "Looks great!",
-				"user":  map[string]any{"login": "reviewer1"},
+				"user":  map[string]any{"login": "reviewer1", "id": 1001},
 			},
 			{
 				"id":    2,
 				"state": "CHANGES_REQUESTED",
 				"body":  "Needs work",
-				"user":  map[string]any{"login": "reviewer2"},
+				"user":  map[string]any{"login": "reviewer2", "id": 1002},
 			},
 		})
 	}))
@@ -97,10 +97,10 @@ func TestClient_FetchPRReviews_Success(t *testing.T) {
 	if len(reviews) != 2 {
 		t.Fatalf("expected 2 reviews, got %d", len(reviews))
 	}
-	if reviews[0].ID != 1 || reviews[0].State != "APPROVED" || reviews[0].Body != "Looks great!" || reviews[0].User != "reviewer1" {
+	if reviews[0].ID != 1 || reviews[0].State != "APPROVED" || reviews[0].Body != "Looks great!" || reviews[0].User != "reviewer1" || reviews[0].UserID != 1001 {
 		t.Errorf("review 0 mismatch: %+v", reviews[0])
 	}
-	if reviews[1].ID != 2 || reviews[1].State != "CHANGES_REQUESTED" || reviews[1].User != "reviewer2" {
+	if reviews[1].ID != 2 || reviews[1].State != "CHANGES_REQUESTED" || reviews[1].User != "reviewer2" || reviews[1].UserID != 1002 {
 		t.Errorf("review 1 mismatch: %+v", reviews[1])
 	}
 }

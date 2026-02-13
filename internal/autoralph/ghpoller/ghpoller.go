@@ -31,10 +31,11 @@ type GitHubClient interface {
 
 // ProjectInfo holds the data the GitHub poller needs for each project.
 type ProjectInfo struct {
-	ProjectID   string
-	GithubOwner string
-	GithubRepo  string
-	GitHub      GitHubClient
+	ProjectID     string
+	GithubOwner   string
+	GithubRepo    string
+	GitHub        GitHubClient
+	TrustedUserID int64
 }
 
 // CompleteFunc is called when a PR merge is detected. It handles workspace
@@ -157,8 +158,21 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 	maxID := maxReviewID(newReviews)
 	issue.LastReviewID = strconv.FormatInt(maxID, 10)
 
+	// Log skipped untrusted reviews when a trusted user ID is configured.
+	if proj.TrustedUserID != 0 {
+		for _, r := range newReviews {
+			if isBot(r.User) {
+				continue
+			}
+			if r.UserID != proj.TrustedUserID && (r.State == "CHANGES_REQUESTED" || r.State == "COMMENTED") {
+				p.db.LogActivity(issue.ID, "untrusted_feedback_skipped", issue.State, issue.State,
+					fmt.Sprintf("Skipped feedback from untrusted user %s (ID %d) on PR #%d", r.User, r.UserID, issue.PRNumber))
+			}
+		}
+	}
+
 	// Check if any new review has actionable feedback (changes requested or comments).
-	if hasFeedback(newReviews) {
+	if hasFeedback(newReviews, proj.TrustedUserID) {
 		p.transitionIssue(issue, string(orchestrator.StateAddressingFeedback), "changes_requested",
 			fmt.Sprintf("Feedback received on PR #%d", issue.PRNumber))
 		return
@@ -208,9 +222,14 @@ func reviewsAfter(reviews []github.Review, lastSeenID string) []github.Review {
 // reviewer left inline comments without formally requesting changes).
 // Bot reviews (e.g. from autoralph itself replying to comments) are ignored
 // so they don't trigger a new feedback cycle.
-func hasFeedback(reviews []github.Review) bool {
+// When trustedUserID is non-zero, only reviews from that user ID are considered.
+// When trustedUserID is 0, all non-bot reviews are trusted (backward compatible).
+func hasFeedback(reviews []github.Review, trustedUserID int64) bool {
 	for _, r := range reviews {
 		if isBot(r.User) {
+			continue
+		}
+		if trustedUserID != 0 && r.UserID != trustedUserID {
 			continue
 		}
 		if r.State == "CHANGES_REQUESTED" || r.State == "COMMENTED" {

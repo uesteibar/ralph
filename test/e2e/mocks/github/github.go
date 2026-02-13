@@ -24,10 +24,11 @@ type PR struct {
 
 // Review is a mock GitHub pull request review.
 type Review struct {
-	ID    int64
-	State string
-	Body  string
-	User  string
+	ID     int64
+	State  string
+	Body   string
+	User   string
+	UserID int64
 }
 
 // Comment is a mock GitHub pull request review comment.
@@ -314,7 +315,7 @@ func (m *Mock) handleListReviews(w http.ResponseWriter, _ *http.Request, owner, 
 			"id":    rev.ID,
 			"state": rev.State,
 			"body":  rev.Body,
-			"user":  map[string]any{"login": rev.User},
+			"user":  map[string]any{"login": rev.User, "id": rev.UserID},
 		})
 	}
 

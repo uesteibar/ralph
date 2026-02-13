@@ -288,6 +288,49 @@ func TestHasGithubApp_False_WhenEmpty(t *testing.T) {
 	}
 }
 
+func TestResolve_GithubUserID_Set(t *testing.T) {
+	dir := t.TempDir()
+	writeCredentialsFile(t, dir, `
+default_profile: work
+profiles:
+  work:
+    linear_api_key: work-linear
+    github_token: work-github
+    github_user_id: 12345
+`)
+	t.Setenv("LINEAR_API_KEY", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	creds, err := Resolve(dir, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GithubUserID != 12345 {
+		t.Errorf("GithubUserID = %d, want %d", creds.GithubUserID, 12345)
+	}
+}
+
+func TestResolve_GithubUserID_Unset(t *testing.T) {
+	dir := t.TempDir()
+	writeCredentialsFile(t, dir, `
+default_profile: work
+profiles:
+  work:
+    linear_api_key: work-linear
+    github_token: work-github
+`)
+	t.Setenv("LINEAR_API_KEY", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	creds, err := Resolve(dir, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GithubUserID != 0 {
+		t.Errorf("GithubUserID = %d, want %d", creds.GithubUserID, 0)
+	}
+}
+
 func TestDefaultPath(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

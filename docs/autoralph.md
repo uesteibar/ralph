@@ -252,9 +252,40 @@ don't count against a personal user's rate limit.
 | `github_app_client_id` | GitHub App Client ID (starts with `Iv`) |
 | `github_app_installation_id` | Numeric ID from the installation URL |
 | `github_app_private_key_path` | Path to the `.pem` private key file |
+| `github_user_id` | Your numeric GitHub user ID (optional). Used to restrict which reviewer's feedback AutoRalph acts on. |
 
 > **Important**: If you set any `github_app_*` field, you must set all three.
 > Partial configuration is an error.
+
+#### Security: Trusted Reviewer
+
+On public repositories, anyone can submit a PR review. By default, AutoRalph
+treats all non-bot reviews as actionable feedback. Setting `github_user_id` in
+your credentials profile restricts AutoRalph to only act on reviews from that
+specific GitHub user.
+
+**What it does**: When `github_user_id` is set, AutoRalph compares each
+reviewer's numeric ID against the configured value. Reviews from other users
+are skipped (logged as `untrusted_feedback_skipped` in the activity log) and
+never trigger the `addressing_feedback` transition. When `github_user_id` is
+not set (or `0`), all non-bot reviews are trusted -- the existing default
+behavior.
+
+**How to find your GitHub user ID**:
+
+```bash
+gh api /user --jq .id
+```
+
+**Example configuration**:
+
+```yaml
+profiles:
+  personal:
+    linear_api_key: lin_api_xxxxxxxxxxxxx
+    github_token: ghp_xxxxxxxxxxxxx
+    github_user_id: 12345678
+```
 
 ### Projects
 

@@ -16,6 +16,8 @@ type Credentials struct {
 	GithubAppClientID       string
 	GithubAppInstallationID int64
 	GithubAppPrivateKeyPath string
+
+	GithubUserID int64
 }
 
 // HasGithubApp returns true if GitHub App credentials are configured.
@@ -29,6 +31,7 @@ type profileEntry struct {
 	GithubAppClientID       string `yaml:"github_app_client_id"`
 	GithubAppInstallationID int64  `yaml:"github_app_installation_id"`
 	GithubAppPrivateKeyPath string `yaml:"github_app_private_key_path"`
+	GithubUserID            int64  `yaml:"github_user_id"`
 }
 
 type credentialsFile struct {
@@ -96,6 +99,7 @@ func Resolve(configDir, profileName string) (Credentials, error) {
 		GithubAppClientID:       profile.GithubAppClientID,
 		GithubAppInstallationID: profile.GithubAppInstallationID,
 		GithubAppPrivateKeyPath: profile.GithubAppPrivateKeyPath,
+		GithubUserID:            profile.GithubUserID,
 	}
 
 	if envLinear != "" {

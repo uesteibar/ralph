@@ -236,10 +236,11 @@ func runServe(args []string) error {
 		})
 
 		ghPollerProjects = append(ghPollerProjects, ghpoller.ProjectInfo{
-			ProjectID:   proj.ID,
-			GithubOwner: proj.GithubOwner,
-			GithubRepo:  proj.GithubRepo,
-			GitHub:      gc,
+			ProjectID:     proj.ID,
+			GithubOwner:   proj.GithubOwner,
+			GithubRepo:    proj.GithubRepo,
+			GitHub:        gc,
+			TrustedUserID: creds.GithubUserID,
 		})
 
 		logger.Info("configured project", "name", proj.Name)

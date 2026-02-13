@@ -969,6 +969,7 @@ profiles:
   default:
     linear_api_key: lin_api_xxxxxxxxxxxxx
     github_token: ghp_xxxxxxxxxxxxx          # or use github_app_* fields
+    # github_user_id: 12345678               # optional: restrict to your reviews (see docs/autoralph.md)
 EOF
 
 # 3. Configure a project
