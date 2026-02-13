@@ -65,6 +65,10 @@ export function fetchIssues(): Promise<Issue[]> {
   return fetchJSON<Issue[]>('/issues')
 }
 
+export function fetchIssuesByProject(projectId: string): Promise<Issue[]> {
+  return fetchJSON<Issue[]>(`/issues?project_id=${projectId}`)
+}
+
 export interface IssueDetail {
   id: string
   project_id: string
