@@ -3,7 +3,6 @@ import { useParams, Link } from 'react-router-dom'
 import type { Project, Issue } from '../api'
 import { fetchProjects, fetchIssuesByProject } from '../api'
 import { useWebSocket } from '../useWebSocket'
-import type { WSMessage } from '../useWebSocket'
 import { StateBadge } from '../components/StateBadge'
 
 const COMPLETED_STATES = ['completed', 'failed', 'dismissed']
@@ -90,7 +89,7 @@ export default function ProjectDetail() {
     loadData()
   }, [loadData])
 
-  const handleWSMessage = useCallback((_msg: WSMessage) => {
+  const handleWSMessage = useCallback(() => {
     loadData()
   }, [loadData])
 

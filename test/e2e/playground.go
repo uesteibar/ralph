@@ -177,7 +177,7 @@ func setupPlaygroundProject(t *testing.T) string {
 		t.Fatalf("copying test-project fixture: %v", err)
 	}
 
-	gitRun(t, projectDir, "init")
+	gitRun(t, projectDir, "init", "-b", "main")
 	gitRun(t, projectDir, "add", "-A")
 	gitRun(t, projectDir, "commit", "-m", "initial commit")
 

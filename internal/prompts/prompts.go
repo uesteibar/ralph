@@ -80,6 +80,10 @@ type ChatSystemData struct {
 	Progress      string
 	RecentCommits string
 	PRDContext    string
+	// WorkspaceName is the name of the active workspace (e.g. "my-feature").
+	// When non-empty and not "base", the template renders workspace boundary
+	// instructions so the AI stays inside the workspace tree.
+	WorkspaceName string
 }
 
 // RenderChatSystem renders the system prompt for a free-form chat session.

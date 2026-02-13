@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import type { Project, Issue } from '../api'
 import { fetchProjects, fetchIssues } from '../api'
 import { useWebSocket } from '../useWebSocket'
-import type { WSMessage } from '../useWebSocket'
 import { StateBadge, STATE_COLORS } from '../components/StateBadge'
 
 function ProjectCard({ project }: { project: Project }) {
@@ -132,7 +131,7 @@ export default function Dashboard() {
     loadData()
   }, [loadData])
 
-  const handleWSMessage = useCallback((_msg: WSMessage) => {
+  const handleWSMessage = useCallback(() => {
     loadData()
   }, [loadData])
 

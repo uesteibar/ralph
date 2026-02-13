@@ -1,8 +1,5 @@
 # Ralph
 
-> ⚠️ **Note:** This project is an experiment in agentic coding. It is intended for
-> experimental and personal use only.
-
 ```
 ⠀⠀⠀⠀⠀⠀⣀⣤⣶⡶⢛⠟⡿⠻⢻⢿⢶⢦⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⢀⣠⡾⡫⢊⠌⡐⢡⠊⢰⠁⡎⠘⡄⢢⠙⡛⡷⢤⡀⠀⠀⠀⠀⠀⠀⠀
@@ -32,7 +29,8 @@
 ⠀⠀⠀⠀⠀⠉⠛⠲⠤⠤⢤⣤⣄⣀⣀⣀⣀⡸⠇⠀⠀⠀⠉⠉⠉⠉⠉⠉⠁⠀
 ```
 
-
+> ⚠️ **Note:** This project is an experiment in agentic coding. It is intended for
+> experimental and personal use only.
 
 An autonomous coding agent loop. Ralph takes a feature description, breaks it
 into right-sized user stories, and implements them one by one -- running quality
