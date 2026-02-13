@@ -43,6 +43,21 @@ func createTestIssue(t *testing.T, d *db.DB, state, lastCommentID string) db.Iss
 	return issue
 }
 
+type mockGitPuller struct {
+	calls []gitPullerCall
+	err   error
+}
+
+type gitPullerCall struct {
+	repoPath        string
+	ralphConfigPath string
+}
+
+func (m *mockGitPuller) PullDefaultBase(ctx context.Context, repoPath, ralphConfigPath string) error {
+	m.calls = append(m.calls, gitPullerCall{repoPath: repoPath, ralphConfigPath: ralphConfigPath})
+	return m.err
+}
+
 type mockInvoker struct {
 	lastPrompt string
 	response   string
@@ -533,6 +548,154 @@ func TestIterationAction_PostError_ReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Linear API error") {
 		t.Errorf("expected error message, got: %v", err)
+	}
+}
+
+// --- Iteration GitPuller tests ---
+
+func TestIterationAction_PullsBeforeInvokingAI(t *testing.T) {
+	d := testDB(t)
+	p, err := d.CreateProject(db.Project{Name: "test-project", LocalPath: "/tmp/test", RalphConfigPath: ".ralph/ralph.yaml"})
+	if err != nil {
+		t.Fatalf("creating test project: %v", err)
+	}
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:     p.ID,
+		LinearIssueID: "lin-123",
+		Identifier:    "PROJ-42",
+		Title:         "Add user avatars",
+		Description:   "Users should be able to upload profile pictures.",
+		State:         "refining",
+		LastCommentID: "c1",
+	})
+	if err != nil {
+		t.Fatalf("creating test issue: %v", err)
+	}
+
+	puller := &mockGitPuller{}
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:   invoker,
+		Comments:  client,
+		Projects:  d,
+		GitPuller: puller,
+	})
+
+	err = action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(puller.calls) != 1 {
+		t.Fatalf("expected 1 PullDefaultBase call, got %d", len(puller.calls))
+	}
+	if puller.calls[0].repoPath != "/tmp/test" {
+		t.Errorf("expected repoPath %q, got %q", "/tmp/test", puller.calls[0].repoPath)
+	}
+	if puller.calls[0].ralphConfigPath != ".ralph/ralph.yaml" {
+		t.Errorf("expected ralphConfigPath %q, got %q", ".ralph/ralph.yaml", puller.calls[0].ralphConfigPath)
+	}
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called after pull")
+	}
+}
+
+func TestIterationAction_PullFails_LogsWarningAndProceeds(t *testing.T) {
+	d := testDB(t)
+	p, err := d.CreateProject(db.Project{Name: "test-project", LocalPath: "/tmp/test", RalphConfigPath: ".ralph/ralph.yaml"})
+	if err != nil {
+		t.Fatalf("creating test project: %v", err)
+	}
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:     p.ID,
+		LinearIssueID: "lin-123",
+		Identifier:    "PROJ-42",
+		Title:         "Add user avatars",
+		Description:   "Users should be able to upload profile pictures.",
+		State:         "refining",
+		LastCommentID: "c1",
+	})
+	if err != nil {
+		t.Fatalf("creating test issue: %v", err)
+	}
+
+	puller := &mockGitPuller{err: fmt.Errorf("network error")}
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:   invoker,
+		Comments:  client,
+		Projects:  d,
+		GitPuller: puller,
+	})
+
+	err = action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error when pull fails, got: %v", err)
+	}
+
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called even when pull fails")
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	foundWarning := false
+	for _, e := range entries {
+		if e.EventType == "warning" && strings.Contains(e.Detail, "network error") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Error("expected a warning activity log entry about the pull failure")
+	}
+}
+
+func TestIterationAction_NilGitPuller_SkipsPull(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+		// GitPuller is nil — should be skipped
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called")
 	}
 }
 

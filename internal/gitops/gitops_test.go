@@ -664,6 +664,98 @@ func TestCopyDotClaude_NoErrorWhenMissing(t *testing.T) {
 	}
 }
 
+func TestPullFFOnly_Success(t *testing.T) {
+	// Create a "remote" repo and a clone, then push a new commit to the
+	// remote and verify PullFFOnly brings the clone up to date.
+	remoteDir := t.TempDir()
+	initRepo(t, remoteDir)
+	ctx := context.Background()
+
+	cloneDir := t.TempDir()
+	os.RemoveAll(cloneDir)
+	parentRunner := &shell.Runner{Dir: filepath.Dir(cloneDir)}
+	if _, err := parentRunner.Run(ctx, "git", "clone", remoteDir, cloneDir); err != nil {
+		t.Fatalf("cloning: %v", err)
+	}
+	cloneRunner := &shell.Runner{Dir: cloneDir}
+
+	branch, err := CurrentBranch(ctx, cloneRunner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a commit to the remote so the clone is behind.
+	remoteRunner := &shell.Runner{Dir: remoteDir}
+	if err := os.WriteFile(filepath.Join(remoteDir, "new.txt"), []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remoteRunner.Run(ctx, "git", "add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remoteRunner.Run(ctx, "git", "commit", "-m", "remote commit"); err != nil {
+		t.Fatal(err)
+	}
+
+	// PullFFOnly should succeed and bring the clone up to date.
+	if err := PullFFOnly(ctx, cloneRunner, branch); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the new file exists in the clone.
+	if _, err := os.Stat(filepath.Join(cloneDir, "new.txt")); err != nil {
+		t.Fatalf("expected new.txt to exist after pull: %v", err)
+	}
+}
+
+func TestPullFFOnly_FailsOnDivergedHistory(t *testing.T) {
+	// Create a "remote" repo and a clone, then diverge them so ff-only fails.
+	remoteDir := t.TempDir()
+	initRepo(t, remoteDir)
+	ctx := context.Background()
+
+	cloneDir := t.TempDir()
+	os.RemoveAll(cloneDir)
+	parentRunner := &shell.Runner{Dir: filepath.Dir(cloneDir)}
+	if _, err := parentRunner.Run(ctx, "git", "clone", remoteDir, cloneDir); err != nil {
+		t.Fatalf("cloning: %v", err)
+	}
+	cloneRunner := &shell.Runner{Dir: cloneDir}
+
+	branch, err := CurrentBranch(ctx, cloneRunner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a commit to the remote.
+	remoteRunner := &shell.Runner{Dir: remoteDir}
+	if err := os.WriteFile(filepath.Join(remoteDir, "remote.txt"), []byte("remote"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remoteRunner.Run(ctx, "git", "add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remoteRunner.Run(ctx, "git", "commit", "-m", "remote diverge"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a divergent commit to the clone.
+	if err := os.WriteFile(filepath.Join(cloneDir, "local.txt"), []byte("local"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneRunner.Run(ctx, "git", "commit", "-m", "local diverge"); err != nil {
+		t.Fatal(err)
+	}
+
+	// PullFFOnly should return an error.
+	err = PullFFOnly(ctx, cloneRunner, branch)
+	if err == nil {
+		t.Fatal("expected error for diverged history, got nil")
+	}
+}
+
 func TestCopyGlobPatterns_LiteralPath(t *testing.T) {
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()

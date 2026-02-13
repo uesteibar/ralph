@@ -13,6 +13,8 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
+	"log/slog"
+
 	"github.com/uesteibar/ralph/internal/claude"
 	"github.com/uesteibar/ralph/internal/config"
 	"github.com/uesteibar/ralph/internal/gitops"
@@ -122,14 +124,41 @@ func (u *completeLinearUpdater) UpdateIssueState(ctx context.Context, issueID, s
 }
 
 // workspaceCreatorAdapter wraps workspace.CreateWorkspace.
-type workspaceCreatorAdapter struct{}
+type workspaceCreatorAdapter struct {
+	// pullFn pulls the base branch before workspace creation.
+	// When nil, the pull step is skipped.
+	pullFn func(ctx context.Context, r *shell.Runner, branch string) error
+}
 
 func (w *workspaceCreatorAdapter) Create(ctx context.Context, repoPath string, ws workspace.Workspace, base string, copyPatterns []string) error {
 	r := &shell.Runner{Dir: repoPath}
 	// Prune stale worktree registrations before creating to avoid
 	// "already registered worktree" errors from previous failed attempts.
 	_ = gitops.WorktreePrune(ctx, r)
+
+	if w.pullFn != nil {
+		if err := w.pullFn(ctx, r, base); err != nil {
+			slog.Warn("git pull --ff-only failed before workspace creation", "branch", base, "error", err)
+		}
+	}
+
 	return workspace.CreateWorkspace(ctx, r, repoPath, ws, base, copyPatterns)
+}
+
+// gitPullerAdapter resolves the default base branch and pulls it via
+// gitops.PullFFOnly. It implements refine.GitPuller and approve.GitPuller.
+type gitPullerAdapter struct {
+	defaultBaseFn func(repoPath, ralphConfigPath string) (string, error)
+	pullFn        func(ctx context.Context, r *shell.Runner, branch string) error
+}
+
+func (g *gitPullerAdapter) PullDefaultBase(ctx context.Context, repoPath, ralphConfigPath string) error {
+	base, err := g.defaultBaseFn(repoPath, ralphConfigPath)
+	if err != nil {
+		return fmt.Errorf("resolving default base: %w", err)
+	}
+	r := &shell.Runner{Dir: repoPath}
+	return g.pullFn(ctx, r, base)
 }
 
 // workspaceRemoverAdapter wraps workspace.RemoveWorkspace.

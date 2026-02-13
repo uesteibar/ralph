@@ -25,11 +25,17 @@ type ProjectGetter interface {
 	GetProject(id string) (db.Project, error)
 }
 
+// GitPuller pulls the default base branch before AI invocation.
+type GitPuller interface {
+	PullDefaultBase(ctx context.Context, repoPath, ralphConfigPath string) error
+}
+
 // Config holds the dependencies for the refine action.
 type Config struct {
 	Invoker     Invoker
 	Poster      Poster
 	Projects    ProjectGetter
+	GitPuller   GitPuller
 	OverrideDir string
 }
 
@@ -41,6 +47,12 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		project, err := cfg.Projects.GetProject(issue.ProjectID)
 		if err != nil {
 			return fmt.Errorf("loading project: %w", err)
+		}
+
+		if cfg.GitPuller != nil {
+			if pullErr := cfg.GitPuller.PullDefaultBase(context.Background(), project.LocalPath, project.RalphConfigPath); pullErr != nil {
+				_ = database.LogActivity(issue.ID, "warning", "", "", fmt.Sprintf("git pull --ff-only failed: %v", pullErr))
+			}
 		}
 
 		_ = database.LogActivity(issue.ID, "ai_invocation", "", "", "Invoking AI to refine issue...")
