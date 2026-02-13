@@ -387,39 +387,85 @@ func TestIterationAction_InvokesAIWithFullThread(t *testing.T) {
 }
 
 func TestIterationAction_PostsAIResponse(t *testing.T) {
-	d := testDB(t)
-	issue := createTestIssue(t, d, "refining", "c1")
-
-	aiResponse := "## Updated Plan\n\n1. Add caching layer"
-	client := &mockCommentClient{
-		comments: []linear.Comment{
-			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
-			{ID: "c2", Body: "Add caching", UserName: "human"},
+	tests := []struct {
+		name       string
+		aiResponse string
+		wantHint   bool
+		wantClean  string
+	}{
+		{
+			name:       "plan response includes approval hint",
+			aiResponse: "<!-- type: plan -->\n## Updated Plan\n\n1. Add caching layer",
+			wantHint:   true,
+			wantClean:  "## Updated Plan\n\n1. Add caching layer",
 		},
-		postID: "c3",
+		{
+			name:       "questions response excludes approval hint",
+			aiResponse: "<!-- type: questions -->\n## Clarifying Questions\n\n1. What cache backend?",
+			wantHint:   false,
+			wantClean:  "## Clarifying Questions\n\n1. What cache backend?",
+		},
+		{
+			name:       "no marker defaults to including approval hint",
+			aiResponse: "## Updated Plan\n\n1. Add caching layer",
+			wantHint:   true,
+			wantClean:  "## Updated Plan\n\n1. Add caching layer",
+		},
 	}
-	invoker := &mockInvoker{response: aiResponse}
 
-	action := NewIterationAction(Config{
-		Invoker:  invoker,
-		Comments: client,
-		Projects: d,
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			issue := createTestIssue(t, d, "refining", "c1")
 
-	err := action(issue, d)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+			client := &mockCommentClient{
+				comments: []linear.Comment{
+					{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+					{ID: "c2", Body: "Add caching", UserName: "human"},
+				},
+				postID: "c3",
+			}
+			invoker := &mockInvoker{response: tt.aiResponse}
 
-	if len(client.posted) != 1 {
-		t.Fatalf("expected 1 posted comment, got %d", len(client.posted))
-	}
-	if client.posted[0].issueID != "lin-123" {
-		t.Errorf("expected issue ID %q, got %q", "lin-123", client.posted[0].issueID)
-	}
-	expectedBody := aiResponse + ApprovalHint
-	if client.posted[0].body != expectedBody {
-		t.Errorf("expected posted body to contain AI response + approval hint, got %q", client.posted[0].body)
+			action := NewIterationAction(Config{
+				Invoker:  invoker,
+				Comments: client,
+				Projects: d,
+			})
+
+			err := action(issue, d)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(client.posted) != 1 {
+				t.Fatalf("expected 1 posted comment, got %d", len(client.posted))
+			}
+			if client.posted[0].issueID != "lin-123" {
+				t.Errorf("expected issue ID %q, got %q", "lin-123", client.posted[0].issueID)
+			}
+
+			body := client.posted[0].body
+			hasHint := strings.Contains(body, "I approve this")
+			if hasHint != tt.wantHint {
+				t.Errorf("approval hint presence = %v, want %v\nbody: %q", hasHint, tt.wantHint, body)
+			}
+
+			if strings.Contains(body, "<!-- type:") {
+				t.Error("expected type marker to be stripped from posted body")
+			}
+
+			if tt.wantHint {
+				expectedBody := tt.wantClean + ApprovalHint
+				if body != expectedBody {
+					t.Errorf("expected body %q, got %q", expectedBody, body)
+				}
+			} else {
+				if body != tt.wantClean {
+					t.Errorf("expected body %q, got %q", tt.wantClean, body)
+				}
+			}
+		})
 	}
 }
 

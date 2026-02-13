@@ -70,7 +70,13 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("invoking AI: %w", err)
 		}
 
-		commentID, err := cfg.Poster.PostComment(context.Background(), issue.LinearIssueID, response+approve.ApprovalHint)
+		cleaned := approve.StripTypeMarker(response)
+		body := cleaned
+		if approve.ResponseNeedsApproval(response) {
+			body += approve.ApprovalHint
+		}
+
+		commentID, err := cfg.Poster.PostComment(context.Background(), issue.LinearIssueID, body)
 		if err != nil {
 			return fmt.Errorf("posting comment: %w", err)
 		}

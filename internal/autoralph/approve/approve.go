@@ -203,7 +203,11 @@ func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error 
 			return fmt.Errorf("invoking AI: %w", err)
 		}
 
-		responseWithHint := response + ApprovalHint
+		cleaned := StripTypeMarker(response)
+		responseWithHint := cleaned
+		if ResponseNeedsApproval(response) {
+			responseWithHint += ApprovalHint
+		}
 
 		// Reply in thread if the user's comment was a threaded reply,
 		// otherwise post a top-level comment.

@@ -36,6 +36,57 @@ func TestRenderRefineIssue_ContainsIssueDetails(t *testing.T) {
 			t.Errorf("output should contain %q", want)
 		}
 	}
+
+	forbidden := []string{
+		"Option A:",
+		"Option B:",
+		"Option A",
+		"Option B",
+	}
+	for _, bad := range forbidden {
+		if strings.Contains(out, bad) {
+			t.Errorf("output should not contain %q", bad)
+		}
+	}
+}
+
+func TestRenderRefineIssue_ContainsTypeMarkerInstruction(t *testing.T) {
+	data := RefineIssueData{
+		Title:       "Test issue",
+		Description: "Test description.",
+	}
+
+	out, err := RenderRefineIssue(data, "")
+	if err != nil {
+		t.Fatalf("RenderRefineIssue failed: %v", err)
+	}
+
+	markers := []string{
+		"<!-- type: plan -->",
+		"<!-- type: questions -->",
+	}
+	for _, marker := range markers {
+		if !strings.Contains(out, marker) {
+			t.Errorf("output should contain type marker instruction %q", marker)
+		}
+	}
+}
+
+func TestRenderRefineIssue_ContainsAntiPreambleGuideline(t *testing.T) {
+	data := RefineIssueData{
+		Title:       "Test issue",
+		Description: "Test description.",
+	}
+
+	out, err := RenderRefineIssue(data, "")
+	if err != nil {
+		t.Fatalf("RenderRefineIssue failed: %v", err)
+	}
+
+	// The template should instruct the AI not to start with formulaic preambles
+	if !strings.Contains(out, "preamble") {
+		t.Error("output should contain anti-preamble guideline")
+	}
 }
 
 func TestRenderRefineIssue_WithComments(t *testing.T) {
