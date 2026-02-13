@@ -32,6 +32,7 @@ Usage:
   ralph workspaces switch <name>                 Switch to a workspace
   ralph workspaces remove <name>                 Remove a workspace
   ralph workspaces prune [--project-config path]  Remove all done workspaces
+  ralph check [--tail N] <command> [args...]       Run command with compact output, log full output
   ralph shell-init                               Print shell integration (eval in .bashrc/.zshrc)
 
 Flags:
@@ -93,6 +94,8 @@ func main() {
 		err = commands.Workspaces(append([]string{"new"}, rest...))
 	case "workspaces":
 		err = commands.Workspaces(rest)
+	case "check":
+		err = commands.Check(rest)
 	case "shell-init":
 		err = commands.ShellInit(rest)
 	case "_daemon":
