@@ -116,36 +116,79 @@ func TestRefineAction_InvokesAIWithPrompt(t *testing.T) {
 }
 
 func TestRefineAction_PostsCommentOnLinear(t *testing.T) {
-	d := testDB(t)
-	issue := createTestIssue(t, d, "queued")
-
-	aiResponse := "## Clarifying Questions\n\n1. What image formats should be supported?"
-	invoker := &mockInvoker{response: aiResponse}
-	poster := &mockPoster{}
-
-	action := NewAction(Config{
-		Invoker:  invoker,
-		Poster:   poster,
-		Projects: d,
-	})
-
-	err := action(issue, d)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	tests := []struct {
+		name        string
+		aiResponse  string
+		wantHint    bool
+		wantClean   string // expected body without marker
+	}{
+		{
+			name:       "plan response includes approval hint",
+			aiResponse: "<!-- type: plan -->\n## Implementation Plan\n\n1. Add avatar upload",
+			wantHint:   true,
+			wantClean:  "## Implementation Plan\n\n1. Add avatar upload",
+		},
+		{
+			name:       "questions response excludes approval hint",
+			aiResponse: "<!-- type: questions -->\n## Clarifying Questions\n\n1. What image formats?",
+			wantHint:   false,
+			wantClean:  "## Clarifying Questions\n\n1. What image formats?",
+		},
+		{
+			name:       "no marker defaults to including approval hint",
+			aiResponse: "## Implementation Plan\n\n1. Add avatar upload",
+			wantHint:   true,
+			wantClean:  "## Implementation Plan\n\n1. Add avatar upload",
+		},
 	}
 
-	if len(poster.calls) != 1 {
-		t.Fatalf("expected 1 PostComment call, got %d", len(poster.calls))
-	}
-	if poster.calls[0].linearIssueID != "lin-123" {
-		t.Errorf("expected LinearIssueID %q, got %q", "lin-123", poster.calls[0].linearIssueID)
-	}
-	expectedBody := aiResponse + approve.ApprovalHint
-	if poster.calls[0].body != expectedBody {
-		t.Errorf("expected comment body to contain AI response + approval hint, got %q", poster.calls[0].body)
-	}
-	if !strings.Contains(poster.calls[0].body, "I approve this") {
-		t.Error("expected posted body to contain approval hint")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			issue := createTestIssue(t, d, "queued")
+
+			invoker := &mockInvoker{response: tt.aiResponse}
+			poster := &mockPoster{}
+
+			action := NewAction(Config{
+				Invoker:  invoker,
+				Poster:   poster,
+				Projects: d,
+			})
+
+			err := action(issue, d)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(poster.calls) != 1 {
+				t.Fatalf("expected 1 PostComment call, got %d", len(poster.calls))
+			}
+			if poster.calls[0].linearIssueID != "lin-123" {
+				t.Errorf("expected LinearIssueID %q, got %q", "lin-123", poster.calls[0].linearIssueID)
+			}
+
+			body := poster.calls[0].body
+			hasHint := strings.Contains(body, "I approve this")
+			if hasHint != tt.wantHint {
+				t.Errorf("approval hint presence = %v, want %v\nbody: %q", hasHint, tt.wantHint, body)
+			}
+
+			if strings.Contains(body, "<!-- type:") {
+				t.Error("expected type marker to be stripped from posted body")
+			}
+
+			if tt.wantHint {
+				expectedBody := tt.wantClean + approve.ApprovalHint
+				if body != expectedBody {
+					t.Errorf("expected body %q, got %q", expectedBody, body)
+				}
+			} else {
+				if body != tt.wantClean {
+					t.Errorf("expected body %q, got %q", tt.wantClean, body)
+				}
+			}
+		})
 	}
 }
 
