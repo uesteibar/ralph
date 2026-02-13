@@ -8,7 +8,7 @@ Even if you consider the feature is sufficiently tested, you MUST still plan, bu
 
 - **PRD path**: `{{.PRDPath}}`
 - **Progress log**: `{{.ProgressPath}}`
-- **Quality checks**: {{range .QualityChecks}}`{{.}}` {{end}}
+- **Quality checks**: {{range .QualityChecks}}`ralph check {{.}}` {{end}}
 
 ## Your Task
 
@@ -124,8 +124,10 @@ Replace selectors and assertions for your specific feature
 
 Before completing, ensure:
 
-{{range .QualityChecks}}- `{{.}}` passes
+{{range .QualityChecks}}- `ralph check {{.}}` passes
 {{end}}
+
+> **Note:** `ralph check` wraps each command with compact pass/fail output. Full output is saved to the log file path shown in the output. If the truncated output is insufficient for debugging, you can grep or read the full log file.
 
 ## Completion
 

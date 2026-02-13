@@ -6,7 +6,7 @@ You are Ralph's QA fix agent. Your job is to fix integration test failures ident
 
 - **PRD path**: `{{.PRDPath}}`
 - **Progress log**: `{{.ProgressPath}}`
-- **Quality checks**: {{range .QualityChecks}}`{{.}}` {{end}}
+- **Quality checks**: {{range .QualityChecks}}`ralph check {{.}}` {{end}}
 
 ## Failed Integration Tests
 
@@ -74,8 +74,10 @@ After implementing the fix:
 2. Run the full integration test steps from the PRD
 3. Run all quality checks to ensure no regressions:
 
-{{range .QualityChecks}}- `{{.}}`
+{{range .QualityChecks}}- `ralph check {{.}}`
 {{end}}
+
+> **Note:** `ralph check` wraps each command with compact pass/fail output. Full output is saved to the log file path shown in the output. If the truncated output is insufficient for debugging, you can grep or read the full log file.
 
 ### Step 5: Commit the Fix
 

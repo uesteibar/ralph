@@ -548,6 +548,134 @@ func TestRenderQAFix_ContainsAllSections(t *testing.T) {
 	}
 }
 
+// --- ralph check wrapping tests ---
+
+func TestRenderLoopIteration_WrapsQualityChecksWithRalphCheck(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test Story",
+		Description: "Test",
+	}
+
+	out, err := RenderLoopIteration(story, []string{"just test", "just vet"}, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "")
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+
+	checks := []string{
+		"ralph check just test",
+		"ralph check just vet",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderLoopIteration_ContainsLogFileDebuggingNote(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test Story",
+		Description: "Test",
+	}
+
+	out, err := RenderLoopIteration(story, []string{"just test"}, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "")
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+
+	if !strings.Contains(out, "log file") {
+		t.Error("output should contain a note about the log file for debugging")
+	}
+}
+
+func TestRenderQAVerification_WrapsQualityChecksWithRalphCheck(t *testing.T) {
+	data := QAVerificationData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test", "just vet"},
+	}
+
+	out, err := RenderQAVerification(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAVerification failed: %v", err)
+	}
+
+	checks := []string{
+		"ralph check just test",
+		"ralph check just vet",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderQAVerification_ContainsLogFileDebuggingNote(t *testing.T) {
+	data := QAVerificationData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test"},
+	}
+
+	out, err := RenderQAVerification(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAVerification failed: %v", err)
+	}
+
+	if !strings.Contains(out, "log file") {
+		t.Error("output should contain a note about the log file for debugging")
+	}
+}
+
+func TestRenderQAFix_WrapsQualityChecksWithRalphCheck(t *testing.T) {
+	data := QAFixData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test", "just vet"},
+		FailedTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
+		},
+	}
+
+	out, err := RenderQAFix(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAFix failed: %v", err)
+	}
+
+	checks := []string{
+		"ralph check just test",
+		"ralph check just vet",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderQAFix_ContainsLogFileDebuggingNote(t *testing.T) {
+	data := QAFixData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test"},
+		FailedTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
+		},
+	}
+
+	out, err := RenderQAFix(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAFix failed: %v", err)
+	}
+
+	if !strings.Contains(out, "log file") {
+		t.Error("output should contain a note about the log file for debugging")
+	}
+}
+
 // --- Override tests ---
 
 func TestRender_UsesOverrideTemplateWhenPresent(t *testing.T) {
