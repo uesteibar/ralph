@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/uesteibar/ralph/internal/autoralph/build"
+	"github.com/uesteibar/ralph/internal/autoralph/checks"
 	"github.com/uesteibar/ralph/internal/autoralph/complete"
+	"github.com/uesteibar/ralph/internal/autoralph/ghpoller"
 	ghclient "github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
@@ -22,6 +24,16 @@ import (
 	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
+)
+
+// Compile-time interface checks: github.Client satisfies the checks package
+// interfaces and the ghpoller GitHubClient interface directly.
+var (
+	_ checks.CheckRunFetcher = (*ghclient.Client)(nil)
+	_ checks.LogFetcher      = (*ghclient.Client)(nil)
+	_ checks.PRFetcher       = (*ghclient.Client)(nil)
+	_ checks.PRCommenter     = (*ghclient.Client)(nil)
+	_ ghpoller.GitHubClient  = (*ghclient.Client)(nil)
 )
 
 // claudeInvoker wraps claude.Invoke to satisfy the Invoker interface used by

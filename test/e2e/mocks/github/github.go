@@ -20,6 +20,7 @@ type PR struct {
 	Base    string
 	State   string
 	Merged  bool
+	HeadSHA string
 }
 
 // Review is a mock GitHub pull request review.
@@ -78,10 +79,10 @@ type PostedReply struct {
 // Routes are served under /api/v3/ prefix to match go-github's WithEnterpriseURLs.
 type Mock struct {
 	mu            sync.Mutex
-	prs           map[string][]PR             // "owner/repo" → PRs
-	reviews       map[string][]Review         // "owner/repo/prNumber" → reviews
-	comments      map[string][]Comment        // "owner/repo/prNumber" → review comments
-	issueComments map[string][]IssueComment   // "owner/repo/prNumber" → issue comments
+	prs           map[string][]PR           // "owner/repo" → PRs
+	reviews       map[string][]Review       // "owner/repo/prNumber" → reviews
+	comments      map[string][]Comment      // "owner/repo/prNumber" → review comments
+	issueComments map[string][]IssueComment // "owner/repo/prNumber" → issue comments
 	nextPR        int
 	nextCommentID int64
 
@@ -198,16 +199,20 @@ func (m *Mock) handleRepos(w http.ResponseWriter, r *http.Request) {
 		m.handleCreatePR(w, r, owner, repo)
 	case rest == "pulls" && r.Method == http.MethodGet:
 		m.handleListPRs(w, r, owner, repo)
-	case strings.HasSuffix(rest, "/merge") && r.Method == http.MethodGet:
+	case strings.HasPrefix(rest, "pulls/") && strings.HasSuffix(rest, "/merge") && r.Method == http.MethodGet:
 		m.handleIsMerged(w, r, owner, repo, rest)
-	case strings.Contains(rest, "/reviews") && r.Method == http.MethodGet:
+	case strings.HasPrefix(rest, "pulls/") && strings.HasSuffix(rest, "/reviews") && r.Method == http.MethodGet:
 		m.handleListReviews(w, r, owner, repo, rest)
 	case strings.HasPrefix(rest, "pulls/") && strings.Contains(rest, "/comments") && r.Method == http.MethodGet:
 		m.handleListComments(w, r, owner, repo, rest)
 	case strings.HasPrefix(rest, "pulls/") && strings.Contains(rest, "/comments") && r.Method == http.MethodPost:
 		m.handleCreateReply(w, r, owner, repo, rest)
+	case strings.HasPrefix(rest, "pulls/") && !strings.Contains(rest[len("pulls/"):], "/") && r.Method == http.MethodGet:
+		m.handleGetPR(w, r, owner, repo, rest)
 	case strings.HasPrefix(rest, "issues/") && strings.Contains(rest, "/comments") && r.Method == http.MethodPost:
 		m.handleCreateIssueComment(w, r, owner, repo, rest)
+	case strings.HasPrefix(rest, "commits/") && strings.HasSuffix(rest, "/check-runs") && r.Method == http.MethodGet:
+		m.handleListCheckRuns(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -396,6 +401,30 @@ func (m *Mock) handleCreateReply(w http.ResponseWriter, r *http.Request, owner, 
 	})
 }
 
+func (m *Mock) handleGetPR(w http.ResponseWriter, _ *http.Request, owner, repo, rest string) {
+	prNum := extractPRNumber(rest)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := owner + "/" + repo
+	for _, pr := range m.prs[key] {
+		if pr.Number == prNum {
+			json.NewEncoder(w).Encode(prToJSON(pr))
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNotFound)
+}
+
+func (m *Mock) handleListCheckRuns(w http.ResponseWriter, _ *http.Request) {
+	// Return an empty list of check runs by default.
+	json.NewEncoder(w).Encode(map[string]any{
+		"total_count": 0,
+		"check_runs":  []any{},
+	})
+}
+
 func (m *Mock) handleCreateIssueComment(w http.ResponseWriter, r *http.Request, owner, repo, rest string) {
 	// rest = "issues/{number}/comments"
 	prNum := extractIssueNumber(rest)
@@ -456,12 +485,16 @@ func extractIssueNumber(rest string) int {
 }
 
 func prToJSON(pr PR) map[string]any {
+	headSHA := pr.HeadSHA
+	if headSHA == "" {
+		headSHA = "0000000000000000000000000000000000000000"
+	}
 	return map[string]any{
 		"number":   pr.Number,
 		"html_url": pr.HTMLURL,
 		"title":    pr.Title,
 		"body":     pr.Body,
-		"head":     map[string]any{"ref": pr.Head},
+		"head":     map[string]any{"ref": pr.Head, "sha": headSHA},
 		"base":     map[string]any{"ref": pr.Base},
 		"state":    pr.State,
 		"merged":   pr.Merged,

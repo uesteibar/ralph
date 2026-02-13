@@ -378,12 +378,100 @@ func TestTemplateFS_ReturnsEmbeddedFS(t *testing.T) {
 	}
 }
 
+func TestRenderFixChecks_ContainsFailureDetails(t *testing.T) {
+	data := FixChecksData{
+		FailedChecks: []FailedCheckRun{
+			{Name: "lint", Conclusion: "failure", Log: "Error: unused variable 'x' at main.go:10"},
+			{Name: "test", Conclusion: "failure", Log: "FAIL TestLogin: expected 200, got 500"},
+		},
+	}
+
+	out, err := RenderFixChecks(data, "")
+	if err != nil {
+		t.Fatalf("RenderFixChecks failed: %v", err)
+	}
+
+	checks := []string{
+		"lint",
+		"failure",
+		"unused variable",
+		"test",
+		"FAIL TestLogin",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderFixChecks_InstructsRootCauseFix(t *testing.T) {
+	data := FixChecksData{
+		FailedChecks: []FailedCheckRun{
+			{Name: "ci", Conclusion: "failure", Log: "error log"},
+		},
+	}
+
+	out, err := RenderFixChecks(data, "")
+	if err != nil {
+		t.Fatalf("RenderFixChecks failed: %v", err)
+	}
+
+	if !strings.Contains(out, "root cause") {
+		t.Error("template should instruct AI to fix root causes")
+	}
+	if !strings.Contains(out, "minimal") {
+		t.Error("template should instruct AI to make minimal changes")
+	}
+}
+
+func TestRenderFixChecks_WithEmptyLog(t *testing.T) {
+	data := FixChecksData{
+		FailedChecks: []FailedCheckRun{
+			{Name: "build", Conclusion: "failure", Log: ""},
+		},
+	}
+
+	out, err := RenderFixChecks(data, "")
+	if err != nil {
+		t.Fatalf("RenderFixChecks failed: %v", err)
+	}
+
+	if !strings.Contains(out, "build") {
+		t.Error("output should contain check name even without log")
+	}
+}
+
+func TestRenderFixChecks_OverrideTemplate(t *testing.T) {
+	dir := t.TempDir()
+	customContent := `Custom fix: {{range .FailedChecks}}{{.Name}}{{end}}`
+	if err := os.WriteFile(filepath.Join(dir, "fix_checks.md"), []byte(customContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	data := FixChecksData{
+		FailedChecks: []FailedCheckRun{
+			{Name: "mycheck", Conclusion: "failure", Log: "log"},
+		},
+	}
+
+	out, err := RenderFixChecks(data, dir)
+	if err != nil {
+		t.Fatalf("RenderFixChecks with override failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Custom fix: mycheck") {
+		t.Errorf("expected override content, got: %s", out)
+	}
+}
+
 func TestTemplateNames_MatchesEmbeddedFiles(t *testing.T) {
 	expected := []string{
 		"refine_issue.md",
 		"generate_prd.md",
 		"pr_description.md",
 		"address_feedback.md",
+		"fix_checks.md",
 	}
 	if len(TemplateNames) != len(expected) {
 		t.Fatalf("TemplateNames has %d entries, want %d", len(TemplateNames), len(expected))

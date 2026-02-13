@@ -33,23 +33,25 @@ type Project struct {
 }
 
 type Issue struct {
-	ID             string
-	ProjectID      string
-	LinearIssueID  string
-	Identifier     string
-	Title          string
-	Description    string
-	State          string
-	PlanText       string
-	WorkspaceName  string
-	BranchName     string
-	PRNumber       int
-	PRURL          string
-	ErrorMessage   string
-	LastCommentID  string
-	LastReviewID   string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID               string
+	ProjectID        string
+	LinearIssueID    string
+	Identifier       string
+	Title            string
+	Description      string
+	State            string
+	PlanText         string
+	WorkspaceName    string
+	BranchName       string
+	PRNumber         int
+	PRURL            string
+	ErrorMessage     string
+	LastCommentID    string
+	LastReviewID     string
+	LastCheckSHA     string
+	CheckFixAttempts int
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type ActivityEntry struct {
@@ -149,6 +151,8 @@ func Open(path string) (*DB, error) {
 	// ALTER TABLE ADD COLUMN errors are silently ignored (column already exists).
 	conn.Exec(`ALTER TABLE projects ADD COLUMN linear_project_id TEXT NOT NULL DEFAULT ''`)
 	conn.Exec(`ALTER TABLE projects ADD COLUMN linear_label TEXT NOT NULL DEFAULT ''`)
+	conn.Exec(`ALTER TABLE issues ADD COLUMN last_check_sha TEXT NOT NULL DEFAULT ''`)
+	conn.Exec(`ALTER TABLE issues ADD COLUMN check_fix_attempts INTEGER NOT NULL DEFAULT 0`)
 
 	return &DB{conn: conn}, nil
 }

@@ -757,3 +757,245 @@ func TestDeleteIssue_NotFound(t *testing.T) {
 		t.Fatal("expected error for nonexistent issue")
 	}
 }
+
+// --- Check Tracking Columns ---
+
+func TestCreateIssue_CheckTrackingColumns_DefaultValues(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, err := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "No check fields set",
+		State:     "queued",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.LastCheckSHA != "" {
+		t.Errorf("expected empty LastCheckSHA, got %q", got.LastCheckSHA)
+	}
+	if got.CheckFixAttempts != 0 {
+		t.Errorf("expected CheckFixAttempts 0, got %d", got.CheckFixAttempts)
+	}
+}
+
+func TestCreateIssue_CheckTrackingColumns_SetValues(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, err := d.CreateIssue(Issue{
+		ProjectID:        p.ID,
+		Title:            "With check fields",
+		State:            "fixing_checks",
+		LastCheckSHA:     "abc123",
+		CheckFixAttempts: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.LastCheckSHA != "abc123" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "abc123", got.LastCheckSHA)
+	}
+	if got.CheckFixAttempts != 2 {
+		t.Errorf("expected CheckFixAttempts 2, got %d", got.CheckFixAttempts)
+	}
+}
+
+func TestUpdateIssue_CheckTrackingColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Update check fields",
+		State:     "in_review",
+	})
+	issue.LastCheckSHA = "sha-456"
+	issue.CheckFixAttempts = 3
+
+	if err := d.UpdateIssue(issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.LastCheckSHA != "sha-456" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "sha-456", got.LastCheckSHA)
+	}
+	if got.CheckFixAttempts != 3 {
+		t.Errorf("expected CheckFixAttempts 3, got %d", got.CheckFixAttempts)
+	}
+}
+
+func TestListIssues_CheckTrackingColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:        p.ID,
+		Title:            "Check issue",
+		State:            "fixing_checks",
+		LastCheckSHA:     "list-sha",
+		CheckFixAttempts: 1,
+	})
+
+	issues, err := d.ListIssues(IssueFilter{ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(issues))
+	}
+	if issues[0].LastCheckSHA != "list-sha" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "list-sha", issues[0].LastCheckSHA)
+	}
+	if issues[0].CheckFixAttempts != 1 {
+		t.Errorf("expected CheckFixAttempts 1, got %d", issues[0].CheckFixAttempts)
+	}
+}
+
+func TestGetIssueByLinearID_CheckTrackingColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:        p.ID,
+		LinearIssueID:    "lin-check-1",
+		Title:            "Check by linear ID",
+		State:            "fixing_checks",
+		LastCheckSHA:     "linear-sha",
+		CheckFixAttempts: 2,
+	})
+
+	got, err := d.GetIssueByLinearID("lin-check-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.LastCheckSHA != "linear-sha" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "linear-sha", got.LastCheckSHA)
+	}
+	if got.CheckFixAttempts != 2 {
+		t.Errorf("expected CheckFixAttempts 2, got %d", got.CheckFixAttempts)
+	}
+}
+
+func TestGetIssueByLinearIDAndProject_CheckTrackingColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:        p.ID,
+		LinearIssueID:    "lin-check-2",
+		Title:            "Check by linear ID and project",
+		State:            "fixing_checks",
+		LastCheckSHA:     "proj-sha",
+		CheckFixAttempts: 1,
+	})
+
+	got, err := d.GetIssueByLinearIDAndProject("lin-check-2", p.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.LastCheckSHA != "proj-sha" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "proj-sha", got.LastCheckSHA)
+	}
+	if got.CheckFixAttempts != 1 {
+		t.Errorf("expected CheckFixAttempts 1, got %d", got.CheckFixAttempts)
+	}
+}
+
+func TestTxUpdateIssue_CheckTrackingColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Tx check fields",
+		State:     "in_review",
+	})
+
+	err := d.Tx(func(tx *Tx) error {
+		issue.LastCheckSHA = "tx-sha"
+		issue.CheckFixAttempts = 2
+		return tx.UpdateIssue(issue)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.LastCheckSHA != "tx-sha" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "tx-sha", got.LastCheckSHA)
+	}
+	if got.CheckFixAttempts != 2 {
+		t.Errorf("expected CheckFixAttempts 2, got %d", got.CheckFixAttempts)
+	}
+}
+
+func TestTxGetIssue_CheckTrackingColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID:        p.ID,
+		Title:            "Tx get check fields",
+		State:            "fixing_checks",
+		LastCheckSHA:     "txget-sha",
+		CheckFixAttempts: 3,
+	})
+
+	err := d.Tx(func(tx *Tx) error {
+		got, err := tx.GetIssue(issue.ID)
+		if err != nil {
+			return err
+		}
+		if got.LastCheckSHA != "txget-sha" {
+			t.Errorf("expected LastCheckSHA %q, got %q", "txget-sha", got.LastCheckSHA)
+		}
+		if got.CheckFixAttempts != 3 {
+			t.Errorf("expected CheckFixAttempts 3, got %d", got.CheckFixAttempts)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOpen_MigratesCheckTrackingColumns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var lastCheckSHA, checkFixAttempts int
+	err = d.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('issues') WHERE name='last_check_sha'`).Scan(&lastCheckSHA)
+	if err != nil {
+		t.Fatalf("querying column info: %v", err)
+	}
+	if lastCheckSHA != 1 {
+		t.Errorf("expected last_check_sha column to exist")
+	}
+
+	err = d.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('issues') WHERE name='check_fix_attempts'`).Scan(&checkFixAttempts)
+	if err != nil {
+		t.Fatalf("querying column info: %v", err)
+	}
+	if checkFixAttempts != 1 {
+		t.Errorf("expected check_fix_attempts column to exist")
+	}
+	d.Close()
+}

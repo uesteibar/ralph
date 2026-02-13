@@ -479,6 +479,233 @@ func generateTestKey(t *testing.T) []byte {
 	return buf
 }
 
+func TestClient_FetchCheckRuns_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v3/repos/octocat/hello/commits/abc123/check-runs" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		assertAuth(t, r, "Bearer ghp_test123")
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"total_count": 2,
+			"check_runs": []map[string]any{
+				{
+					"id":         1001,
+					"name":       "build",
+					"status":     "completed",
+					"conclusion": "success",
+					"html_url":   "https://github.com/octocat/hello/runs/1001",
+				},
+				{
+					"id":         1002,
+					"name":       "test",
+					"status":     "completed",
+					"conclusion": "failure",
+					"html_url":   "https://github.com/octocat/hello/runs/1002",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test123", WithBaseURL(srv.URL+"/"))
+	runs, err := c.FetchCheckRuns(context.Background(), "octocat", "hello", "abc123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 check runs, got %d", len(runs))
+	}
+	if runs[0].ID != 1001 || runs[0].Name != "build" || runs[0].Status != "completed" || runs[0].Conclusion != "success" {
+		t.Errorf("check run 0 mismatch: %+v", runs[0])
+	}
+	if runs[1].ID != 1002 || runs[1].Name != "test" || runs[1].Conclusion != "failure" {
+		t.Errorf("check run 1 mismatch: %+v", runs[1])
+	}
+	if runs[0].HTMLURL != "https://github.com/octocat/hello/runs/1001" {
+		t.Errorf("unexpected HTMLURL: %s", runs[0].HTMLURL)
+	}
+}
+
+func TestClient_FetchCheckRuns_Pagination(t *testing.T) {
+	page := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page++
+		if page == 1 {
+			w.Header().Set("Link", `<`+r.URL.Path+`?page=2>; rel="next"`)
+			json.NewEncoder(w).Encode(map[string]any{
+				"total_count": 2,
+				"check_runs": []map[string]any{
+					{"id": 1, "name": "build", "status": "completed", "conclusion": "success"},
+				},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"total_count": 2,
+			"check_runs": []map[string]any{
+				{"id": 2, "name": "test", "status": "completed", "conclusion": "failure"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	runs, err := c.FetchCheckRuns(context.Background(), "o", "r", "sha")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 check runs across pages, got %d", len(runs))
+	}
+	if runs[0].Name != "build" || runs[1].Name != "test" {
+		t.Errorf("unexpected check run names: %s, %s", runs[0].Name, runs[1].Name)
+	}
+}
+
+func TestClient_FetchCheckRuns_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"total_count": 0,
+			"check_runs":  []map[string]any{},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	runs, err := c.FetchCheckRuns(context.Background(), "o", "r", "sha")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("expected 0 check runs, got %d", len(runs))
+	}
+}
+
+func TestClient_FetchCheckRunLog_Success(t *testing.T) {
+	logContent := "Step 1: Build\nStep 2: Test\nFAILED: assertion error"
+
+	// Log download server (simulates the redirect target).
+	logSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(logContent))
+	}))
+	defer logSrv.Close()
+
+	// GitHub API server returns a redirect to the log download URL.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/repos/octocat/hello/actions/jobs/1002/logs" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Location", logSrv.URL+"/download")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	log, err := c.FetchCheckRunLog(context.Background(), "octocat", "hello", 1002)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(log) != logContent {
+		t.Errorf("unexpected log content: %q", string(log))
+	}
+}
+
+func TestClient_FetchCheckRunLog_NotFound_ReturnsNil(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	log, err := c.FetchCheckRunLog(context.Background(), "o", "r", 999)
+	if err != nil {
+		t.Fatalf("expected no error for missing log, got: %v", err)
+	}
+	if log != nil {
+		t.Errorf("expected nil log, got %d bytes", len(log))
+	}
+}
+
+func TestClient_FetchPR_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v3/repos/octocat/hello/pulls/42" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		assertAuth(t, r, "Bearer ghp_test123")
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"number":   42,
+			"html_url": "https://github.com/octocat/hello/pull/42",
+			"title":    "Add feature",
+			"state":    "open",
+			"head": map[string]any{
+				"sha": "abc123def456",
+				"ref": "feat-branch",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test123", WithBaseURL(srv.URL+"/"))
+	pr, err := c.FetchPR(context.Background(), "octocat", "hello", 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pr.Number != 42 {
+		t.Errorf("expected PR number 42, got %d", pr.Number)
+	}
+	if pr.HeadSHA != "abc123def456" {
+		t.Errorf("expected HeadSHA abc123def456, got %s", pr.HeadSHA)
+	}
+	if pr.HTMLURL != "https://github.com/octocat/hello/pull/42" {
+		t.Errorf("unexpected HTMLURL: %s", pr.HTMLURL)
+	}
+	if pr.Title != "Add feature" {
+		t.Errorf("unexpected title: %s", pr.Title)
+	}
+	if pr.State != "open" {
+		t.Errorf("unexpected state: %s", pr.State)
+	}
+}
+
+func TestClient_FetchPR_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	_, err := c.FetchPR(context.Background(), "o", "r", 999)
+	if err == nil {
+		t.Fatal("expected error for HTTP 404")
+	}
+}
+
+func TestClient_FetchCheckRuns_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]any{"message": "Bad credentials"})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "bad-token", WithBaseURL(srv.URL+"/"))
+	_, err := c.FetchCheckRuns(context.Background(), "o", "r", "sha")
+	if err == nil {
+		t.Fatal("expected error for HTTP 401")
+	}
+}
+
 func mustNew(t *testing.T, token string, opts ...Option) *Client {
 	t.Helper()
 	c, err := New(token, opts...)

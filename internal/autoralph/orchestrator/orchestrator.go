@@ -17,6 +17,7 @@ const (
 	StateBuilding           IssueState = "building"
 	StateInReview           IssueState = "in_review"
 	StateAddressingFeedback IssueState = "addressing_feedback"
+	StateFixingChecks       IssueState = "fixing_checks"
 	StateCompleted          IssueState = "completed"
 	StateFailed             IssueState = "failed"
 	StatePaused             IssueState = "paused"
@@ -30,6 +31,7 @@ var validStates = map[IssueState]bool{
 	StateBuilding:           true,
 	StateInReview:           true,
 	StateAddressingFeedback: true,
+	StateFixingChecks:       true,
 	StateCompleted:          true,
 	StateFailed:             true,
 	StatePaused:             true,

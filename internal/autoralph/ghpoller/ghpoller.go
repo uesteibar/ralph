@@ -23,10 +23,22 @@ type MergeChecker interface {
 	IsPRMerged(ctx context.Context, owner, repo string, prNumber int) (bool, error)
 }
 
-// GitHubClient combines ReviewFetcher and MergeChecker.
+// CheckRunFetcher fetches check run status from GitHub.
+type CheckRunFetcher interface {
+	FetchCheckRuns(ctx context.Context, owner, repo, ref string) ([]github.CheckRun, error)
+}
+
+// PRFetcher fetches pull request details from GitHub.
+type PRFetcher interface {
+	FetchPR(ctx context.Context, owner, repo string, prNumber int) (github.PR, error)
+}
+
+// GitHubClient combines all GitHub interaction interfaces needed by the poller.
 type GitHubClient interface {
 	ReviewFetcher
 	MergeChecker
+	CheckRunFetcher
+	PRFetcher
 }
 
 // ProjectInfo holds the data the GitHub poller needs for each project.
@@ -96,13 +108,14 @@ func (p *Poller) poll(ctx context.Context) {
 	}
 }
 
-// pollProject checks GitHub for each issue in IN_REVIEW or ADDRESSING_FEEDBACK.
+// pollProject checks GitHub for each issue in IN_REVIEW, ADDRESSING_FEEDBACK, or FIXING_CHECKS.
 func (p *Poller) pollProject(ctx context.Context, proj ProjectInfo) {
 	issues, err := p.db.ListIssues(db.IssueFilter{
 		ProjectID: proj.ProjectID,
 		States: []string{
 			string(orchestrator.StateInReview),
 			string(orchestrator.StateAddressingFeedback),
+			string(orchestrator.StateFixingChecks),
 		},
 	})
 	if err != nil {
@@ -121,9 +134,10 @@ func (p *Poller) pollProject(ctx context.Context, proj ProjectInfo) {
 	}
 }
 
-// checkIssue checks merge status and reviews for a single issue.
+// checkIssue checks merge status, check runs, and reviews for a single issue.
+// Check status is evaluated before review status so check failures take priority.
 func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issue) {
-	// Check merge first — if merged, we don't need to check reviews.
+	// Check merge first — if merged, nothing else matters.
 	merged, err := proj.GitHub.IsPRMerged(ctx, proj.GithubOwner, proj.GithubRepo, issue.PRNumber)
 	if err != nil {
 		p.logger.Warn("checking PR merged", "issue_id", issue.ID, "pr", issue.PRNumber, "error", err)
@@ -139,6 +153,67 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 			p.transitionIssue(issue, string(orchestrator.StateCompleted), "pr_merged",
 				fmt.Sprintf("PR #%d merged", issue.PRNumber))
 		}
+		return
+	}
+
+	// Fetch PR head SHA for check run evaluation.
+	pr, err := proj.GitHub.FetchPR(ctx, proj.GithubOwner, proj.GithubRepo, issue.PRNumber)
+	if err != nil {
+		p.logger.Warn("fetching PR", "issue_id", issue.ID, "pr", issue.PRNumber, "error", err)
+		return
+	}
+
+	headSHA := pr.HeadSHA
+	shaChanged := headSHA != issue.LastCheckSHA
+
+	// Reset CheckFixAttempts when head SHA changes externally
+	// (someone pushed a fix manually) and issue is not currently fixing checks.
+	if shaChanged && issue.State != string(orchestrator.StateFixingChecks) {
+		issue.CheckFixAttempts = 0
+	}
+
+	// Evaluate check runs on the current head SHA.
+	if headSHA != "" {
+		checkRuns, err := proj.GitHub.FetchCheckRuns(ctx, proj.GithubOwner, proj.GithubRepo, headSHA)
+		if err != nil {
+			p.logger.Warn("fetching check runs", "issue_id", issue.ID, "ref", headSHA, "error", err)
+			return
+		}
+
+		if len(checkRuns) > 0 {
+			allCompleted, hasFailed := evaluateCheckRuns(checkRuns)
+
+			// Update the SHA we've evaluated.
+			issue.LastCheckSHA = headSHA
+
+			if allCompleted && hasFailed && shaChanged {
+				// Checks failed on a new SHA — transition to fixing_checks.
+				p.transitionIssue(issue, string(orchestrator.StateFixingChecks), "checks_failed",
+					fmt.Sprintf("Check runs failed on PR #%d (SHA %s)", issue.PRNumber, headSHA[:minLen(len(headSHA), 7)]))
+				return
+			}
+
+			if !allCompleted {
+				// Checks still running — update SHA tracking and skip review evaluation.
+				if shaChanged {
+					if err := p.db.UpdateIssue(issue); err != nil {
+						p.logger.Warn("updating last_check_sha", "issue_id", issue.ID, "error", err)
+					}
+				}
+				return
+			}
+
+			// All checks passed — update SHA and continue to review evaluation.
+			if shaChanged {
+				if err := p.db.UpdateIssue(issue); err != nil {
+					p.logger.Warn("updating last_check_sha", "issue_id", issue.ID, "error", err)
+				}
+			}
+		}
+	}
+
+	// For issues in fixing_checks, don't evaluate reviews — just wait for checks.
+	if issue.State == string(orchestrator.StateFixingChecks) {
 		return
 	}
 
@@ -182,6 +257,28 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 	if err := p.db.UpdateIssue(issue); err != nil {
 		p.logger.Warn("updating last_review_id", "issue_id", issue.ID, "error", err)
 	}
+}
+
+// evaluateCheckRuns returns whether all check runs are completed, and whether
+// at least one has a "failure" conclusion.
+func evaluateCheckRuns(checkRuns []github.CheckRun) (allCompleted, hasFailed bool) {
+	allCompleted = true
+	for _, cr := range checkRuns {
+		if cr.Status != "completed" {
+			allCompleted = false
+		}
+		if cr.Conclusion == "failure" {
+			hasFailed = true
+		}
+	}
+	return
+}
+
+func minLen(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // transitionIssue updates the issue state, logs activity, and persists.

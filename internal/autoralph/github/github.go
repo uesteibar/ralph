@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +24,16 @@ type PR struct {
 	HTMLURL string
 	Title   string
 	State   string
+	HeadSHA string
+}
+
+// CheckRun represents a GitHub Actions check run.
+type CheckRun struct {
+	ID         int64
+	Name       string
+	Status     string
+	Conclusion string
+	HTMLURL    string
 }
 
 // Review represents a GitHub pull request review.
@@ -273,12 +284,16 @@ func (c *Client) IsPRMerged(ctx context.Context, owner, repo string, prNumber in
 }
 
 func prFromGH(pr *gh.PullRequest) PR {
-	return PR{
+	p := PR{
 		Number:  pr.GetNumber(),
 		HTMLURL: pr.GetHTMLURL(),
 		Title:   pr.GetTitle(),
 		State:   pr.GetState(),
 	}
+	if pr.Head != nil {
+		p.HeadSHA = pr.Head.GetSHA()
+	}
+	return p
 }
 
 func reviewFromGH(r *gh.PullRequestReview) Review {
@@ -332,6 +347,108 @@ func classifyErr(err error) error {
 		}
 	}
 	return err
+}
+
+// FetchCheckRuns returns all check runs for the given git ref (SHA, branch, or tag).
+func (c *Client) FetchCheckRuns(ctx context.Context, owner, repo, ref string) ([]CheckRun, error) {
+	return retry.DoVal(ctx, func() ([]CheckRun, error) {
+		var all []CheckRun
+		opts := &gh.ListCheckRunsOptions{
+			ListOptions: gh.ListOptions{PerPage: 100},
+		}
+		for {
+			result, resp, err := c.gh.Checks.ListCheckRunsForRef(ctx, owner, repo, ref, opts)
+			if err != nil {
+				return nil, classifyErr(fmt.Errorf("fetching check runs: %w", err))
+			}
+			for _, cr := range result.CheckRuns {
+				all = append(all, CheckRun{
+					ID:         cr.GetID(),
+					Name:       cr.GetName(),
+					Status:     cr.GetStatus(),
+					Conclusion: cr.GetConclusion(),
+					HTMLURL:    cr.GetHTMLURL(),
+				})
+			}
+			if resp.NextPage == 0 {
+				break
+			}
+			opts.Page = resp.NextPage
+		}
+		return all, nil
+	}, c.retryOpts()...)
+}
+
+// FetchCheckRunLog downloads the log for a check run. The GitHub API returns a
+// redirect to a download URL. Returns empty bytes with no error if the log is
+// unavailable.
+func (c *Client) FetchCheckRunLog(ctx context.Context, owner, repo string, checkRunID int64) ([]byte, error) {
+	return retry.DoVal(ctx, func() ([]byte, error) {
+		u := fmt.Sprintf("repos/%v/%v/actions/jobs/%v/logs", owner, repo, checkRunID)
+		req, err := c.gh.NewRequest("GET", u, nil)
+		if err != nil {
+			return nil, classifyErr(fmt.Errorf("creating check run log request: %w", err))
+		}
+
+		resp, err := c.gh.BareDo(ctx, req)
+		if err != nil {
+			// BareDo treats redirects as errors. Follow the redirect to download.
+			if resp != nil && (resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusMovedPermanently) {
+				loc := resp.Header.Get("Location")
+				resp.Body.Close()
+				if loc != "" {
+					return c.downloadURL(ctx, loc)
+				}
+			}
+			if resp != nil {
+				resp.Body.Close()
+			}
+			// 404 or other client errors mean logs are unavailable.
+			var ghErr *gh.ErrorResponse
+			if errors.As(err, &ghErr) && ghErr.Response != nil &&
+				ghErr.Response.StatusCode >= 400 && ghErr.Response.StatusCode < 500 {
+				return nil, nil
+			}
+			return nil, classifyErr(fmt.Errorf("fetching check run log: %w", err))
+		}
+		defer resp.Body.Close()
+
+		// If we got a 200 response directly (unlikely but handle it).
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("reading check run log body: %w", err)
+		}
+		return body, nil
+	}, c.retryOpts()...)
+}
+
+// downloadURL fetches the content at the given URL.
+func (c *Client) downloadURL(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating download request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("downloading log: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading download body: %w", err)
+	}
+	return body, nil
+}
+
+// FetchPR fetches a single pull request by number.
+func (c *Client) FetchPR(ctx context.Context, owner, repo string, prNumber int) (PR, error) {
+	return retry.DoVal(ctx, func() (PR, error) {
+		pr, _, err := c.gh.PullRequests.Get(ctx, owner, repo, prNumber)
+		if err != nil {
+			return PR{}, classifyErr(fmt.Errorf("fetching pull request: %w", err))
+		}
+		return prFromGH(pr), nil
+	}, c.retryOpts()...)
 }
 
 // FindOpenPR finds an existing open PR for the given head and base branches.

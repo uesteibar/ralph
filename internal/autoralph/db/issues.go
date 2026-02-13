@@ -26,12 +26,14 @@ func (db *DB) CreateIssue(issue Issue) (Issue, error) {
 	_, err := db.conn.Exec(`
 		INSERT INTO issues (id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
-			error_message, last_comment_id, last_review_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			error_message, last_comment_id, last_review_id,
+			last_check_sha, check_fix_attempts, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		issue.ID, issue.ProjectID, issue.LinearIssueID, issue.Identifier,
 		issue.Title, issue.Description, issue.State, issue.PlanText,
 		issue.WorkspaceName, issue.BranchName, issue.PRNumber, issue.PRURL,
 		issue.ErrorMessage, issue.LastCommentID, issue.LastReviewID,
+		issue.LastCheckSHA, issue.CheckFixAttempts,
 		issue.CreatedAt.Format(time.RFC3339), issue.UpdatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
@@ -44,7 +46,8 @@ func (db *DB) ListIssues(filter IssueFilter) ([]Issue, error) {
 	query := `
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
-			error_message, last_comment_id, last_review_id, created_at, updated_at
+			error_message, last_comment_id, last_review_id,
+			last_check_sha, check_fix_attempts, created_at, updated_at
 		FROM issues`
 
 	var conditions []string
@@ -95,7 +98,8 @@ func (db *DB) GetIssueByLinearID(linearIssueID string) (Issue, error) {
 	row := db.conn.QueryRow(`
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
-			error_message, last_comment_id, last_review_id, created_at, updated_at
+			error_message, last_comment_id, last_review_id,
+			last_check_sha, check_fix_attempts, created_at, updated_at
 		FROM issues WHERE linear_issue_id = ?`, linearIssueID)
 
 	issue, err := scanIssueRow(row)
@@ -114,7 +118,8 @@ func (db *DB) GetIssueByLinearIDAndProject(linearIssueID, projectID string) (Iss
 	row := db.conn.QueryRow(`
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
-			error_message, last_comment_id, last_review_id, created_at, updated_at
+			error_message, last_comment_id, last_review_id,
+			last_check_sha, check_fix_attempts, created_at, updated_at
 		FROM issues WHERE linear_issue_id = ? AND project_id = ?`, linearIssueID, projectID)
 
 	issue, err := scanIssueRow(row)
@@ -131,7 +136,8 @@ func (db *DB) GetIssue(id string) (Issue, error) {
 	row := db.conn.QueryRow(`
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
-			error_message, last_comment_id, last_review_id, created_at, updated_at
+			error_message, last_comment_id, last_review_id,
+			last_check_sha, check_fix_attempts, created_at, updated_at
 		FROM issues WHERE id = ?`, id)
 
 	issue, err := scanIssueRow(row)
@@ -150,12 +156,14 @@ func (db *DB) UpdateIssue(issue Issue) error {
 		UPDATE issues SET project_id = ?, linear_issue_id = ?, identifier = ?,
 			title = ?, description = ?, state = ?, plan_text = ?,
 			workspace_name = ?, branch_name = ?, pr_number = ?, pr_url = ?,
-			error_message = ?, last_comment_id = ?, last_review_id = ?, updated_at = ?
+			error_message = ?, last_comment_id = ?, last_review_id = ?,
+			last_check_sha = ?, check_fix_attempts = ?, updated_at = ?
 		WHERE id = ?`,
 		issue.ProjectID, issue.LinearIssueID, issue.Identifier,
 		issue.Title, issue.Description, issue.State, issue.PlanText,
 		issue.WorkspaceName, issue.BranchName, issue.PRNumber, issue.PRURL,
 		issue.ErrorMessage, issue.LastCommentID, issue.LastReviewID,
+		issue.LastCheckSHA, issue.CheckFixAttempts,
 		issue.UpdatedAt.Format(time.RFC3339), issue.ID,
 	)
 	if err != nil {
@@ -174,12 +182,14 @@ func (tx *Tx) UpdateIssue(issue Issue) error {
 		UPDATE issues SET project_id = ?, linear_issue_id = ?, identifier = ?,
 			title = ?, description = ?, state = ?, plan_text = ?,
 			workspace_name = ?, branch_name = ?, pr_number = ?, pr_url = ?,
-			error_message = ?, last_comment_id = ?, last_review_id = ?, updated_at = ?
+			error_message = ?, last_comment_id = ?, last_review_id = ?,
+			last_check_sha = ?, check_fix_attempts = ?, updated_at = ?
 		WHERE id = ?`,
 		issue.ProjectID, issue.LinearIssueID, issue.Identifier,
 		issue.Title, issue.Description, issue.State, issue.PlanText,
 		issue.WorkspaceName, issue.BranchName, issue.PRNumber, issue.PRURL,
 		issue.ErrorMessage, issue.LastCommentID, issue.LastReviewID,
+		issue.LastCheckSHA, issue.CheckFixAttempts,
 		issue.UpdatedAt.Format(time.RFC3339), issue.ID,
 	)
 	if err != nil {
@@ -198,7 +208,8 @@ func (tx *Tx) GetIssue(id string) (Issue, error) {
 	row := tx.tx.QueryRow(`
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
-			error_message, last_comment_id, last_review_id, created_at, updated_at
+			error_message, last_comment_id, last_review_id,
+			last_check_sha, check_fix_attempts, created_at, updated_at
 		FROM issues WHERE id = ?`, id)
 
 	issue, err := scanIssueRow(row)
@@ -231,7 +242,9 @@ func scanIssue(rows *sql.Rows) (Issue, error) {
 		&issue.Identifier, &issue.Title, &issue.Description, &issue.State,
 		&issue.PlanText, &issue.WorkspaceName, &issue.BranchName,
 		&issue.PRNumber, &issue.PRURL, &issue.ErrorMessage,
-		&issue.LastCommentID, &issue.LastReviewID, &createdAt, &updatedAt)
+		&issue.LastCommentID, &issue.LastReviewID,
+		&issue.LastCheckSHA, &issue.CheckFixAttempts,
+		&createdAt, &updatedAt)
 	if err != nil {
 		return Issue{}, fmt.Errorf("scanning issue: %w", err)
 	}
@@ -247,7 +260,9 @@ func scanIssueRow(row *sql.Row) (Issue, error) {
 		&issue.Identifier, &issue.Title, &issue.Description, &issue.State,
 		&issue.PlanText, &issue.WorkspaceName, &issue.BranchName,
 		&issue.PRNumber, &issue.PRURL, &issue.ErrorMessage,
-		&issue.LastCommentID, &issue.LastReviewID, &createdAt, &updatedAt)
+		&issue.LastCommentID, &issue.LastReviewID,
+		&issue.LastCheckSHA, &issue.CheckFixAttempts,
+		&createdAt, &updatedAt)
 	if err != nil {
 		return Issue{}, err
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/approve"
 	"github.com/uesteibar/ralph/internal/autoralph/build"
+	"github.com/uesteibar/ralph/internal/autoralph/checks"
 	"github.com/uesteibar/ralph/internal/autoralph/complete"
 	"github.com/uesteibar/ralph/internal/autoralph/credentials"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
@@ -339,6 +340,21 @@ func runServe(args []string) error {
 					Replier:  firstGitHub,
 					Git:      gitOps,
 					Projects: database,
+				}),
+			})
+
+			// FIXING_CHECKS → IN_REVIEW
+			sm.Register(orchestrator.Transition{
+				From: orchestrator.StateFixingChecks,
+				To:   orchestrator.StateInReview,
+				Action: checks.NewAction(checks.Config{
+					Invoker:   invoker,
+					CheckRuns: firstGitHub,
+					Logs:      firstGitHub,
+					PRs:       firstGitHub,
+					Comments:  firstGitHub,
+					Git:       &gitOpsAdapter{},
+					Projects:  database,
 				}),
 			})
 
