@@ -43,7 +43,7 @@ func TestValidState_AllKnownStates(t *testing.T) {
 	states := []IssueState{
 		StateQueued, StateRefining, StateWaitingApproval, StateApproved,
 		StateBuilding, StateInReview, StateAddressingFeedback,
-		StateCompleted, StateFailed, StatePaused,
+		StateFixingChecks, StateCompleted, StateFailed, StatePaused,
 	}
 	for _, s := range states {
 		if !ValidState(s) {
@@ -426,6 +426,73 @@ func TestEvaluateAndExecute_FullLifecycleTransitions(t *testing.T) {
 	entries, _ := d.ListActivity(issue.ID, 100, 0)
 	if len(entries) != len(expectedSequence) {
 		t.Errorf("expected %d activity entries, got %d", len(expectedSequence), len(entries))
+	}
+}
+
+func TestRegister_FixingChecksState_ValidTransition(t *testing.T) {
+	sm := New(nil)
+	err := sm.Register(Transition{
+		From: StateInReview,
+		To:   StateFixingChecks,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error registering transition to fixing_checks: %v", err)
+	}
+	err = sm.Register(Transition{
+		From: StateFixingChecks,
+		To:   StateInReview,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error registering transition from fixing_checks: %v", err)
+	}
+}
+
+func TestEvaluateAndExecute_FixingChecksTransition(t *testing.T) {
+	d := testDB(t)
+	sm := New(d)
+	sm.Register(Transition{
+		From: StateInReview,
+		To:   StateFixingChecks,
+	})
+	sm.Register(Transition{
+		From: StateFixingChecks,
+		To:   StateInReview,
+	})
+
+	issue := createTestIssue(t, d, "in_review")
+
+	// in_review -> fixing_checks
+	tr, ok := sm.Evaluate(issue)
+	if !ok {
+		t.Fatal("expected transition from in_review")
+	}
+	if tr.To != StateFixingChecks {
+		t.Fatalf("expected transition to fixing_checks, got %s", tr.To)
+	}
+	if err := sm.Execute(tr, issue); err != nil {
+		t.Fatalf("executing in_review -> fixing_checks: %v", err)
+	}
+
+	issue, _ = d.GetIssue(issue.ID)
+	if issue.State != "fixing_checks" {
+		t.Fatalf("expected state fixing_checks, got %s", issue.State)
+	}
+
+	// fixing_checks -> in_review
+	tr, ok = sm.Evaluate(issue)
+	if !ok {
+		t.Fatal("expected transition from fixing_checks")
+	}
+	if tr.To != StateInReview {
+		t.Fatalf("expected transition to in_review, got %s", tr.To)
+	}
+	if err := sm.Execute(tr, issue); err != nil {
+		t.Fatalf("executing fixing_checks -> in_review: %v", err)
+	}
+
+	issue, _ = d.GetIssue(issue.ID)
+	if issue.State != "in_review" {
+		t.Fatalf("expected state in_review, got %s", issue.State)
 	}
 }
 
