@@ -9,6 +9,71 @@ import (
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
+func TestGitPullerAdapter_PullDefaultBase_Success(t *testing.T) {
+	var pulledBranch string
+	var pulledDir string
+	adapter := &gitPullerAdapter{
+		defaultBaseFn: func(repoPath, ralphConfigPath string) (string, error) {
+			return "main", nil
+		},
+		pullFn: func(ctx context.Context, r *shell.Runner, branch string) error {
+			pulledBranch = branch
+			pulledDir = r.Dir
+			return nil
+		},
+	}
+
+	err := adapter.PullDefaultBase(context.Background(), "/repo", ".ralph.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pulledBranch != "main" {
+		t.Fatalf("expected branch main, got %s", pulledBranch)
+	}
+	if pulledDir != "/repo" {
+		t.Fatalf("expected dir /repo, got %s", pulledDir)
+	}
+}
+
+func TestGitPullerAdapter_PullDefaultBase_DefaultBaseError(t *testing.T) {
+	adapter := &gitPullerAdapter{
+		defaultBaseFn: func(repoPath, ralphConfigPath string) (string, error) {
+			return "", fmt.Errorf("config not found")
+		},
+		pullFn: func(ctx context.Context, r *shell.Runner, branch string) error {
+			t.Fatal("pullFn should not be called when defaultBaseFn fails")
+			return nil
+		},
+	}
+
+	err := adapter.PullDefaultBase(context.Background(), "/repo", ".ralph.yaml")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := err.Error(); got != "resolving default base: config not found" {
+		t.Fatalf("unexpected error message: %s", got)
+	}
+}
+
+func TestGitPullerAdapter_PullDefaultBase_PullError(t *testing.T) {
+	adapter := &gitPullerAdapter{
+		defaultBaseFn: func(repoPath, ralphConfigPath string) (string, error) {
+			return "main", nil
+		},
+		pullFn: func(ctx context.Context, r *shell.Runner, branch string) error {
+			return fmt.Errorf("network error")
+		},
+	}
+
+	err := adapter.PullDefaultBase(context.Background(), "/repo", ".ralph.yaml")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := err.Error(); got != "network error" {
+		t.Fatalf("unexpected error message: %s", got)
+	}
+}
+
 func TestWorkspaceCreatorAdapter_Create_PullsBeforeCreateWorkspace(t *testing.T) {
 	var callOrder []string
 	adapter := &workspaceCreatorAdapter{

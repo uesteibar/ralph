@@ -145,6 +145,22 @@ func (w *workspaceCreatorAdapter) Create(ctx context.Context, repoPath string, w
 	return workspace.CreateWorkspace(ctx, r, repoPath, ws, base, copyPatterns)
 }
 
+// gitPullerAdapter resolves the default base branch and pulls it via
+// gitops.PullFFOnly. It implements refine.GitPuller and approve.GitPuller.
+type gitPullerAdapter struct {
+	defaultBaseFn func(repoPath, ralphConfigPath string) (string, error)
+	pullFn        func(ctx context.Context, r *shell.Runner, branch string) error
+}
+
+func (g *gitPullerAdapter) PullDefaultBase(ctx context.Context, repoPath, ralphConfigPath string) error {
+	base, err := g.defaultBaseFn(repoPath, ralphConfigPath)
+	if err != nil {
+		return fmt.Errorf("resolving default base: %w", err)
+	}
+	r := &shell.Runner{Dir: repoPath}
+	return g.pullFn(ctx, r, base)
+}
+
 // workspaceRemoverAdapter wraps workspace.RemoveWorkspace.
 type workspaceRemoverAdapter struct{}
 

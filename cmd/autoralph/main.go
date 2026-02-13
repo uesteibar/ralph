@@ -257,15 +257,21 @@ func runServe(args []string) error {
 		readOnlyInvoker := &claudeInvoker{
 			DisallowedTools: []string{"Edit", "Write", "Bash", "NotebookEdit"},
 		}
+		cfgLoader := &configLoaderAdapter{}
+		puller := &gitPullerAdapter{
+			defaultBaseFn: cfgLoader.DefaultBase,
+			pullFn:        gitops.PullFFOnly,
+		}
 
 		// QUEUED → REFINING
 		sm.Register(orchestrator.Transition{
 			From: orchestrator.StateQueued,
 			To:   orchestrator.StateRefining,
 			Action: refine.NewAction(refine.Config{
-				Invoker:  readOnlyInvoker,
-				Poster:   &linearCommentPoster{client: firstLinear},
-				Projects: database,
+				Invoker:   readOnlyInvoker,
+				Poster:    &linearCommentPoster{client: firstLinear},
+				Projects:  database,
+				GitPuller: puller,
 			}),
 		})
 
@@ -286,9 +292,10 @@ func runServe(args []string) error {
 			To:        orchestrator.StateRefining,
 			Condition: approve.IsIteration(firstLinear),
 			Action: approve.NewIterationAction(approve.Config{
-				Invoker:  readOnlyInvoker,
-				Comments: firstLinear,
-				Projects: database,
+				Invoker:   readOnlyInvoker,
+				Comments:  firstLinear,
+				Projects:  database,
+				GitPuller: puller,
 			}),
 		})
 
