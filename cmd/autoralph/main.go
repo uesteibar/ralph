@@ -22,6 +22,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/poller"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/autoralph/projects"
+	"github.com/uesteibar/ralph/internal/autoralph/rebase"
 	"github.com/uesteibar/ralph/internal/autoralph/refine"
 	"github.com/uesteibar/ralph/internal/autoralph/server"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
@@ -326,6 +327,23 @@ func runServe(args []string) error {
 					Git:      &gitOpsAdapter{},
 					Projects: database,
 				}),
+			})
+
+			// IN_REVIEW → IN_REVIEW (rebase when branch falls behind base)
+			// Registered after feedback so merge detection and feedback take priority.
+			rebaseCfg := rebase.Config{
+				Fetcher:  &gitOpsAdapter{},
+				Checker:  &gitOpsAdapter{},
+				Pusher:   &gitOpsAdapter{},
+				Runner:   &rebaseRunnerAdapter{},
+				Projects: database,
+				Resolver: cfgLoader,
+			}
+			sm.Register(orchestrator.Transition{
+				From:      orchestrator.StateInReview,
+				To:        orchestrator.StateInReview,
+				Condition: rebase.NeedsRebase(rebaseCfg),
+				Action:    rebase.NewAction(rebaseCfg),
 			})
 		}
 	}

@@ -290,3 +290,35 @@ func (g *ghPRCreatorAdapter) FindOpenPR(ctx context.Context, owner, repo, head, 
 	}
 	return &pr.PRResult{Number: p.Number, HTMLURL: p.HTMLURL}, nil
 }
+
+func (g *gitOpsAdapter) IsAncestor(ctx context.Context, workDir, ancestor, descendant string) (bool, error) {
+	r := &shell.Runner{Dir: workDir}
+	return gitops.IsAncestor(ctx, r, ancestor, descendant)
+}
+
+func (g *gitOpsAdapter) ForcePushBranch(ctx context.Context, workDir, branch string) error {
+	r := &shell.Runner{Dir: workDir}
+	return gitops.ForcePushBranch(ctx, r, branch)
+}
+
+// rebaseRunnerAdapter invokes ralph rebase as a subprocess to satisfy
+// rebase.RebaseRunner.
+type rebaseRunnerAdapter struct {
+	// cmdFn builds the exec.Cmd. When nil, defaults to exec.CommandContext.
+	cmdFn func(ctx context.Context, name string, args ...string) *exec.Cmd
+}
+
+func (r *rebaseRunnerAdapter) RunRebase(ctx context.Context, base, workspaceName, projectConfigPath string) error {
+	buildCmd := r.cmdFn
+	if buildCmd == nil {
+		buildCmd = exec.CommandContext
+	}
+	cmd := buildCmd(ctx, "ralph", "rebase", base,
+		"--workspace", workspaceName,
+		"--project-config", projectConfigPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("ralph rebase: %w\n%s", err, out)
+	}
+	return nil
+}
