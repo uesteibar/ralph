@@ -248,17 +248,19 @@ func TestE2E_ShellInit(t *testing.T) {
 		t.Errorf("bash -n syntax check failed: %v\n%s", err, out)
 	}
 
-	// Test zsh output.
+	// Test zsh output (skip syntax validation when zsh is not installed, e.g. CI).
 	rZsh := runRalph(t, repoDir, []string{"SHELL=/bin/zsh"}, "shell-init")
 	if rZsh.ExitCode != 0 {
 		t.Fatalf("shell-init (zsh) failed: exit %d\nstderr: %s", rZsh.ExitCode, rZsh.Stderr)
 	}
 
-	// Validate zsh syntax.
-	zshCheck := exec.Command("zsh", "-n")
-	zshCheck.Stdin = strings.NewReader(rZsh.Stdout)
-	if out, err := zshCheck.CombinedOutput(); err != nil {
-		t.Errorf("zsh -n syntax check failed: %v\n%s", err, out)
+	if _, err := exec.LookPath("zsh"); err == nil {
+		// Validate zsh syntax.
+		zshCheck := exec.Command("zsh", "-n")
+		zshCheck.Stdin = strings.NewReader(rZsh.Stdout)
+		if out, err := zshCheck.CombinedOutput(); err != nil {
+			t.Errorf("zsh -n syntax check failed: %v\n%s", err, out)
+		}
 	}
 }
 

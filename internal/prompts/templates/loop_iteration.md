@@ -71,6 +71,12 @@ After committing, re-read `{{.PRDPath}}`. If ALL of the following conditions are
 
 If any story or integration test has `passes: false`, end your response normally. The next iteration will pick up the remaining work.
 
+## Workspace Boundary
+
+You are working in a git worktree (workspace). Your current working directory is the workspace tree — an isolated copy of the repository for this feature.
+
+**CRITICAL: All file operations (Read, Edit, Write, Bash) MUST target files within your current working directory.** Never navigate to, read from, or modify files outside this workspace tree. Always use paths relative to your current working directory.
+
 ## Rules
 
 - Work on ONE story only: `{{.StoryID}}`

@@ -55,6 +55,29 @@ func TestRenderLoopIteration_CompletionRequiresBothStoriesAndIntegrationTests(t 
 	}
 }
 
+func TestRenderLoopIteration_ContainsWorkspaceBoundary(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test Story",
+		Description: "Test",
+	}
+
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "")
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+
+	checks := []string{
+		"Workspace Boundary",
+		"MUST target files within your current working directory",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
 func TestRenderLoopIteration_ContainsNoCoSignInstruction(t *testing.T) {
 	story := &prd.Story{
 		ID:          "US-001",
@@ -285,6 +308,54 @@ func TestRenderChatSystem_ContainsProjectName(t *testing.T) {
 	}
 	if !strings.Contains(out, "ChatProject") {
 		t.Error("output should contain project name")
+	}
+}
+
+func TestRenderChatSystem_WorkspaceBoundary_RenderedForWorkspace(t *testing.T) {
+	data := ChatSystemData{
+		ProjectName:   "TestProject",
+		WorkspaceName: "my-feature",
+	}
+	out, err := RenderChatSystem(data, "")
+	if err != nil {
+		t.Fatalf("RenderChatSystem failed: %v", err)
+	}
+	checks := []string{
+		"Workspace Boundary",
+		"my-feature",
+		"MUST target files within your current working directory",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("workspace chat output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderChatSystem_WorkspaceBoundary_OmittedForBase(t *testing.T) {
+	data := ChatSystemData{
+		ProjectName:   "TestProject",
+		WorkspaceName: "base",
+	}
+	out, err := RenderChatSystem(data, "")
+	if err != nil {
+		t.Fatalf("RenderChatSystem failed: %v", err)
+	}
+	if strings.Contains(out, "Workspace Boundary") {
+		t.Error("base workspace should not contain Workspace Boundary section")
+	}
+}
+
+func TestRenderChatSystem_WorkspaceBoundary_OmittedWhenEmpty(t *testing.T) {
+	data := ChatSystemData{
+		ProjectName: "TestProject",
+	}
+	out, err := RenderChatSystem(data, "")
+	if err != nil {
+		t.Fatalf("RenderChatSystem failed: %v", err)
+	}
+	if strings.Contains(out, "Workspace Boundary") {
+		t.Error("empty workspace name should not contain Workspace Boundary section")
 	}
 }
 

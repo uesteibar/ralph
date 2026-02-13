@@ -22,6 +22,12 @@ For each review comment:
 1. If the feedback requests a code change: make the change in the relevant file, keep it minimal and focused, and run tests to ensure nothing breaks.
 2. If the feedback is a question or the code is already correct: do nothing — the system will handle the reply.
 
+## Workspace Boundary
+
+You are working in a git worktree (workspace). Your current working directory is the workspace tree — an isolated copy of the repository for this feature.
+
+**CRITICAL: All file operations (Read, Edit, Write, Bash) MUST target files within your current working directory.** Never navigate to, read from, or modify files outside this workspace tree. Always use paths relative to your current working directory.
+
 ## Guidelines
 
 - Address ALL comments — do not skip any

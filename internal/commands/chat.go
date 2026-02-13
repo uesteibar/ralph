@@ -36,7 +36,8 @@ func Chat(args []string) error {
 	printWorkspaceHeader(wc, cfg.Repo.Path)
 
 	data := prompts.ChatSystemData{
-		ProjectName: cfg.Project,
+		ProjectName:   cfg.Project,
+		WorkspaceName: wc.Name,
 	}
 
 	// Read config YAML for context

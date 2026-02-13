@@ -147,6 +147,12 @@ If ALL integration tests have `passes: true`, the QA verification is complete.
 
 If ANY integration test has `passes: false`, a fix agent will be invoked to address the failures.
 
+## Workspace Boundary
+
+You are working in a git worktree (workspace). Your current working directory is the workspace tree — an isolated copy of the repository for this feature.
+
+**CRITICAL: All file operations (Read, Edit, Write, Bash) MUST target files within your current working directory.** Never navigate to, read from, or modify files outside this workspace tree. Always use paths relative to your current working directory.
+
 ## Rules
 
 - BUILD automated tests — don't just manually verify
