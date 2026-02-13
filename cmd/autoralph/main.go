@@ -25,6 +25,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/refine"
 	"github.com/uesteibar/ralph/internal/autoralph/server"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
+	"github.com/uesteibar/ralph/internal/gitops"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
@@ -297,7 +298,7 @@ func runServe(args []string) error {
 			To:   orchestrator.StateBuilding,
 			Action: build.NewAction(build.Config{
 				Invoker:    invoker,
-				Workspace:  &workspaceCreatorAdapter{},
+				Workspace:  &workspaceCreatorAdapter{pullFn: gitops.PullFFOnly},
 				ConfigLoad: &configLoaderAdapter{},
 				Linear:     &buildLinearUpdater{client: firstLinear},
 				PRDRead:    &buildPRDReaderAdapter{},
