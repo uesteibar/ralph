@@ -12,3 +12,5 @@
 !.claude/skills/
 !.claude/commands/
 .mcp.json
+
+node_modules/

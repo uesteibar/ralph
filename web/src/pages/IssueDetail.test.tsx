@@ -120,10 +120,10 @@ describe('IssueDetail', () => {
     expect(screen.getByText('Plan approved')).toBeInTheDocument()
   })
 
-  it('shows build log when state is building', async () => {
+  it('shows Agent Logs when build events exist', async () => {
     renderIssueDetail()
     await waitFor(() => {
-      expect(screen.getByText('Live Build')).toBeInTheDocument()
+      expect(screen.getByText('Agent Logs')).toBeInTheDocument()
     })
   })
 
@@ -243,15 +243,57 @@ describe('IssueDetail', () => {
     })
   })
 
-  it('does not show build section when not building', async () => {
-    const completedIssue = { ...mockIssue, state: 'completed', build_active: false, activity: [], stories: [], integration_tests: [] }
+  it('shows Agent Logs for non-building states when build events exist', async () => {
+    const completedIssue = {
+      ...mockIssue,
+      state: 'completed',
+      build_active: false,
+      activity: [
+        {
+          id: 'act-b1',
+          issue_id: 'iss1',
+          event_type: 'build_event',
+          detail: 'Story US-001: Upload avatar',
+          created_at: '2025-02-11T12:20:00Z',
+        },
+      ],
+      stories: [],
+      integration_tests: [],
+    }
     vi.mocked(fetchIssue).mockResolvedValue(completedIssue)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Agent Logs')).toBeInTheDocument()
+    })
+  })
+
+  it('hides Agent Logs when no build events exist', async () => {
+    const queuedIssue = {
+      ...mockIssue,
+      state: 'queued',
+      build_active: false,
+      activity: [
+        {
+          id: 'act-sc1',
+          issue_id: 'iss1',
+          event_type: 'state_change',
+          from_state: 'queued',
+          to_state: 'refining',
+          detail: 'Auto refinement',
+          created_at: '2025-02-11T12:00:00Z',
+        },
+      ],
+      stories: [],
+      integration_tests: [],
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(queuedIssue)
 
     renderIssueDetail()
     await waitFor(() => {
       expect(screen.getByText('Add user avatars')).toBeInTheDocument()
     })
-    expect(screen.queryByText('Live Build')).not.toBeInTheDocument()
+    expect(screen.queryByText('Agent Logs')).not.toBeInTheDocument()
   })
 
   it('shows empty timeline message when no activity', async () => {
@@ -268,6 +310,100 @@ describe('IssueDetail', () => {
     renderIssueDetail()
     await waitFor(() => {
       expect(screen.getByText(/Dashboard/)).toBeInTheDocument()
+    })
+  })
+
+  it('filters tool-use build events from timeline', async () => {
+    const issueWithToolEvents = {
+      ...mockIssue,
+      activity: [
+        {
+          id: 'act-sc',
+          issue_id: 'iss1',
+          event_type: 'state_change',
+          from_state: 'queued',
+          to_state: 'building',
+          detail: 'Started building',
+          created_at: '2025-02-11T12:00:00Z',
+        },
+        {
+          id: 'act-story',
+          issue_id: 'iss1',
+          event_type: 'build_event',
+          detail: 'Story US-001: Upload avatar',
+          created_at: '2025-02-11T12:10:00Z',
+        },
+        {
+          id: 'act-tool',
+          issue_id: 'iss1',
+          event_type: 'build_event',
+          detail: '→ Read file.go',
+          created_at: '2025-02-11T12:11:00Z',
+        },
+      ],
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(issueWithToolEvents)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Started building')).toBeInTheDocument()
+    })
+    const timeline = screen.getByText('Timeline').closest('section')!
+    // Non-tool build event should appear in timeline
+    expect(timeline.textContent).toContain('Story US-001: Upload avatar')
+    // Tool-use build event should NOT appear in timeline
+    expect(timeline.textContent).not.toContain('→ Read file.go')
+  })
+
+  it('shows tool-use events in Agent Logs even when filtered from timeline', async () => {
+    const issueWithToolEvents = {
+      ...mockIssue,
+      activity: [
+        {
+          id: 'act-tool',
+          issue_id: 'iss1',
+          event_type: 'build_event',
+          detail: '→ Read file.go',
+          created_at: '2025-02-11T12:11:00Z',
+        },
+      ],
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(issueWithToolEvents)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Agent Logs')).toBeInTheDocument()
+    })
+    // Tool-use event should appear in Agent Logs section
+    const agentLogs = screen.getByText('Agent Logs').closest('section')!
+    expect(agentLogs.textContent).toContain('→ Read file.go')
+  })
+
+  it('shows No activity yet when all activities are tool-use events', async () => {
+    const issueOnlyToolEvents = {
+      ...mockIssue,
+      activity: [
+        {
+          id: 'act-tool1',
+          issue_id: 'iss1',
+          event_type: 'build_event',
+          detail: '→ Write output.txt',
+          created_at: '2025-02-11T12:11:00Z',
+        },
+        {
+          id: 'act-tool2',
+          issue_id: 'iss1',
+          event_type: 'build_event',
+          detail: '→ Bash npm test',
+          created_at: '2025-02-11T12:12:00Z',
+        },
+      ],
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(issueOnlyToolEvents)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('No activity yet')).toBeInTheDocument()
     })
   })
 })
