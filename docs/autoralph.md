@@ -176,6 +176,8 @@ profiles:
   personal:
     linear_api_key: lin_api_xxxxxxxxxxxxx
     github_token: ghp_xxxxxxxxxxxxx
+    git_author_name: autoralph-personal
+    git_author_email: autoralph-personal@example.com
 
   # Option B: GitHub App (recommended for organizations)
   work:
@@ -183,6 +185,8 @@ profiles:
     github_app_client_id: "Iv23liXXXXXX"
     github_app_installation_id: 12345678
     github_app_private_key_path: ~/.autoralph/my-app.pem
+    git_author_name: autoralph-work
+    git_author_email: autoralph@myorg.com
 ```
 
 **Resolution order** (highest precedence first):
@@ -286,6 +290,38 @@ profiles:
     github_token: ghp_xxxxxxxxxxxxx
     github_user_id: 12345678
 ```
+
+#### Git Identity
+
+AutoRalph can use a dedicated git identity for all commits it creates, making
+it easy to distinguish autoralph-authored changes from human ones.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `git_author_name` | `autoralph` | Name used for git author and committer |
+| `git_author_email` | `autoralph@noreply` | Email used for git author and committer |
+
+When these fields are omitted, the defaults `autoralph` / `autoralph@noreply`
+are used automatically. Each profile can specify its own git identity, so
+different projects can commit under different names.
+
+**Environment variable overrides**:
+
+| Variable | Overrides |
+|----------|-----------|
+| `AUTORALPH_GIT_AUTHOR_NAME` | `git_author_name` from the active profile |
+| `AUTORALPH_GIT_AUTHOR_EMAIL` | `git_author_email` from the active profile |
+
+Environment variables take precedence over profile values. This is useful for
+temporarily overriding the identity in CI or during development without changing
+the credentials file.
+
+The configured identity is applied in two ways:
+- **Git operations** (commit, rebase, etc.) use `GIT_AUTHOR_NAME`,
+  `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL`
+  environment variables.
+- **Claude CLI builds** use repo-local `git config user.name` and
+  `git config user.email` set in the worktree before the build loop starts.
 
 ### Projects
 
