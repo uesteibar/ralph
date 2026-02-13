@@ -41,6 +41,76 @@ func initRepo(t *testing.T, dir string) *shell.Runner {
 	return r
 }
 
+func TestConfigureGitIdentity_SetsLocalConfig(t *testing.T) {
+	dir := t.TempDir()
+	r := initRepo(t, dir)
+	ctx := context.Background()
+
+	err := ConfigureGitIdentity(ctx, r, "autoralph-test", "autoralph-test@noreply")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify user.name is set at local scope.
+	out, err := r.Run(ctx, "git", "config", "--local", "user.name")
+	if err != nil {
+		t.Fatalf("reading user.name: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "autoralph-test" {
+		t.Errorf("user.name = %q, want %q", got, "autoralph-test")
+	}
+
+	// Verify user.email is set at local scope.
+	out, err = r.Run(ctx, "git", "config", "--local", "user.email")
+	if err != nil {
+		t.Fatalf("reading user.email: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "autoralph-test@noreply" {
+		t.Errorf("user.email = %q, want %q", got, "autoralph-test@noreply")
+	}
+}
+
+func TestConfigureGitIdentity_CommitsUseConfiguredIdentity(t *testing.T) {
+	dir := t.TempDir()
+	r := initRepo(t, dir)
+	ctx := context.Background()
+
+	err := ConfigureGitIdentity(ctx, r, "ci-bot", "ci-bot@example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Create a commit and verify it uses the configured identity.
+	if err := os.WriteFile(filepath.Join(dir, "test.txt"), []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(ctx, "git", "add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(ctx, "git", "commit", "-m", "test commit"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := r.Run(ctx, "git", "log", "-1", "--format=%an <%ae>")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	got := strings.TrimSpace(out)
+	want := "ci-bot <ci-bot@example.com>"
+	if got != want {
+		t.Errorf("author = %q, want %q", got, want)
+	}
+
+	out, err = r.Run(ctx, "git", "log", "-1", "--format=%cn <%ce>")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	got = strings.TrimSpace(out)
+	if got != want {
+		t.Errorf("committer = %q, want %q", got, want)
+	}
+}
+
 func TestIsWorktree_MainRepo(t *testing.T) {
 	dir := t.TempDir()
 	r := initRepo(t, dir)

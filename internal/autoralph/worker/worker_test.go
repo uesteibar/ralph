@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/events"
+	"github.com/uesteibar/ralph/internal/shell"
 )
 
 func testDB(t *testing.T) *db.DB {
@@ -853,4 +855,174 @@ func TestDispatcher_RecoverBuilding_NoIssues(t *testing.T) {
 	if recovered != 0 {
 		t.Errorf("expected 0 recovered, got %d", recovered)
 	}
+}
+
+// initTreeRepo creates a project directory structure with a real git repo at the
+// tree path so that worker.run() can call git config in it.
+func initTreeRepo(t *testing.T, projectPath, workspaceName string) {
+	t.Helper()
+	treePath := filepath.Join(projectPath, ".ralph", "workspaces", workspaceName, "tree")
+	if err := os.MkdirAll(treePath, 0755); err != nil {
+		t.Fatalf("creating tree dir: %v", err)
+	}
+	r := &shell.Runner{Dir: treePath}
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"git", "init"},
+		{"git", "config", "user.name", "Test"},
+		{"git", "config", "user.email", "test@test.com"},
+	} {
+		if _, err := r.Run(ctx, args[0], args[1:]...); err != nil {
+			t.Fatalf("init tree repo %v: %v", args, err)
+		}
+	}
+	// Create an initial commit so HEAD exists.
+	if err := os.WriteFile(filepath.Join(treePath, "init.txt"), []byte("init"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(ctx, "git", "add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(ctx, "git", "commit", "-m", "initial"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDispatcher_Dispatch_ConfiguresGitIdentityInWorktree(t *testing.T) {
+	d := testDB(t)
+	projectPath := t.TempDir()
+	wsName := "proj-42"
+
+	// Create a real git repo at the tree path.
+	initTreeRepo(t, projectPath, wsName)
+
+	p, err := d.CreateProject(db.Project{
+		Name:             "git-id-test",
+		LocalPath:        projectPath,
+		LinearTeamID:     "team-abc",
+		LinearAssigneeID: "user-xyz",
+		RalphConfigPath:  ".ralph/ralph.yaml",
+		BranchPrefix:     "autoralph/",
+		MaxIterations:    5,
+	})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	issue := createTestIssue(t, d, p, "building")
+
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:             d,
+		MaxWorkers:     1,
+		LoopRunner:     runner,
+		Projects:       d,
+		GitAuthorName:  "autoralph-bot",
+		GitAuthorEmail: "autoralph-bot@noreply",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	// Verify git config was set in the tree directory.
+	treePath := filepath.Join(projectPath, ".ralph", "workspaces", wsName, "tree")
+	r := &shell.Runner{Dir: treePath}
+
+	out, err := r.Run(ctx, "git", "config", "--local", "user.name")
+	if err != nil {
+		t.Fatalf("reading user.name: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "autoralph-bot" {
+		t.Errorf("user.name = %q, want %q", got, "autoralph-bot")
+	}
+
+	out, err = r.Run(ctx, "git", "config", "--local", "user.email")
+	if err != nil {
+		t.Fatalf("reading user.email: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "autoralph-bot@noreply" {
+		t.Errorf("user.email = %q, want %q", got, "autoralph-bot@noreply")
+	}
+}
+
+func TestDispatcher_Dispatch_GitIdentityUsedBySubsequentCommits(t *testing.T) {
+	d := testDB(t)
+	projectPath := t.TempDir()
+	wsName := "proj-42"
+
+	initTreeRepo(t, projectPath, wsName)
+
+	p, err := d.CreateProject(db.Project{
+		Name:             "git-commit-test",
+		LocalPath:        projectPath,
+		LinearTeamID:     "team-abc",
+		LinearAssigneeID: "user-xyz",
+		RalphConfigPath:  ".ralph/ralph.yaml",
+		BranchPrefix:     "autoralph/",
+		MaxIterations:    5,
+	})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	issue := createTestIssue(t, d, p, "building")
+
+	treePath := filepath.Join(projectPath, ".ralph", "workspaces", wsName, "tree")
+
+	// Use a runner that creates a commit during the loop (simulating Claude CLI).
+	commitRunner := &commitDuringLoopRunner{treePath: treePath}
+	disp := New(Config{
+		DB:             d,
+		MaxWorkers:     1,
+		LoopRunner:     commitRunner,
+		Projects:       d,
+		GitAuthorName:  "autoralph-ci",
+		GitAuthorEmail: "autoralph-ci@noreply",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	// Verify the commit made during the loop used the configured identity.
+	r := &shell.Runner{Dir: treePath}
+	out, err := r.Run(ctx, "git", "log", "-1", "--format=%an <%ae>")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	got := strings.TrimSpace(out)
+	want := "autoralph-ci <autoralph-ci@noreply>"
+	if got != want {
+		t.Errorf("commit author = %q, want %q", got, want)
+	}
+}
+
+// commitDuringLoopRunner creates a commit in the worktree during the loop,
+// simulating what Claude CLI would do.
+type commitDuringLoopRunner struct {
+	treePath string
+}
+
+func (r *commitDuringLoopRunner) Run(ctx context.Context, cfg LoopConfig) error {
+	// Create a file and commit it, simulating Claude CLI behavior.
+	if err := os.WriteFile(filepath.Join(r.treePath, "claude-change.txt"), []byte("change"), 0644); err != nil {
+		return err
+	}
+	runner := &shell.Runner{Dir: r.treePath}
+	if _, err := runner.Run(ctx, "git", "add", "-A"); err != nil {
+		return err
+	}
+	if _, err := runner.Run(ctx, "git", "commit", "-m", "claude commit"); err != nil {
+		return err
+	}
+	return nil
 }

@@ -10,7 +10,9 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/events"
+	"github.com/uesteibar/ralph/internal/gitops"
 	"github.com/uesteibar/ralph/internal/runstate"
+	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
@@ -54,6 +56,13 @@ type Config struct {
 	EventHandler events.EventHandler
 	Logger       *slog.Logger
 
+	// GitAuthorName and GitAuthorEmail are used to configure repo-local
+	// git identity in worktrees before starting a build loop. This ensures
+	// that commits created by Claude CLI's internal git operations use the
+	// autoralph identity.
+	GitAuthorName  string
+	GitAuthorEmail string
+
 	// OnBuildEvent is called whenever a build event is logged to the activity
 	// table. The callback receives the issue ID and event detail string. This
 	// allows the caller (e.g. main.go) to broadcast real-time updates via
@@ -64,14 +73,16 @@ type Config struct {
 // Dispatcher manages build worker goroutines. It limits the number of
 // concurrent builds and tracks which issues are currently being built.
 type Dispatcher struct {
-	db           *db.DB
-	maxWorkers   int
-	runner       LoopRunner
-	projects     ProjectGetter
-	pr           PRCreator
-	handler      events.EventHandler
-	onBuildEvent func(issueID, detail string)
-	logger       *slog.Logger
+	db             *db.DB
+	maxWorkers     int
+	runner         LoopRunner
+	projects       ProjectGetter
+	pr             PRCreator
+	handler        events.EventHandler
+	onBuildEvent   func(issueID, detail string)
+	logger         *slog.Logger
+	gitAuthorName  string
+	gitAuthorEmail string
 
 	mu       sync.Mutex
 	active   map[string]context.CancelFunc // issue ID → cancel func
@@ -90,16 +101,18 @@ func New(cfg Config) *Dispatcher {
 		logger = slog.Default()
 	}
 	return &Dispatcher{
-		db:           cfg.DB,
-		maxWorkers:   maxWorkers,
-		runner:       cfg.LoopRunner,
-		projects:     cfg.Projects,
-		pr:           cfg.PR,
-		handler:      cfg.EventHandler,
-		onBuildEvent: cfg.OnBuildEvent,
-		logger:       logger,
-		active:       make(map[string]context.CancelFunc),
-		sem:          make(chan struct{}, maxWorkers),
+		db:             cfg.DB,
+		maxWorkers:     maxWorkers,
+		runner:         cfg.LoopRunner,
+		projects:       cfg.Projects,
+		pr:             cfg.PR,
+		handler:        cfg.EventHandler,
+		onBuildEvent:   cfg.OnBuildEvent,
+		logger:         logger,
+		gitAuthorName:  cfg.GitAuthorName,
+		gitAuthorEmail: cfg.GitAuthorEmail,
+		active:         make(map[string]context.CancelFunc),
+		sem:            make(chan struct{}, maxWorkers),
 	}
 }
 
@@ -209,6 +222,17 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 		issueID:      issue.ID,
 		upstream:     d.handler,
 		onBuildEvent: d.onBuildEvent,
+	}
+
+	// Set repo-local git identity in the worktree so that commits created
+	// by Claude CLI's internal git operations use the autoralph identity.
+	if d.gitAuthorName != "" && d.gitAuthorEmail != "" {
+		r := &shell.Runner{Dir: workDir}
+		if err := gitops.ConfigureGitIdentity(ctx, r, d.gitAuthorName, d.gitAuthorEmail); err != nil {
+			d.logger.Error("configuring git identity", "issue", issue.ID, "error", err)
+			d.handleFailure(issue, fmt.Errorf("configuring git identity: %w", err))
+			return
+		}
 	}
 
 	loopCfg := LoopConfig{

@@ -391,13 +391,20 @@ func runServe(args []string) error {
 	}
 
 	// --- 8. Build worker dispatcher ---
+	var dispatcherGitName, dispatcherGitEmail string
+	if firstGitID != nil {
+		dispatcherGitName = firstGitID.name
+		dispatcherGitEmail = firstGitID.email
+	}
 	dispatcher := worker.New(worker.Config{
-		DB:         database,
-		MaxWorkers: 2,
-		LoopRunner: &loopRunnerAdapter{},
-		Projects:   database,
-		PR:         prAction,
-		Logger:     logger,
+		DB:             database,
+		MaxWorkers:     2,
+		LoopRunner:     &loopRunnerAdapter{},
+		Projects:       database,
+		PR:             prAction,
+		GitAuthorName:  dispatcherGitName,
+		GitAuthorEmail: dispatcherGitEmail,
+		Logger:         logger,
 		OnBuildEvent: func(issueID, detail string) {
 			if hub == nil {
 				return
