@@ -23,6 +23,13 @@ func TestRenderRefineIssue_ContainsIssueDetails(t *testing.T) {
 		"Users want a dark theme toggle in settings.",
 		"Clarifying Questions",
 		"Implementation Plan",
+		"Feature Overview",
+		"Architecture Overview",
+		"Trade-offs",
+		"Mermaid",
+		"Changes",
+		"Acceptance criteria",
+		"Risks",
 	}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {

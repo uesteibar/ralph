@@ -33,13 +33,43 @@ Format questions as a numbered list. Be specific and actionable — avoid vague 
 
 ### Option B: Implementation Plan
 
-If the issue is clear enough to proceed, produce a structured plan:
+If the issue is clear enough to proceed, produce a structured plan with the following sections:
 
-1. **Summary:** One-sentence description of what will be built
-2. **Approach:** Technical approach and key decisions
-3. **Changes:** List of files/components that will be modified or created
-4. **Acceptance criteria:** Concrete, verifiable criteria for completion
-5. **Risks:** Any potential issues or unknowns
+#### Feature Overview
+
+- **Summary:** One-sentence description of what will be built
+- **Alternatives considered:** List 2-3 alternative approaches you considered, with brief pros/cons for each
+- **Recommended approach:** State which approach you recommend and why it is the best fit given the constraints
+
+#### Architecture Overview
+
+Describe the technical architecture of the solution. Include Mermaid diagrams to illustrate the design:
+
+- Use a **sequence diagram** for request/response flows or multi-step interactions between components
+- Use a **component diagram** for showing system structure and dependencies between modules
+- Use a **flowchart** for decision logic, state transitions, or branching workflows
+
+Include at least one Mermaid diagram using fenced code blocks with the `mermaid` language tag.
+
+#### Changes
+
+List of files/components that will be modified or created.
+
+#### Acceptance criteria
+
+Concrete, verifiable criteria for completion.
+
+#### Trade-offs
+
+List key trade-offs and decisions made in this plan:
+
+- What was prioritized and what was deprioritized
+- Complexity vs. simplicity choices
+- Performance, maintainability, or scope trade-offs
+
+#### Risks
+
+Any potential issues or unknowns.
 
 ## Guidelines
 
