@@ -1,8 +1,10 @@
 package prd
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -318,17 +320,17 @@ func TestFailedIntegrationTests_Empty_ReturnsNil(t *testing.T) {
 	}
 }
 
-func TestOverviewFields_Roundtrip(t *testing.T) {
+func TestOverviewFields_Roundtrip_String(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prd.json")
 
 	original := &PRD{
-		Project:               "TestProject",
-		BranchName:            "ralph/test",
-		Description:           "Test with overviews",
-		FeatureOverview:       "This feature adds X to improve Y",
-		ArchitectureOverview:  "We will use a layered architecture with Z",
-		UserStories:           []Story{{ID: "US-001", Title: "First", Passes: true}},
+		Project:              "TestProject",
+		BranchName:           "ralph/test",
+		Description:          "Test with overviews",
+		FeatureOverview:      json.RawMessage(`"This feature adds X to improve Y"`),
+		ArchitectureOverview: json.RawMessage(`"We will use a layered architecture with Z"`),
+		UserStories:          []Story{{ID: "US-001", Title: "First", Passes: true}},
 	}
 
 	if err := Write(path, original); err != nil {
@@ -340,11 +342,49 @@ func TestOverviewFields_Roundtrip(t *testing.T) {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if loaded.FeatureOverview != original.FeatureOverview {
-		t.Errorf("FeatureOverview = %q, want %q", loaded.FeatureOverview, original.FeatureOverview)
+	if got := RawJSONToString(loaded.FeatureOverview); got != "This feature adds X to improve Y" {
+		t.Errorf("FeatureOverview = %q, want %q", got, "This feature adds X to improve Y")
 	}
-	if loaded.ArchitectureOverview != original.ArchitectureOverview {
-		t.Errorf("ArchitectureOverview = %q, want %q", loaded.ArchitectureOverview, original.ArchitectureOverview)
+	if got := RawJSONToString(loaded.ArchitectureOverview); got != "We will use a layered architecture with Z" {
+		t.Errorf("ArchitectureOverview = %q, want %q", got, "We will use a layered architecture with Z")
+	}
+}
+
+func TestOverviewFields_Roundtrip_Object(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prd.json")
+
+	featureObj := json.RawMessage(`{"problem":"Users need X","approach":"We will do Y"}`)
+	archObj := json.RawMessage(`{"approach":"Layered architecture","otherOptions":["Option A"]}`)
+
+	original := &PRD{
+		Project:              "TestProject",
+		BranchName:           "ralph/test",
+		Description:          "Test with object overviews",
+		FeatureOverview:      featureObj,
+		ArchitectureOverview: archObj,
+		UserStories:          []Story{{ID: "US-001", Title: "First", Passes: true}},
+	}
+
+	if err := Write(path, original); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	loaded, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	got := RawJSONToString(loaded.FeatureOverview)
+	if got == "" {
+		t.Fatal("FeatureOverview should not be empty")
+	}
+	// Object should contain the key
+	if !strings.Contains(got, "problem") {
+		t.Errorf("FeatureOverview = %q, should contain 'problem'", got)
+	}
+	if !strings.Contains(got, "Users need X") {
+		t.Errorf("FeatureOverview = %q, should contain 'Users need X'", got)
 	}
 }
 
@@ -372,11 +412,11 @@ func TestRead_PRDWithoutOverviewFields_ParsesCorrectly(t *testing.T) {
 	if loaded.Project != "OldProject" {
 		t.Errorf("Project = %q, want %q", loaded.Project, "OldProject")
 	}
-	if loaded.FeatureOverview != "" {
-		t.Errorf("FeatureOverview = %q, want empty string", loaded.FeatureOverview)
+	if RawJSONToString(loaded.FeatureOverview) != "" {
+		t.Errorf("FeatureOverview = %q, want empty string", RawJSONToString(loaded.FeatureOverview))
 	}
-	if loaded.ArchitectureOverview != "" {
-		t.Errorf("ArchitectureOverview = %q, want empty string", loaded.ArchitectureOverview)
+	if RawJSONToString(loaded.ArchitectureOverview) != "" {
+		t.Errorf("ArchitectureOverview = %q, want empty string", RawJSONToString(loaded.ArchitectureOverview))
 	}
 	if len(loaded.UserStories) != 1 {
 		t.Errorf("UserStories count = %d, want 1", len(loaded.UserStories))

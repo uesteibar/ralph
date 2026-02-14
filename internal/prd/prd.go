@@ -1,6 +1,7 @@
 package prd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,8 +12,8 @@ type PRD struct {
 	Project               string            `json:"project"`
 	BranchName            string            `json:"branchName"`
 	Description           string            `json:"description"`
-	FeatureOverview       string            `json:"featureOverview,omitempty"`
-	ArchitectureOverview  string            `json:"architectureOverview,omitempty"`
+	FeatureOverview       json.RawMessage   `json:"featureOverview,omitempty"`
+	ArchitectureOverview  json.RawMessage   `json:"architectureOverview,omitempty"`
 	UserStories           []Story           `json:"userStories"`
 	IntegrationTests      []IntegrationTest `json:"integrationTests,omitempty"`
 }
@@ -127,4 +128,34 @@ func FailedIntegrationTests(p *PRD) []IntegrationTest {
 		}
 	}
 	return failed
+}
+
+// RawJSONToString converts a json.RawMessage to a human-readable string.
+// If the value is a JSON string, it returns the unquoted string.
+// If the value is an object or array, it returns the indented JSON.
+// Returns empty string for nil or empty input.
+func RawJSONToString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return ""
+	}
+
+	// If it's a JSON string, unquote it.
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err == nil {
+			return s
+		}
+	}
+
+	// For objects/arrays, return indented JSON.
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, trimmed, "", "  "); err != nil {
+		return string(raw)
+	}
+	return buf.String()
 }
