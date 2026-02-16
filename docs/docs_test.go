@@ -337,6 +337,179 @@ func TestCommands_GeneratorExists(t *testing.T) {
 	}
 }
 
+func TestAutoRalphOverview_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "autoralph", "overview.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("overview.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"# Overview", "page title"},
+		{"autonomous", "describes autonomous nature"},
+		{"Linear", "mentions Linear integration"},
+		{"GitHub", "mentions GitHub integration"},
+		{"Ralph", "references Ralph execution loop"},
+		{"daemon", "describes long-running daemon"},
+		{"Prerequisites", "prerequisites section"},
+		{"Installation", "installation section"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("overview.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestAutoRalphLifecycle_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "autoralph", "lifecycle.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("lifecycle.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"# Lifecycle", "page title"},
+		{"mermaid", "Mermaid state diagram"},
+		{"QUEUED", "queued state"},
+		{"REFINING", "refining state"},
+		{"APPROVED", "approved state"},
+		{"BUILDING", "building state"},
+		{"IN_REVIEW", "in_review state"},
+		{"ADDRESSING_FEEDBACK", "addressing_feedback state"},
+		{"COMPLETED", "completed state"},
+		{"FAILED", "failed state"},
+		{"PAUSED", "paused state"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("lifecycle.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestAutoRalphAbilities_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "autoralph", "abilities.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("abilities.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"# Abilities", "page title"},
+		{"Refine", "refine ability"},
+		{"Build", "build ability"},
+		{"Rebase", "rebase ability"},
+		{"Feedback", "feedback ability"},
+		{"Fix Checks", "fix checks ability"},
+		{"Complete", "complete ability"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("abilities.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestAutoRalphConfiguration_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "autoralph", "configuration.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("configuration.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"# Configuration", "page title"},
+		{"credentials.yaml", "credentials file"},
+		{"~/.autoralph/", "config directory"},
+		{"linear_api_key", "Linear API key config"},
+		{"github_token", "GitHub token config"},
+		{"local_path", "project local path"},
+		{"credentials_profile", "credentials profile reference"},
+		{"max_iterations", "max iterations config"},
+		{"branch_prefix", "branch prefix config"},
+		{"autoralph serve", "serve command"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("configuration.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestAutoRalphSecurity_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "autoralph", "security.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("security.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"# Security", "page title"},
+		{"Trusted", "trusted users section"},
+		{"GitHub App", "GitHub App authentication"},
+		{"github_user_id", "github_user_id config"},
+		{"Credential", "credential isolation section"},
+		{"private key", "private key reference"},
+		{"github_app_client_id", "GitHub App client ID"},
+		{"github_app_installation_id", "GitHub App installation ID"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("security.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestAutoRalphDashboard_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "autoralph", "dashboard.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("dashboard.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"# Dashboard", "page title"},
+		{"/api/status", "status endpoint"},
+		{"/api/projects", "projects endpoint"},
+		{"/api/issues", "issues endpoint"},
+		{"WebSocket", "WebSocket section"},
+		{"/api/ws", "WebSocket endpoint"},
+		{"issue_state_changed", "issue state changed event"},
+		{"build_event", "build event type"},
+		{"127.0.0.1:7749", "default address"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("dashboard.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
 // extractSection returns the content between ## `cmd` and the next ## heading.
 func extractSection(content, cmd string) string {
 	header := "## `" + cmd + "`"
