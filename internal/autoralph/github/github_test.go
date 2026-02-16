@@ -706,6 +706,94 @@ func TestClient_FetchCheckRuns_HTTPError(t *testing.T) {
 	}
 }
 
+func TestClient_ReactToReviewComment_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v3/repos/octocat/hello/pulls/comments/42/reactions" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		assertAuth(t, r, "Bearer ghp_test123")
+
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["content"] != "eyes" {
+			t.Errorf("expected reaction content 'eyes', got %v", body["content"])
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      1,
+			"content": "eyes",
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test123", WithBaseURL(srv.URL+"/"))
+	err := c.ReactToReviewComment(context.Background(), "octocat", "hello", 42, "eyes")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_ReactToReviewComment_HTTPError_4xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		json.NewEncoder(w).Encode(map[string]any{"message": "Validation Failed"})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	err := c.ReactToReviewComment(context.Background(), "o", "r", 1, "eyes")
+	if err == nil {
+		t.Fatal("expected error for HTTP 422")
+	}
+}
+
+func TestClient_ReactToReviewComment_ServerError_RetriesAndSucceeds(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"message": "server error"})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      1,
+			"content": "eyes",
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"), WithRetryBackoff(time.Millisecond, time.Millisecond))
+	err := c.ReactToReviewComment(context.Background(), "o", "r", 1, "eyes")
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("expected 3 calls, got %d", calls)
+	}
+}
+
+func TestClient_ReactToReviewComment_ContextCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	err := c.ReactToReviewComment(ctx, "o", "r", 1, "eyes")
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+}
+
 func mustNew(t *testing.T, token string, opts ...Option) *Client {
 	t.Helper()
 	c, err := New(token, opts...)
