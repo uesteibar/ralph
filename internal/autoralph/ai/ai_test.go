@@ -323,6 +323,51 @@ func TestRenderAddressFeedback_WithoutCodeContext_OmitsSection(t *testing.T) {
 	}
 }
 
+func TestRenderAddressFeedback_WithQualityChecks_RendersExplicitCommands(t *testing.T) {
+	data := AddressFeedbackData{
+		Comments: []AddressFeedbackComment{
+			{Path: "main.go", Author: "reviewer", Body: "Fix this."},
+		},
+		QualityChecks: []string{"just test", "just vet"},
+	}
+
+	out, err := RenderAddressFeedback(data, "")
+	if err != nil {
+		t.Fatalf("RenderAddressFeedback failed: %v", err)
+	}
+
+	for _, cmd := range []string{"ralph check just test", "ralph check just vet"} {
+		if !strings.Contains(out, cmd) {
+			t.Errorf("output should contain %q", cmd)
+		}
+	}
+
+	if !strings.Contains(out, "compact pass/fail output") {
+		t.Error("output should contain the ralph check note")
+	}
+}
+
+func TestRenderAddressFeedback_WithoutQualityChecks_RendersGenericLine(t *testing.T) {
+	data := AddressFeedbackData{
+		Comments: []AddressFeedbackComment{
+			{Path: "main.go", Author: "reviewer", Body: "Fix this."},
+		},
+	}
+
+	out, err := RenderAddressFeedback(data, "")
+	if err != nil {
+		t.Fatalf("RenderAddressFeedback failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Run quality checks after making changes") {
+		t.Error("output should contain generic quality checks line when no checks configured")
+	}
+
+	if strings.Contains(out, "ralph check") {
+		t.Error("output should not contain 'ralph check' commands when no quality checks configured")
+	}
+}
+
 // --- Override tests ---
 
 func TestRender_UsesOverrideWhenPresent(t *testing.T) {

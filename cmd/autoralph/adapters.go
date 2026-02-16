@@ -10,6 +10,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/build"
 	"github.com/uesteibar/ralph/internal/autoralph/checks"
 	"github.com/uesteibar/ralph/internal/autoralph/complete"
+	"github.com/uesteibar/ralph/internal/autoralph/feedback"
 	"github.com/uesteibar/ralph/internal/autoralph/ghpoller"
 	ghclient "github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/autoralph/invoker"
@@ -34,6 +35,7 @@ var (
 	_ checks.LogFetcher      = (*ghclient.Client)(nil)
 	_ checks.PRFetcher       = (*ghclient.Client)(nil)
 	_ checks.PRCommenter     = (*ghclient.Client)(nil)
+	_ feedback.ConfigLoader  = (*configLoaderAdapter)(nil)
 	_ ghpoller.GitHubClient  = (*ghclient.Client)(nil)
 	_ invoker.EventInvoker   = (*claudeInvoker)(nil)
 )
@@ -193,7 +195,7 @@ func (w *workspaceRemoverAdapter) RemoveWorkspace(ctx context.Context, repoPath,
 	return workspace.RemoveWorkspace(ctx, r, repoPath, name)
 }
 
-// configLoaderAdapter satisfies both build.ConfigLoader and pr.ConfigLoader.
+// configLoaderAdapter satisfies build.ConfigLoader, feedback.ConfigLoader, and pr.ConfigLoader.
 type configLoaderAdapter struct{}
 
 func (c *configLoaderAdapter) Load(path string) (*config.Config, error) {

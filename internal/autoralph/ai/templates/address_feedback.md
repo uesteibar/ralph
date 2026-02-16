@@ -34,7 +34,13 @@ You are working in a git worktree (workspace). Your current working directory is
 - Prefer code changes over explanations when the feedback is valid
 - Keep changes minimal — only change what the reviewer asked for
 - Do not refactor unrelated code while addressing feedback
+{{- if .QualityChecks}}
+- Run quality checks after making changes:
+{{range .QualityChecks}}  - `ralph check {{.}}`
+{{end}}  > **Note:** `ralph check` wraps each command with compact pass/fail output. Full output is saved to the log file path shown in the output. If the truncated output is insufficient for debugging, you can grep or read the full log file.
+{{- else}}
 - Run quality checks after making changes
+{{- end}}
 - One commit per logical change, not per comment
 - **NEVER use `gh`, `curl`, or any tool to interact with GitHub**
 

@@ -3,12 +3,14 @@ package feedback
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
+	"github.com/uesteibar/ralph/internal/config"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
@@ -40,6 +42,11 @@ type ProjectGetter interface {
 	GetProject(id string) (db.Project, error)
 }
 
+// ConfigLoader loads a Ralph config from a file path.
+type ConfigLoader interface {
+	Load(path string) (*config.Config, error)
+}
+
 // Config holds the dependencies for the feedback action.
 type Config struct {
 	Invoker     Invoker
@@ -47,6 +54,7 @@ type Config struct {
 	Replier     ReviewReplier
 	Git         GitOps
 	Projects    ProjectGetter
+	ConfigLoad  ConfigLoader
 	OverrideDir string
 }
 
@@ -65,6 +73,17 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		project, err := cfg.Projects.GetProject(issue.ProjectID)
 		if err != nil {
 			return fmt.Errorf("loading project: %w", err)
+		}
+
+		// Load quality checks from ralph.yaml if a ConfigLoader is provided.
+		var qualityChecks []string
+		if cfg.ConfigLoad != nil {
+			ralphConfigPath := filepath.Join(project.LocalPath, project.RalphConfigPath)
+			ralphCfg, err := cfg.ConfigLoad.Load(ralphConfigPath)
+			if err != nil {
+				return fmt.Errorf("loading ralph config: %w", err)
+			}
+			qualityChecks = ralphCfg.QualityChecks
 		}
 
 		comments, err := cfg.Comments.FetchPRComments(ctx, project.GithubOwner, project.GithubRepo, issue.PRNumber)
@@ -89,7 +108,8 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		}
 
 		prompt, err := ai.RenderAddressFeedback(ai.AddressFeedbackData{
-			Comments: aiComments,
+			Comments:      aiComments,
+			QualityChecks: qualityChecks,
 		}, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering feedback prompt: %w", err)

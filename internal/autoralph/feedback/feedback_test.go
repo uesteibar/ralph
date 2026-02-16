@@ -9,6 +9,7 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
+	"github.com/uesteibar/ralph/internal/config"
 )
 
 func testDB(t *testing.T) *db.DB {
@@ -140,6 +141,15 @@ type mockProjectGetter struct {
 
 func (m *mockProjectGetter) GetProject(_ string) (db.Project, error) {
 	return m.project, m.err
+}
+
+type mockConfigLoader struct {
+	cfg *config.Config
+	err error
+}
+
+func (m *mockConfigLoader) Load(_ string) (*config.Config, error) {
+	return m.cfg, m.err
 }
 
 func defaultMocks(project db.Project) (Config, *mockInvoker, *mockCommentFetcher, *mockReviewReplier, *mockGitOps) {
@@ -509,6 +519,68 @@ func TestNewAction_HeadSHAError_UsesUnknown(t *testing.T) {
 	}
 	if !strings.Contains(replier.calls[0].body, "latest commit") {
 		t.Errorf("expected reply to contain 'latest commit' fallback, got: %s", replier.calls[0].body)
+	}
+}
+
+func TestNewAction_WithConfigLoader_IncludesQualityChecksInPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+	cfg.ConfigLoad = &mockConfigLoader{
+		cfg: &config.Config{
+			Project:       "test",
+			Repo:          config.RepoConfig{DefaultBase: "main"},
+			QualityChecks: []string{"just test", "just vet"},
+		},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, cmd := range []string{"ralph check just test", "ralph check just vet"} {
+		if !strings.Contains(inv.lastPrompt, cmd) {
+			t.Errorf("expected prompt to contain %q", cmd)
+		}
+	}
+}
+
+func TestNewAction_WithConfigLoader_Error_ReturnsError(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+	cfg.ConfigLoad = &mockConfigLoader{err: errors.New("config not found")}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "loading ralph config") {
+		t.Errorf("expected 'loading ralph config' in error, got: %s", err.Error())
+	}
+}
+
+func TestNewAction_WithoutConfigLoader_SkipsQualityChecks(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+	// ConfigLoad is nil — should not crash and should not include quality checks
+	cfg.ConfigLoad = nil
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(inv.lastPrompt, "ralph check") {
+		t.Error("expected prompt NOT to contain 'ralph check' when ConfigLoad is nil")
 	}
 }
 

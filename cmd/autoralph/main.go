@@ -335,11 +335,12 @@ func runServe(args []string) error {
 				To:        orchestrator.StateInReview,
 				Condition: feedback.IsAddressingFeedback,
 				Action: feedback.NewAction(feedback.Config{
-					Invoker:  invoker,
-					Comments: firstGitHub,
-					Replier:  firstGitHub,
-					Git:      gitOps,
-					Projects: database,
+					Invoker:    invoker,
+					Comments:   firstGitHub,
+					Replier:    firstGitHub,
+					Git:        gitOps,
+					Projects:   database,
+					ConfigLoad: &configLoaderAdapter{},
 				}),
 			})
 
