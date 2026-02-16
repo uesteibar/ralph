@@ -574,6 +574,34 @@ func (c *Client) ResolveProjectID(ctx context.Context, identifier string) (strin
 	return "", fmt.Errorf("project not found: %q (tried matching slugId and name)", identifier)
 }
 
+// ReactToComment adds an emoji reaction to a Linear comment.
+func (c *Client) ReactToComment(ctx context.Context, commentID, emoji string) error {
+	const query = `mutation($commentID: String!, $emoji: String!) {
+  reactionCreate(input: { commentId: $commentID, emoji: $emoji }) {
+    success
+  }
+}`
+	vars := map[string]any{"commentID": commentID, "emoji": emoji}
+	data, err := c.execute(ctx, query, vars)
+	if err != nil {
+		return fmt.Errorf("reacting to comment: %w", err)
+	}
+
+	var result struct {
+		ReactionCreate struct {
+			Success bool `json:"success"`
+		} `json:"reactionCreate"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return fmt.Errorf("decoding reaction response: %w", err)
+	}
+
+	if !result.ReactionCreate.Success {
+		return fmt.Errorf("linear reported reaction as unsuccessful")
+	}
+	return nil
+}
+
 func isUUID(s string) bool {
 	return uuidRegexp.MatchString(strings.ToLower(s))
 }
