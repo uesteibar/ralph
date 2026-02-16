@@ -765,6 +765,182 @@ func TestNewAction_NoComments_LogsStartButSkipsFinish(t *testing.T) {
 	}
 }
 
+// --- CommentReactor mock ---
+
+type reactCall struct {
+	owner, repo string
+	commentID   int64
+	reaction    string
+}
+
+type mockCommentReactor struct {
+	calls []reactCall
+	err   error
+}
+
+func (m *mockCommentReactor) ReactToReviewComment(_ context.Context, owner, repo string, commentID int64, reaction string) error {
+	m.calls = append(m.calls, reactCall{owner: owner, repo: repo, commentID: commentID, reaction: reaction})
+	return m.err
+}
+
+// --- Reactor tests ---
+
+func TestNewAction_ReactsToTopLevelComments(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, _, _ := defaultMocks(project)
+
+	fetcher.comments = []github.Comment{
+		{ID: 10, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 20, Path: "main.go", Body: "reply", User: "bot", InReplyTo: 10},
+		{ID: 30, Path: "utils.go", Body: "Add tests", User: "reviewer"},
+	}
+	reactor := &mockCommentReactor{}
+	cfg.Reactor = reactor
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should only react to top-level comments (IDs 10 and 30), not reply (ID 20)
+	if len(reactor.calls) != 2 {
+		t.Fatalf("expected 2 reaction calls, got %d", len(reactor.calls))
+	}
+	if reactor.calls[0].commentID != 10 {
+		t.Errorf("expected first reaction on comment 10, got %d", reactor.calls[0].commentID)
+	}
+	if reactor.calls[1].commentID != 30 {
+		t.Errorf("expected second reaction on comment 30, got %d", reactor.calls[1].commentID)
+	}
+	for i, call := range reactor.calls {
+		if call.reaction != "eyes" {
+			t.Errorf("call %d: expected reaction 'eyes', got %q", i, call.reaction)
+		}
+		if call.owner != "owner" {
+			t.Errorf("call %d: expected owner 'owner', got %q", i, call.owner)
+		}
+		if call.repo != "repo" {
+			t.Errorf("call %d: expected repo 'repo', got %q", i, call.repo)
+		}
+	}
+}
+
+func TestNewAction_ReactsBeforeAIInvocation(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+
+	var order []string
+	reactor := &mockCommentReactor{}
+	cfg.Reactor = reactor
+	cfg.Invoker = &mockInvoker{
+		response: "done",
+	}
+
+	// Wrap the invoker to track call order
+	origInvoker := cfg.Invoker
+	cfg.Invoker = &orderTrackingInvoker{
+		inner:    origInvoker,
+		orderLog: &order,
+	}
+	// Wrap the reactor to track call order
+	cfg.Reactor = &orderTrackingReactor{
+		inner:    reactor,
+		orderLog: &order,
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify reactions happen before AI invocation
+	reactIdx := -1
+	invokeIdx := -1
+	for i, entry := range order {
+		if entry == "react" && reactIdx < 0 {
+			reactIdx = i
+		}
+		if entry == "invoke" {
+			invokeIdx = i
+		}
+	}
+	if reactIdx < 0 {
+		t.Fatal("expected at least one reaction call")
+	}
+	if invokeIdx < 0 {
+		t.Fatal("expected AI invocation call")
+	}
+	if reactIdx >= invokeIdx {
+		t.Errorf("expected reactions (index %d) before AI invocation (index %d)", reactIdx, invokeIdx)
+	}
+}
+
+type orderTrackingInvoker struct {
+	inner    EventInvoker
+	orderLog *[]string
+}
+
+func (o *orderTrackingInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+	*o.orderLog = append(*o.orderLog, "invoke")
+	return o.inner.InvokeWithEvents(ctx, prompt, dir, handler)
+}
+
+type orderTrackingReactor struct {
+	inner    CommentReactor
+	orderLog *[]string
+}
+
+func (o *orderTrackingReactor) ReactToReviewComment(ctx context.Context, owner, repo string, commentID int64, reaction string) error {
+	*o.orderLog = append(*o.orderLog, "react")
+	return o.inner.ReactToReviewComment(ctx, owner, repo, commentID, reaction)
+}
+
+func TestNewAction_ReactionError_NonFatal(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+
+	reactor := &mockCommentReactor{err: errors.New("github 500")}
+	cfg.Reactor = reactor
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error despite reaction failure, got: %v", err)
+	}
+
+	// AI should still be invoked despite reaction errors
+	if inv.lastPrompt == "" {
+		t.Fatal("expected AI to be invoked even after reaction errors")
+	}
+}
+
+func TestNewAction_NilReactor_Safe(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+	cfg.Reactor = nil
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error with nil reactor, got: %v", err)
+	}
+
+	// AI should still be invoked
+	if inv.lastPrompt == "" {
+		t.Fatal("expected AI to be invoked with nil reactor")
+	}
+}
+
 func TestIsAddressingFeedback_CorrectState(t *testing.T) {
 	issue := db.Issue{State: "addressing_feedback"}
 	if !IsAddressingFeedback(issue) {

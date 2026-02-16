@@ -358,6 +358,7 @@ func runServe(args []string) error {
 					Git:          gitOps,
 					Projects:     database,
 					ConfigLoad:   &configLoaderAdapter{},
+					Reactor:      firstGitHub,
 					OnBuildEvent: onBuildEvent,
 				}),
 			})
