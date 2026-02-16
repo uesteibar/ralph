@@ -11,12 +11,14 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
 	"github.com/uesteibar/ralph/internal/config"
+	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
-// Invoker invokes an AI model with a prompt and returns the response.
-type Invoker interface {
-	Invoke(ctx context.Context, prompt, dir string) (string, error)
+// EventInvoker invokes an AI model with a prompt and an event handler for
+// streaming tool-use events. Dir sets the working directory for the AI process.
+type EventInvoker interface {
+	InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error)
 }
 
 // CheckRunFetcher fetches check runs for a given ref.
@@ -58,16 +60,18 @@ type ConfigLoader interface {
 
 // Config holds the dependencies for the check-fixing action.
 type Config struct {
-	Invoker     Invoker
-	CheckRuns   CheckRunFetcher
-	Logs        LogFetcher
-	PRs         PRFetcher
-	Comments    PRCommenter
-	Git         GitOps
-	Projects    ProjectGetter
-	ConfigLoad  ConfigLoader
-	OverrideDir string
-	MaxAttempts int
+	Invoker      EventInvoker
+	CheckRuns    CheckRunFetcher
+	Logs         LogFetcher
+	PRs          PRFetcher
+	Comments     PRCommenter
+	Git          GitOps
+	Projects     ProjectGetter
+	ConfigLoad   ConfigLoader
+	EventHandler events.EventHandler
+	OnBuildEvent func(issueID, detail string)
+	OverrideDir  string
+	MaxAttempts  int
 }
 
 // NewAction returns an orchestrator ActionFunc for the fixing_checks -> in_review transition.
@@ -154,7 +158,8 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 
 		// Invoke AI in the workspace worktree
 		treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
-		if _, err := cfg.Invoker.Invoke(ctx, prompt, treePath); err != nil {
+		handler := newBuildEventHandler(database, issue.ID, cfg.EventHandler, cfg.OnBuildEvent)
+		if _, err := cfg.Invoker.InvokeWithEvents(ctx, prompt, treePath, handler); err != nil {
 			return fmt.Errorf("invoking AI: %w", err)
 		}
 
@@ -215,6 +220,55 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		}
 
 		return nil
+	}
+}
+
+// buildEventHandler wraps events from an AI invocation, stores them in the
+// activity log as build_event type, and forwards to an optional upstream handler.
+type buildEventHandler struct {
+	db           *db.DB
+	issueID      string
+	upstream     events.EventHandler
+	onBuildEvent func(issueID, detail string)
+}
+
+func newBuildEventHandler(database *db.DB, issueID string, upstream events.EventHandler, onBuildEvent func(issueID, detail string)) *buildEventHandler {
+	return &buildEventHandler{
+		db:           database,
+		issueID:      issueID,
+		upstream:     upstream,
+		onBuildEvent: onBuildEvent,
+	}
+}
+
+func (h *buildEventHandler) Handle(e events.Event) {
+	detail := formatEventDetail(e)
+	if detail != "" {
+		_ = h.db.LogActivity(h.issueID, "build_event", "", "", detail)
+
+		if h.onBuildEvent != nil {
+			h.onBuildEvent(h.issueID, detail)
+		}
+	}
+
+	if h.upstream != nil {
+		h.upstream.Handle(e)
+	}
+}
+
+// formatEventDetail converts an event to a human-readable string for the
+// activity log. Returns empty string for events that shouldn't be logged.
+func formatEventDetail(e events.Event) string {
+	switch ev := e.(type) {
+	case events.ToolUse:
+		if ev.Detail != "" {
+			return fmt.Sprintf("→ %s %s", ev.Name, ev.Detail)
+		}
+		return fmt.Sprintf("→ %s", ev.Name)
+	case events.InvocationDone:
+		return fmt.Sprintf("Invocation done: %d turns in %dms", ev.NumTurns, ev.DurationMS)
+	default:
+		return ""
 	}
 }
 

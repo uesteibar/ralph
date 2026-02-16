@@ -11,6 +11,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/config"
+	"github.com/uesteibar/ralph/internal/events"
 )
 
 func testDB(t *testing.T) *db.DB {
@@ -68,15 +69,17 @@ func createTestIssue(t *testing.T, d *db.DB, project db.Project, attempts int) d
 // --- Mocks ---
 
 type mockInvoker struct {
-	lastPrompt string
-	lastDir    string
-	response   string
-	err        error
+	lastPrompt  string
+	lastDir     string
+	lastHandler events.EventHandler
+	response    string
+	err         error
 }
 
-func (m *mockInvoker) Invoke(_ context.Context, prompt, dir string) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(_ context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
 	m.lastPrompt = prompt
 	m.lastDir = dir
+	m.lastHandler = handler
 	return m.response, m.err
 }
 
@@ -681,6 +684,109 @@ func TestNewAction_WithoutConfigLoader_SkipsQualityChecks(t *testing.T) {
 
 	if strings.Contains(inv.lastPrompt, "ralph check") {
 		t.Error("expected prompt NOT to contain 'ralph check' when ConfigLoad is nil")
+	}
+}
+
+func TestNewAction_PassesEventHandlerToInvoker(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastHandler == nil {
+		t.Fatal("expected event handler to be passed to InvokeWithEvents")
+	}
+}
+
+func TestNewAction_EventHandlerLogsBuildEvents(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+
+	var callbackIssueID, callbackDetail string
+	cfg.OnBuildEvent = func(issueID, detail string) {
+		callbackIssueID = issueID
+		callbackDetail = detail
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Simulate a tool-use event through the handler
+	inv.lastHandler.Handle(events.ToolUse{Name: "Bash", Detail: "go test ./..."})
+
+	// Verify build_event was logged to the activity table
+	activities, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+
+	found := false
+	for _, a := range activities {
+		if a.EventType == "build_event" && strings.Contains(a.Detail, "Bash") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected build_event activity with tool name 'Bash'")
+	}
+
+	// Verify OnBuildEvent callback was called
+	if callbackIssueID != issue.ID {
+		t.Errorf("expected callback issueID %q, got %q", issue.ID, callbackIssueID)
+	}
+	if !strings.Contains(callbackDetail, "Bash") {
+		t.Errorf("expected callback detail to contain 'Bash', got %q", callbackDetail)
+	}
+}
+
+func TestNewAction_EventHandlerForwardsToUpstream(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+
+	var upstreamReceived []events.Event
+	cfg.EventHandler = &mockEventHandler{handleFn: func(e events.Event) {
+		upstreamReceived = append(upstreamReceived, e)
+	}}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Send event through the handler
+	ev := events.ToolUse{Name: "Read", Detail: "main.go"}
+	inv.lastHandler.Handle(ev)
+
+	if len(upstreamReceived) != 1 {
+		t.Fatalf("expected 1 upstream event, got %d", len(upstreamReceived))
+	}
+	if tu, ok := upstreamReceived[0].(events.ToolUse); !ok || tu.Name != "Read" {
+		t.Error("expected upstream to receive ToolUse event with name 'Read'")
+	}
+}
+
+// mockEventHandler is a test helper for verifying event forwarding.
+type mockEventHandler struct {
+	handleFn func(e events.Event)
+}
+
+func (m *mockEventHandler) Handle(e events.Event) {
+	if m.handleFn != nil {
+		m.handleFn(e)
 	}
 }
 

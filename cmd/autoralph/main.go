@@ -328,6 +328,21 @@ func runServe(args []string) error {
 			}),
 		})
 
+		// OnBuildEvent callback for feedback and checks actions to broadcast
+		// real-time events via WebSocket.
+		onBuildEvent := func(issueID, detail string) {
+			if hub == nil {
+				return
+			}
+			msg, err := server.NewWSMessage(server.MsgBuildEvent, map[string]string{
+				"issue_id": issueID,
+				"detail":   detail,
+			})
+			if err == nil {
+				hub.Broadcast(msg)
+			}
+		}
+
 		// ADDRESSING_FEEDBACK → IN_REVIEW
 		if firstGitHub != nil {
 			sm.Register(orchestrator.Transition{
@@ -335,12 +350,13 @@ func runServe(args []string) error {
 				To:        orchestrator.StateInReview,
 				Condition: feedback.IsAddressingFeedback,
 				Action: feedback.NewAction(feedback.Config{
-					Invoker:    invoker,
-					Comments:   firstGitHub,
-					Replier:    firstGitHub,
-					Git:        gitOps,
-					Projects:   database,
-					ConfigLoad: &configLoaderAdapter{},
+					Invoker:      invoker,
+					Comments:     firstGitHub,
+					Replier:      firstGitHub,
+					Git:          gitOps,
+					Projects:     database,
+					ConfigLoad:   &configLoaderAdapter{},
+					OnBuildEvent: onBuildEvent,
 				}),
 			})
 
@@ -349,14 +365,15 @@ func runServe(args []string) error {
 				From: orchestrator.StateFixingChecks,
 				To:   orchestrator.StateInReview,
 				Action: checks.NewAction(checks.Config{
-					Invoker:    invoker,
-					CheckRuns:  firstGitHub,
-					Logs:       firstGitHub,
-					PRs:        firstGitHub,
-					Comments:   firstGitHub,
-					Git:        &gitOpsAdapter{},
-					Projects:   database,
-					ConfigLoad: &configLoaderAdapter{},
+					Invoker:      invoker,
+					CheckRuns:    firstGitHub,
+					Logs:         firstGitHub,
+					PRs:          firstGitHub,
+					Comments:     firstGitHub,
+					Git:          &gitOpsAdapter{},
+					Projects:     database,
+					ConfigLoad:   &configLoaderAdapter{},
+					OnBuildEvent: onBuildEvent,
 				}),
 			})
 
