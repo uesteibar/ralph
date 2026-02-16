@@ -219,11 +219,22 @@ func TestRenderPRDescription_ContainsAllSections(t *testing.T) {
 		"5 files changed",
 		"Stories Implemented",
 		"imperative mood",
+		"Summary",
+		"Technical Architecture",
+		"Design Decisions",
+		"Testing",
+		"Do not list individual file changes",
+		"background context",
 	}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {
 			t.Errorf("output should contain %q", want)
 		}
+	}
+
+	// The old "## Changes" bullet-list-of-files section should be gone
+	if strings.Contains(out, "Bullet list of key changes, grouped by area") {
+		t.Error("output should not contain the old Changes section instruction")
 	}
 }
 
