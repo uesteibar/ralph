@@ -84,6 +84,10 @@ docs-build:
 docs-serve:
     mdbook serve docs/
 
+# Generate CLI command reference from ralph binary help output
+docs-gen-cli: build
+    go run docs/gen-cli-help.go
+
 # Show help output from the built binary
 help: build
     ./ralph help

@@ -269,3 +269,84 @@ func TestArchitecture_Content(t *testing.T) {
 		}
 	}
 }
+
+func TestCommands_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "commands.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("commands.md not found: %v", err)
+	}
+	content := string(data)
+
+	requiredCommands := []struct {
+		term string
+		desc string
+	}{
+		{"# Commands", "page title"},
+		{"## `init`", "init command"},
+		{"## `validate`", "validate command"},
+		{"## `run`", "run command"},
+		{"## `chat`", "chat command"},
+		{"## `switch`", "switch command"},
+		{"## `rebase`", "rebase command"},
+		{"## `new`", "new command"},
+		{"## `eject`", "eject command"},
+		{"## `tui`", "tui command"},
+		{"## `attach`", "attach command"},
+		{"## `stop`", "stop command"},
+		{"## `done`", "done command"},
+		{"## `status`", "status command"},
+		{"## `overview`", "overview command"},
+		{"## `workspaces`", "workspaces command"},
+		{"## `check`", "check command"},
+		{"## `shell-init`", "shell-init command"},
+	}
+	for _, r := range requiredCommands {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("commands.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestCommands_HasDescriptionsAndFlags(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "commands.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("commands.md not found: %v", err)
+	}
+	content := string(data)
+
+	// Commands with flags should have a Flags section
+	commandsWithFlags := []string{"run", "chat", "status", "attach"}
+	for _, cmd := range commandsWithFlags {
+		section := extractSection(content, cmd)
+		if section == "" {
+			t.Errorf("commands.md missing section for %s", cmd)
+			continue
+		}
+		if !strings.Contains(section, "-") {
+			t.Errorf("commands.md section for %s missing flag entries", cmd)
+		}
+	}
+}
+
+func TestCommands_GeneratorExists(t *testing.T) {
+	path := filepath.Join(docsDir(), "gen-cli-help.go")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Fatal("gen-cli-help.go not found")
+	}
+}
+
+// extractSection returns the content between ## `cmd` and the next ## heading.
+func extractSection(content, cmd string) string {
+	header := "## `" + cmd + "`"
+	_, after, found := strings.Cut(content, header)
+	if !found {
+		return ""
+	}
+	_, next, hasNext := strings.Cut(after, "\n## ")
+	if !hasNext {
+		return after
+	}
+	return after[:len(after)-len(next)-len("\n## ")]
+}
