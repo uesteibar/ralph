@@ -93,10 +93,11 @@ export interface IssueDetail {
   created_at: string
   updated_at: string
   activity: Activity[]
+  build_activity: Activity[]
 }
 
 export function fetchIssue(id: string): Promise<IssueDetail> {
-  return fetchJSON<IssueDetail>(`/issues/${id}?limit=200`)
+  return fetchJSON<IssueDetail>(`/issues/${id}?build_limit=200&timeline_limit=50`)
 }
 
 async function postJSON<T>(path: string): Promise<T> {
