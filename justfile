@@ -76,6 +76,14 @@ clean:
     rm -f ralph autoralph
     go clean ./...
 
+# Build documentation site
+docs-build:
+    mdbook build docs/
+
+# Serve documentation locally with live reload
+docs-serve:
+    mdbook serve docs/
+
 # Show help output from the built binary
 help: build
     ./ralph help

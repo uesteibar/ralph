@@ -1,0 +1,11 @@
+[book]
+title = "Ralph Documentation"
+authors = ["Ralph Contributors"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+additional-js = ["src/mermaid-init.js"]
