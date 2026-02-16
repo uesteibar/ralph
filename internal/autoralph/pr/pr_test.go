@@ -178,7 +178,7 @@ func (m *mockConfigLoader) DefaultBase(localPath, configPath string) (string, er
 }
 
 func defaultConfig() (Config, *mockInvoker, *mockGitPusher, *mockDiffStatter, *mockPRDReader, *mockGitHubPRCreator, *mockLinearPoster, *mockConfigLoader) {
-	inv := &mockInvoker{response: "feat(avatars): add user avatar upload\n\n## Summary\n- Added avatar upload endpoint\n\n## Changes\n- New API endpoint\n\n## Testing\n- Unit tests added"}
+	inv := &mockInvoker{response: "feat(avatars): add user avatar upload\n\n## Summary\nAdds avatar upload support so users can personalize their profiles.\n\n## Technical Architecture\nNew upload endpoint stores images in S3 via the storage service.\n\n## Key Design Decisions\nChose S3 over local storage for scalability.\n\n## Testing\n- Unit tests added"}
 	git := &mockGitPusher{}
 	diff := &mockDiffStatter{stats: " 3 files changed, 120 insertions(+), 5 deletions(-)"}
 	prdReader := &mockPRDReader{info: PRDInfo{

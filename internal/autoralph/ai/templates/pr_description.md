@@ -12,7 +12,9 @@ You are an autonomous software engineering agent writing a pull request descript
 - **{{.ID}}:** {{.Title}}
 {{end}}
 {{end}}
-## Diff Stats
+## Diff Stats (background context only)
+
+The following diff stats are provided as background context for scope awareness. Do not list individual file changes in your output.
 
 ```
 {{.DiffStats}}
@@ -34,10 +36,13 @@ Use this format:
 
 ```
 ## Summary
-<1-3 bullet points describing what changed and why>
+<1-3 sentences describing what this feature does and why it matters>
 
-## Changes
-<Bullet list of key changes, grouped by area>
+## Technical Architecture
+<Explain how the solution is structured, how the key components interact, and where the main changes live in the codebase>
+
+## Key Design Decisions
+<Describe the important choices made during implementation and alternatives that were considered>
 
 ## Testing
 <How the changes were tested — unit tests, integration tests, manual verification>
@@ -51,17 +56,25 @@ Output the title on the first line, followed by a blank line, followed by the bo
 feat(auth): add user login flow
 
 ## Summary
-- Add user login with email/password authentication
-- Include session management with JWT tokens
+Adds user login with email/password authentication and session management,
+enabling users to securely access their accounts.
 
-## Changes
-- Added login API endpoint at POST /api/auth/login
-- Created JWT token generation and validation
-- Added login form component with validation
+## Technical Architecture
+The login flow is implemented as a three-layer stack: a React form component
+submits credentials to a new POST /api/auth/login endpoint, which delegates
+to an AuthService that validates credentials against the user store and issues
+JWT tokens. Session state is managed client-side via an AuthContext provider.
+
+## Key Design Decisions
+- Chose JWT over server-side sessions to keep the API stateless and simplify
+  horizontal scaling. The trade-off is token revocation requires a deny-list.
+- Placed validation logic in a dedicated AuthService rather than the handler
+  to keep the HTTP layer thin and improve testability.
 
 ## Testing
-- Unit tests for auth service and JWT utils
-- Integration test for login flow end-to-end
+- Unit tests for AuthService credential validation and JWT generation
+- Integration test for the full login flow end-to-end
+- Manual verification of error states (wrong password, locked account)
 ```
 
 Output ONLY the title and body. No extra explanation.
