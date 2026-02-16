@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -690,6 +691,148 @@ func TestListRecentActivity_EmptyDB(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("expected empty list, got %d entries", len(entries))
+	}
+}
+
+func TestListBuildActivity_ReturnsOnlyBuildEvents(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+	issue, _ := d.CreateIssue(Issue{ProjectID: p.ID, Title: "Test", State: "queued"})
+
+	d.LogActivity(issue.ID, "state_change", "queued", "building", "Started building")
+	d.LogActivity(issue.ID, "build_event", "", "", "Build line 1")
+	d.LogActivity(issue.ID, "build_event", "", "", "Build line 2")
+	d.LogActivity(issue.ID, "pr_created", "", "", "PR opened")
+	d.LogActivity(issue.ID, "build_event", "", "", "Build line 3")
+
+	entries, err := d.ListBuildActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 build entries, got %d", len(entries))
+	}
+	for _, e := range entries {
+		if e.EventType != "build_event" {
+			t.Errorf("expected build_event, got %q", e.EventType)
+		}
+	}
+	// Newest first
+	if entries[0].Detail != "Build line 3" {
+		t.Errorf("expected newest first, got %q", entries[0].Detail)
+	}
+}
+
+func TestListBuildActivity_Pagination(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+	issue, _ := d.CreateIssue(Issue{ProjectID: p.ID, Title: "Test", State: "queued"})
+
+	for i := range 5 {
+		d.LogActivity(issue.ID, "build_event", "", "", fmt.Sprintf("line %d", i))
+	}
+
+	page1, _ := d.ListBuildActivity(issue.ID, 2, 0)
+	if len(page1) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(page1))
+	}
+
+	page2, _ := d.ListBuildActivity(issue.ID, 2, 2)
+	if len(page2) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(page2))
+	}
+
+	page3, _ := d.ListBuildActivity(issue.ID, 2, 4)
+	if len(page3) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(page3))
+	}
+}
+
+func TestListBuildActivity_EmptyReturnsNil(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+	issue, _ := d.CreateIssue(Issue{ProjectID: p.ID, Title: "Test", State: "queued"})
+
+	// Log only non-build events
+	d.LogActivity(issue.ID, "state_change", "queued", "building", "")
+
+	entries, err := d.ListBuildActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if entries != nil {
+		t.Errorf("expected nil, got %v", entries)
+	}
+}
+
+func TestListTimelineActivity_ReturnsOnlyNonBuildEvents(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+	issue, _ := d.CreateIssue(Issue{ProjectID: p.ID, Title: "Test", State: "queued"})
+
+	d.LogActivity(issue.ID, "state_change", "queued", "building", "Started building")
+	d.LogActivity(issue.ID, "build_event", "", "", "Build line 1")
+	d.LogActivity(issue.ID, "pr_created", "", "", "PR opened")
+	d.LogActivity(issue.ID, "build_event", "", "", "Build line 2")
+	d.LogActivity(issue.ID, "approval_detected", "", "", "Approved")
+
+	entries, err := d.ListTimelineActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 timeline entries, got %d", len(entries))
+	}
+	for _, e := range entries {
+		if e.EventType == "build_event" {
+			t.Errorf("unexpected build_event in timeline results")
+		}
+	}
+	// Newest first
+	if entries[0].Detail != "Approved" {
+		t.Errorf("expected newest first, got %q", entries[0].Detail)
+	}
+}
+
+func TestListTimelineActivity_Pagination(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+	issue, _ := d.CreateIssue(Issue{ProjectID: p.ID, Title: "Test", State: "queued"})
+
+	for i := range 5 {
+		d.LogActivity(issue.ID, "state_change", "a", "b", fmt.Sprintf("change %d", i))
+	}
+
+	page1, _ := d.ListTimelineActivity(issue.ID, 2, 0)
+	if len(page1) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(page1))
+	}
+
+	page2, _ := d.ListTimelineActivity(issue.ID, 2, 2)
+	if len(page2) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(page2))
+	}
+
+	page3, _ := d.ListTimelineActivity(issue.ID, 2, 4)
+	if len(page3) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(page3))
+	}
+}
+
+func TestListTimelineActivity_EmptyReturnsNil(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+	issue, _ := d.CreateIssue(Issue{ProjectID: p.ID, Title: "Test", State: "queued"})
+
+	// Log only build events
+	d.LogActivity(issue.ID, "build_event", "", "", "Build output")
+
+	entries, err := d.ListTimelineActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if entries != nil {
+		t.Errorf("expected nil, got %v", entries)
 	}
 }
 
