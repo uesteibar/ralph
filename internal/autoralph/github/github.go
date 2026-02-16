@@ -349,6 +349,18 @@ func classifyErr(err error) error {
 	return err
 }
 
+// ReactToReviewComment adds an emoji reaction to a pull request review comment.
+func (c *Client) ReactToReviewComment(ctx context.Context, owner, repo string, commentID int64, reaction string) error {
+	_, err := retry.DoVal(ctx, func() (struct{}, error) {
+		_, _, err := c.gh.Reactions.CreatePullRequestCommentReaction(ctx, owner, repo, commentID, reaction)
+		if err != nil {
+			return struct{}{}, classifyErr(fmt.Errorf("reacting to review comment: %w", err))
+		}
+		return struct{}{}, nil
+	}, c.retryOpts()...)
+	return err
+}
+
 // FetchCheckRuns returns all check runs for the given git ref (SHA, branch, or tag).
 func (c *Client) FetchCheckRuns(ctx context.Context, owner, repo, ref string) ([]CheckRun, error) {
 	return retry.DoVal(ctx, func() ([]CheckRun, error) {

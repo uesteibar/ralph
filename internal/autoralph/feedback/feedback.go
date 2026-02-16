@@ -3,6 +3,7 @@ package feedback
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -31,6 +32,11 @@ type ReviewReplier interface {
 	PostReviewReply(ctx context.Context, owner, repo string, prNumber int, commentID int64, body string) (github.Comment, error)
 }
 
+// CommentReactor adds emoji reactions to GitHub PR review comments.
+type CommentReactor interface {
+	ReactToReviewComment(ctx context.Context, owner, repo string, commentID int64, reaction string) error
+}
+
 // GitOps abstracts git operations for the feedback action.
 type GitOps interface {
 	Commit(ctx context.Context, workDir, message string) error
@@ -56,6 +62,7 @@ type Config struct {
 	Git          GitOps
 	Projects     ProjectGetter
 	ConfigLoad   ConfigLoader
+	Reactor      CommentReactor
 	EventHandler events.EventHandler
 	OnBuildEvent func(issueID, detail string)
 	OverrideDir  string
@@ -102,6 +109,15 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		topLevel := filterTopLevel(comments)
 		if len(topLevel) == 0 {
 			return nil
+		}
+
+		// React 👀 to each top-level comment before invoking AI.
+		if cfg.Reactor != nil {
+			for _, c := range topLevel {
+				if err := cfg.Reactor.ReactToReviewComment(ctx, project.GithubOwner, project.GithubRepo, c.ID, "eyes"); err != nil {
+					slog.Warn("reacting to review comment", "comment_id", c.ID, "error", err)
+				}
+			}
 		}
 
 		// Build AI prompt data from review comments

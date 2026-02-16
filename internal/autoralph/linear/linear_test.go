@@ -571,6 +571,96 @@ func TestClient_ResolveProjectID_NotFound(t *testing.T) {
 	}
 }
 
+func TestClient_ReactToComment_Success(t *testing.T) {
+	srv := mockLinear(t, func(query string, vars map[string]any) (any, []graphqlError) {
+		if vars["commentID"] != "comment-1" || vars["emoji"] != "👀" {
+			t.Errorf("unexpected variables: %v", vars)
+		}
+		if !contains(query, "reactionCreate") {
+			t.Errorf("expected reactionCreate mutation, got:\n%s", query)
+		}
+		return map[string]any{
+			"reactionCreate": map[string]any{
+				"success": true,
+			},
+		}, nil
+	})
+	defer srv.Close()
+
+	c := New("test-key", WithEndpoint(srv.URL))
+	err := c.ReactToComment(context.Background(), "comment-1", "👀")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_ReactToComment_GraphQLError(t *testing.T) {
+	srv := mockLinear(t, func(query string, vars map[string]any) (any, []graphqlError) {
+		return nil, []graphqlError{
+			{Message: "Comment not found"},
+		}
+	})
+	defer srv.Close()
+
+	c := New("test-key", WithEndpoint(srv.URL))
+	err := c.ReactToComment(context.Background(), "bad-id", "👀")
+	if err == nil {
+		t.Fatal("expected error for GraphQL error")
+	}
+	if !contains(err.Error(), "Comment not found") {
+		t.Errorf("expected 'Comment not found' in error, got: %s", err.Error())
+	}
+}
+
+func TestClient_ReactToComment_HTTPServerError_Retries(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("transient error"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"reactionCreate": map[string]any{
+					"success": true,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := New("test-key", WithEndpoint(srv.URL), WithRetryBackoff(time.Millisecond, time.Millisecond))
+	err := c.ReactToComment(context.Background(), "comment-1", "👀")
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("expected 3 calls (with retries), got %d", calls)
+	}
+}
+
+func TestClient_ReactToComment_HTTP4xx_NoPermanentRetry(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error": "bad request"}`))
+	}))
+	defer srv.Close()
+
+	c := New("test-key", WithEndpoint(srv.URL), WithRetryBackoff(time.Millisecond, time.Millisecond))
+	err := c.ReactToComment(context.Background(), "comment-1", "👀")
+	if err == nil {
+		t.Fatal("expected error for HTTP 400")
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 call (no retries for 4xx), got %d", calls)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

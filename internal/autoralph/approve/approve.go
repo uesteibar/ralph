@@ -3,6 +3,7 @@ package approve
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -42,12 +43,18 @@ type GitPuller interface {
 	PullDefaultBase(ctx context.Context, repoPath, ralphConfigPath string) error
 }
 
+// CommentReactor adds emoji reactions to Linear comments.
+type CommentReactor interface {
+	ReactToComment(ctx context.Context, commentID, emoji string) error
+}
+
 // Config holds the dependencies for the approve transition actions.
 type Config struct {
 	Invoker     Invoker
 	Comments    CommentClient
 	Projects    ProjectGetter
 	GitPuller   GitPuller
+	Reactor     CommentReactor
 	OverrideDir string
 }
 
@@ -119,10 +126,19 @@ func NewApprovalAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		// Find who approved.
 		newComments := commentsAfter(cs, issue.LastCommentID)
 		approver := ""
+		var approvalCommentID string
 		for _, c := range newComments {
 			if containsApproval(c.Body) {
 				approver = c.UserName
+				approvalCommentID = c.ID
 				break
+			}
+		}
+
+		// React to the approval comment before processing.
+		if cfg.Reactor != nil && approvalCommentID != "" {
+			if err := cfg.Reactor.ReactToComment(context.Background(), approvalCommentID, "👀"); err != nil {
+				slog.Warn("failed to react to approval comment", "comment_id", approvalCommentID, "error", err)
 			}
 		}
 
@@ -172,6 +188,15 @@ func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error 
 		}
 
 		newComments := commentsAfter(cs, issue.LastCommentID)
+
+		// React 👀 to each new comment before invoking AI.
+		if cfg.Reactor != nil {
+			for _, c := range newComments {
+				if err := cfg.Reactor.ReactToComment(context.Background(), c.ID, "👀"); err != nil {
+					slog.Warn("failed to react to comment", "comment_id", c.ID, "error", err)
+				}
+			}
+		}
 
 		// Log that we detected a reply.
 		replyAuthor := ""
