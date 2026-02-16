@@ -298,6 +298,7 @@ func runServe(args []string) error {
 			Action: approve.NewApprovalAction(approve.Config{
 				Comments: firstLinear,
 				Projects: database,
+				Reactor:  firstLinear,
 			}),
 		})
 
@@ -311,6 +312,7 @@ func runServe(args []string) error {
 				Comments:  firstLinear,
 				Projects:  database,
 				GitPuller: puller,
+				Reactor:   firstLinear,
 			}),
 		})
 

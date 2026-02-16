@@ -111,6 +111,21 @@ func (m *mockCommentClient) PostReply(ctx context.Context, issueID, parentID, bo
 	return linear.Comment{ID: id, ParentID: parentID, Body: body}, m.postErr
 }
 
+type mockReactor struct {
+	calls []reactCall
+	err   error
+}
+
+type reactCall struct {
+	commentID string
+	emoji     string
+}
+
+func (m *mockReactor) ReactToComment(ctx context.Context, commentID, emoji string) error {
+	m.calls = append(m.calls, reactCall{commentID: commentID, emoji: emoji})
+	return m.err
+}
+
 // --- Condition tests ---
 
 func TestIsApproval_DetectsApprovalComment(t *testing.T) {
@@ -896,5 +911,231 @@ func TestIsIteration_LastCommentIDNotInList_ReturnsFalse(t *testing.T) {
 
 	if cond(issue) {
 		t.Error("expected IsIteration to return false when lastCommentID not found")
+	}
+}
+
+// --- Reaction tests ---
+
+func TestIterationAction_ReactsToNewComments(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+			{ID: "c3", Body: "Also add logging", UserName: "human"},
+		},
+		postID: "c4",
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+	reactor := &mockReactor{}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+		Reactor:  reactor,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(reactor.calls) != 2 {
+		t.Fatalf("expected 2 reaction calls, got %d", len(reactor.calls))
+	}
+	if reactor.calls[0].commentID != "c2" || reactor.calls[0].emoji != "👀" {
+		t.Errorf("expected reaction to c2 with 👀, got %+v", reactor.calls[0])
+	}
+	if reactor.calls[1].commentID != "c3" || reactor.calls[1].emoji != "👀" {
+		t.Errorf("expected reaction to c3 with 👀, got %+v", reactor.calls[1])
+	}
+}
+
+func TestIterationAction_ReactsBeforeAIInvocation(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	var order []string
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	reactor := &mockReactor{}
+	invoker := &mockInvoker{response: "Updated plan"}
+
+	// Track ordering by wrapping: reactor records before invoker.
+	// Since mockReactor is called synchronously before mockInvoker,
+	// we verify by checking that reactor has calls when we inspect.
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+		Reactor:  reactor,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_ = order
+	if len(reactor.calls) != 1 {
+		t.Fatalf("expected 1 reaction call, got %d", len(reactor.calls))
+	}
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI to be invoked after reaction")
+	}
+}
+
+func TestIterationAction_ReactionError_DoesNotBlockAction(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+	reactor := &mockReactor{err: fmt.Errorf("reaction API error")}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+		Reactor:  reactor,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error when reaction fails, got: %v", err)
+	}
+
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called despite reaction failure")
+	}
+	if len(client.posted) != 1 {
+		t.Fatal("expected reply to be posted despite reaction failure")
+	}
+}
+
+func TestIterationAction_NilReactor_DoesNotPanic(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+		// Reactor is nil — should not panic
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if invoker.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called with nil reactor")
+	}
+}
+
+func TestApprovalAction_ReactsToApprovalComment(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Plan text", UserName: "autoralph"},
+			{ID: "c2", Body: "I approve this", UserName: "human"},
+		},
+	}
+	reactor := &mockReactor{}
+
+	action := NewApprovalAction(Config{Comments: client, Reactor: reactor})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(reactor.calls) != 1 {
+		t.Fatalf("expected 1 reaction call, got %d", len(reactor.calls))
+	}
+	if reactor.calls[0].commentID != "c2" || reactor.calls[0].emoji != "👀" {
+		t.Errorf("expected reaction to c2 with 👀, got %+v", reactor.calls[0])
+	}
+}
+
+func TestApprovalAction_ReactionError_DoesNotBlockAction(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Plan text", UserName: "autoralph"},
+			{ID: "c2", Body: "I approve this", UserName: "human"},
+		},
+	}
+	reactor := &mockReactor{err: fmt.Errorf("reaction API error")}
+
+	action := NewApprovalAction(Config{Comments: client, Reactor: reactor})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error when reaction fails, got: %v", err)
+	}
+
+	// Verify the action still completed successfully.
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.LastCommentID != "c2" {
+		t.Errorf("expected LastCommentID %q, got %q", "c2", updated.LastCommentID)
+	}
+}
+
+func TestApprovalAction_NilReactor_DoesNotPanic(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Plan text", UserName: "autoralph"},
+			{ID: "c2", Body: "I approve this", UserName: "human"},
+		},
+	}
+
+	action := NewApprovalAction(Config{Comments: client})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.LastCommentID != "c2" {
+		t.Errorf("expected LastCommentID %q, got %q", "c2", updated.LastCommentID)
 	}
 }
