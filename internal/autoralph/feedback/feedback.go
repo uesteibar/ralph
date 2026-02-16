@@ -78,6 +78,10 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("loading project: %w", err)
 		}
 
+		if err := database.LogActivity(issue.ID, "feedback_start", "", "", fmt.Sprintf("Addressing feedback for %s", issue.Identifier)); err != nil {
+			return fmt.Errorf("logging activity: %w", err)
+		}
+
 		// Load quality checks from ralph.yaml if a ConfigLoader is provided.
 		var qualityChecks []string
 		if cfg.ConfigLoad != nil {
@@ -165,13 +169,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		if replyRef != "" {
 			detail += " in " + replyRef
 		}
-		if err := database.LogActivity(
-			issue.ID,
-			"feedback_addressed",
-			"",
-			"",
-			detail,
-		); err != nil {
+		if err := database.LogActivity(issue.ID, "feedback_finish", "", "", detail); err != nil {
 			return fmt.Errorf("logging activity: %w", err)
 		}
 

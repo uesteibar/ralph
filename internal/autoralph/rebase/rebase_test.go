@@ -343,7 +343,7 @@ func TestNewAction_Success_RebasesAndForcePushes(t *testing.T) {
 	}
 }
 
-func TestNewAction_LogsAutoRebaseActivity(t *testing.T) {
+func TestNewAction_LogsRebaseStartAndFinish(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
 	issue := createTestIssue(t, d, project)
@@ -366,22 +366,31 @@ func TestNewAction_LogsAutoRebaseActivity(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	activities, err := d.ListActivity(issue.ID, 10, 0)
+	activities, err := d.ListActivity(issue.ID, 20, 0)
 	if err != nil {
 		t.Fatalf("listing activities: %v", err)
 	}
 
-	found := false
+	var foundStart, foundFinish bool
 	for _, a := range activities {
-		if a.EventType == "auto_rebase" {
-			found = true
+		if a.EventType == "rebase_start" {
+			foundStart = true
+			if !strings.Contains(a.Detail, "PROJ-42") {
+				t.Errorf("expected rebase_start detail to contain issue identifier, got: %s", a.Detail)
+			}
+		}
+		if a.EventType == "rebase_finish" {
+			foundFinish = true
 			if !strings.Contains(a.Detail, "main") {
-				t.Errorf("expected detail to mention base branch, got: %s", a.Detail)
+				t.Errorf("expected rebase_finish detail to mention base branch, got: %s", a.Detail)
 			}
 		}
 	}
-	if !found {
-		t.Error("expected auto_rebase activity to be logged")
+	if !foundStart {
+		t.Error("expected rebase_start activity")
+	}
+	if !foundFinish {
+		t.Error("expected rebase_finish activity")
 	}
 }
 

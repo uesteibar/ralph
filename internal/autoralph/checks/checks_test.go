@@ -301,7 +301,7 @@ func TestNewAction_IncrementsCheckFixAttempts(t *testing.T) {
 	}
 }
 
-func TestNewAction_LogsChecksFixingActivity(t *testing.T) {
+func TestNewAction_LogsChecksStartAndFinish(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
 	issue := createTestIssue(t, d, project, 0)
@@ -313,29 +313,31 @@ func TestNewAction_LogsChecksFixingActivity(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	activities, err := d.ListActivity(issue.ID, 10, 0)
+	activities, err := d.ListActivity(issue.ID, 20, 0)
 	if err != nil {
 		t.Fatalf("listing activities: %v", err)
 	}
 
-	foundFixing := false
-	foundFixed := false
+	var foundStart, foundFinish bool
 	for _, a := range activities {
-		if a.EventType == "checks_fixing" {
-			foundFixing = true
+		if a.EventType == "checks_start" {
+			foundStart = true
+			if !strings.Contains(a.Detail, "PROJ-42") {
+				t.Errorf("expected checks_start detail to contain issue identifier, got: %s", a.Detail)
+			}
 		}
-		if a.EventType == "checks_fixed" {
-			foundFixed = true
+		if a.EventType == "checks_finish" {
+			foundFinish = true
 			if !strings.Contains(a.Detail, "test") {
-				t.Errorf("expected checks_fixed detail to contain check name, got: %s", a.Detail)
+				t.Errorf("expected checks_finish detail to contain check name, got: %s", a.Detail)
 			}
 		}
 	}
-	if !foundFixing {
-		t.Error("expected checks_fixing activity")
+	if !foundStart {
+		t.Error("expected checks_start activity")
 	}
-	if !foundFixed {
-		t.Error("expected checks_fixed activity")
+	if !foundFinish {
+		t.Error("expected checks_finish activity")
 	}
 }
 

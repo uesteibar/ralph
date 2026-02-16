@@ -103,8 +103,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			qualityChecks = ralphCfg.QualityChecks
 		}
 
-		// Log start activity
-		if err := database.LogActivity(issue.ID, "checks_fixing", "", "", "Starting check fix attempt"); err != nil {
+		if err := database.LogActivity(issue.ID, "checks_start", "", "", fmt.Sprintf("Fixing checks for %s", issue.Identifier)); err != nil {
 			return fmt.Errorf("logging activity: %w", err)
 		}
 
@@ -210,12 +209,11 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return nil
 		}
 
-		// Log success
 		detail := fmt.Sprintf("Fixed checks: %s", strings.Join(checkNames, ", "))
 		if !committed {
 			detail = fmt.Sprintf("No changes for checks: %s", strings.Join(checkNames, ", "))
 		}
-		if err := database.LogActivity(issue.ID, "checks_fixed", "", "", detail); err != nil {
+		if err := database.LogActivity(issue.ID, "checks_finish", "", "", detail); err != nil {
 			return fmt.Errorf("logging activity: %w", err)
 		}
 

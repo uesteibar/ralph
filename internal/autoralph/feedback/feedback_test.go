@@ -298,7 +298,7 @@ func TestNewAction_LogsActivity(t *testing.T) {
 
 	found := false
 	for _, a := range activities {
-		if a.EventType == "feedback_addressed" {
+		if a.EventType == "feedback_finish" {
 			found = true
 			if !strings.Contains(a.Detail, "abc1234") {
 				t.Errorf("expected detail to contain commit SHA, got: %s", a.Detail)
@@ -309,7 +309,7 @@ func TestNewAction_LogsActivity(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("expected feedback_addressed activity")
+		t.Error("expected feedback_finish activity")
 	}
 }
 
@@ -687,6 +687,81 @@ type mockEventHandler struct {
 func (m *mockEventHandler) Handle(e events.Event) {
 	if m.handleFn != nil {
 		m.handleFn(e)
+	}
+}
+
+func TestNewAction_LogsFeedbackStartAndFinish(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	activities, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+
+	var foundStart, foundFinish bool
+	for _, a := range activities {
+		if a.EventType == "feedback_start" {
+			foundStart = true
+			if !strings.Contains(a.Detail, "PROJ-42") {
+				t.Errorf("expected feedback_start detail to contain issue identifier, got: %s", a.Detail)
+			}
+		}
+		if a.EventType == "feedback_finish" {
+			foundFinish = true
+			if !strings.Contains(a.Detail, "2 comment") {
+				t.Errorf("expected feedback_finish detail to mention comment count, got: %s", a.Detail)
+			}
+		}
+	}
+	if !foundStart {
+		t.Error("expected feedback_start activity")
+	}
+	if !foundFinish {
+		t.Error("expected feedback_finish activity")
+	}
+}
+
+func TestNewAction_NoComments_LogsStartButSkipsFinish(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	activities, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+
+	var foundStart, foundFinish bool
+	for _, a := range activities {
+		if a.EventType == "feedback_start" {
+			foundStart = true
+		}
+		if a.EventType == "feedback_finish" {
+			foundFinish = true
+		}
+	}
+	if !foundStart {
+		t.Error("expected feedback_start activity even with no comments")
+	}
+	if foundFinish {
+		t.Error("expected no feedback_finish activity when no comments")
 	}
 }
 
