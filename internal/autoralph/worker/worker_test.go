@@ -1026,3 +1026,262 @@ func (r *commitDuringLoopRunner) Run(ctx context.Context, cfg LoopConfig) error 
 	}
 	return nil
 }
+
+// --- DispatchAction tests ---
+
+func TestDispatcher_DispatchAction_RunsActionAndCleansUp(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "addressing_feedback")
+
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 2,
+		LoopRunner: runner,
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	called := false
+	err := disp.DispatchAction(ctx, issue, func(ctx context.Context) error {
+		called = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	disp.Wait()
+
+	if !called {
+		t.Error("expected action function to be called")
+	}
+	if disp.IsRunning(issue.ID) {
+		t.Error("expected issue to not be running after action completes")
+	}
+	if disp.ActiveCount() != 0 {
+		t.Errorf("expected 0 active workers after completion, got %d", disp.ActiveCount())
+	}
+}
+
+func TestDispatcher_DispatchAction_ReusesExistingSemaphore(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue1 := createTestIssue(t, d, project, "building")
+
+	issue2, err := d.CreateIssue(db.Issue{
+		ProjectID:     project.ID,
+		LinearIssueID: "lin-action",
+		Identifier:    "PROJ-99",
+		Title:         "Feedback issue",
+		State:         "addressing_feedback",
+		WorkspaceName: "proj-99",
+		BranchName:    "autoralph/proj-99",
+	})
+	if err != nil {
+		t.Fatalf("creating issue: %v", err)
+	}
+
+	runner := &mockLoopRunner{blockCtx: true}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Fill the single worker slot with a build
+	if err := disp.Dispatch(ctx, issue1); err != nil {
+		t.Fatalf("dispatch build: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// DispatchAction should fail because the semaphore is full
+	err = disp.DispatchAction(ctx, issue2, func(ctx context.Context) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected error when worker limit exceeded")
+	}
+	if !strings.Contains(err.Error(), "no worker slot") {
+		t.Errorf("expected 'no worker slot' error, got: %v", err)
+	}
+
+	cancel()
+	disp.Wait()
+}
+
+func TestDispatcher_DispatchAction_PreventsConurrentActionsOnSameIssue(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "addressing_feedback")
+
+	blockCh := make(chan struct{})
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 2,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := disp.DispatchAction(ctx, issue, func(ctx context.Context) error {
+		<-blockCh
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("first dispatch: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Second dispatch of the same issue should fail
+	err = disp.DispatchAction(ctx, issue, func(ctx context.Context) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected error for duplicate issue")
+	}
+	if !strings.Contains(err.Error(), "already running") {
+		t.Errorf("expected 'already running' error, got: %v", err)
+	}
+
+	close(blockCh)
+	disp.Wait()
+}
+
+func TestDispatcher_DispatchAction_FailureLogsActivityAndSetsError(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "addressing_feedback")
+
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := disp.DispatchAction(ctx, issue, func(ctx context.Context) error {
+		return errors.New("feedback action failed")
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	disp.Wait()
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != "failed" {
+		t.Errorf("expected state %q, got %q", "failed", updated.State)
+	}
+	if !strings.Contains(updated.ErrorMessage, "feedback action failed") {
+		t.Errorf("expected error message to contain 'feedback action failed', got %q", updated.ErrorMessage)
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.EventType == "action_failed" && strings.Contains(e.Detail, "feedback action failed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected action_failed activity entry with error detail")
+	}
+}
+
+func TestDispatcher_DispatchAction_ContextCancellation_NoFailure(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "addressing_feedback")
+
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	err := disp.DispatchAction(ctx, issue, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	disp.Wait()
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// Should NOT transition to failed on context cancellation
+	if updated.State == "failed" {
+		t.Error("expected issue NOT to transition to failed on context cancellation")
+	}
+}
+
+func TestDispatcher_DispatchAction_IsRunningDuringExecution(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "addressing_feedback")
+
+	blockCh := make(chan struct{})
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := disp.DispatchAction(ctx, issue, func(ctx context.Context) error {
+		<-blockCh
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if !disp.IsRunning(issue.ID) {
+		t.Error("expected issue to be running during action execution")
+	}
+	if disp.ActiveCount() != 1 {
+		t.Errorf("expected 1 active worker, got %d", disp.ActiveCount())
+	}
+
+	close(blockCh)
+	disp.Wait()
+
+	if disp.IsRunning(issue.ID) {
+		t.Error("expected issue to not be running after completion")
+	}
+}
