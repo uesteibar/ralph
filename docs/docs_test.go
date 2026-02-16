@@ -142,3 +142,130 @@ func TestMermaidInit_Exists(t *testing.T) {
 		t.Error("mermaid-init.js does not reference mermaid")
 	}
 }
+
+func TestGettingStarted_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "getting-started.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("getting-started.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"Prerequisites", "prerequisites section"},
+		{"Installation", "installation section"},
+		{"Quick Start", "quick-start workflow section"},
+		{"Go 1.25", "Go version prerequisite"},
+		{"Claude Code", "Claude Code prerequisite"},
+		{"ralph init", "init command in quick start"},
+		{"ralph new", "new command in quick start"},
+		{"ralph run", "run command in quick start"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("getting-started.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestWorkflow_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "workflow.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("workflow.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"ralph init", "init step"},
+		{"ralph new", "new step"},
+		{"ralph run", "run step"},
+		{"ralph done", "done step"},
+		{"mermaid", "Mermaid diagram"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("workflow.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestConfiguration_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "configuration.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("configuration.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"ralph.yaml", "ralph.yaml reference"},
+		{"PRD", "PRD format section"},
+		{"Prompt", "prompt customization section"},
+		{"quality_checks", "quality checks config"},
+		{"copy_to_worktree", "copy_to_worktree config"},
+		{"ralph eject", "eject command for prompts"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("configuration.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestSetup_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "setup.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("setup.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"ralph init", "init command"},
+		{"Shell Integration", "shell integration section"},
+		{"shell-init", "shell-init command"},
+		{".ralph/", "ralph directory structure"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("setup.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestArchitecture_Content(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "architecture.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("architecture.md not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"Execution Loop", "execution loop section"},
+		{"Workspace", "workspace isolation section"},
+		{"mermaid", "Mermaid diagram"},
+		{"worktree", "git worktree concept"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("architecture.md missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
