@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -239,7 +240,7 @@ func TestAPI_GetIssue_ActivityPagination(t *testing.T) {
 		d.LogActivity(iss.ID, "state_change", "queued", "building", "transition")
 	}
 
-	resp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID+"?limit=2&offset=0"))
+	resp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID+"?timeline_limit=2&timeline_offset=0"))
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
@@ -249,7 +250,7 @@ func TestAPI_GetIssue_ActivityPagination(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&result)
 	activity := result["activity"].([]any)
 	if len(activity) != 2 {
-		t.Fatalf("expected 2 activity entries with limit=2, got %d", len(activity))
+		t.Fatalf("expected 2 activity entries with timeline_limit=2, got %d", len(activity))
 	}
 }
 
@@ -711,5 +712,175 @@ func TestAPI_DeleteIssue_NotFound(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_GetIssue_SplitActivityResponse(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue", State: "building"})
+
+	// Log timeline events (state_change, pr_created, etc.)
+	d.LogActivity(iss.ID, "state_change", "queued", "refining", "auto transition")
+	d.LogActivity(iss.ID, "state_change", "refining", "building", "auto transition")
+	d.LogActivity(iss.ID, "pr_created", "", "", "PR #42 opened")
+
+	// Log build events
+	d.LogActivity(iss.ID, "build_event", "", "", "Iteration 1/3 started")
+	d.LogActivity(iss.ID, "build_event", "", "", "Story US-001: Add feature")
+	d.LogActivity(iss.ID, "build_event", "", "", "Building code...")
+
+	resp, err := http.Get(apiURL(srv, "/api/issues/" + iss.ID))
+	if err != nil {
+		t.Fatalf("GET /api/issues/:id failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	// Verify activity contains only timeline events (no build_event)
+	activity, ok := result["activity"].([]any)
+	if !ok {
+		t.Fatalf("expected activity array, got %T", result["activity"])
+	}
+	if len(activity) != 3 {
+		t.Fatalf("expected 3 timeline events in activity, got %d", len(activity))
+	}
+	for _, a := range activity {
+		entry := a.(map[string]any)
+		if entry["event_type"] == "build_event" {
+			t.Fatal("activity array should not contain build_event entries")
+		}
+	}
+
+	// Verify build_activity contains only build events
+	buildActivity, ok := result["build_activity"].([]any)
+	if !ok {
+		t.Fatalf("expected build_activity array, got %T", result["build_activity"])
+	}
+	if len(buildActivity) != 3 {
+		t.Fatalf("expected 3 build events in build_activity, got %d", len(buildActivity))
+	}
+	for _, a := range buildActivity {
+		entry := a.(map[string]any)
+		if entry["event_type"] != "build_event" {
+			t.Fatalf("build_activity should only contain build_event, got %v", entry["event_type"])
+		}
+	}
+}
+
+func TestAPI_GetIssue_ParseCurrentStoryFromBuildActivity(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue", State: "building"})
+
+	// Log build events with story and iteration info
+	d.LogActivity(iss.ID, "build_event", "", "", "Story US-003: Implement auth")
+	d.LogActivity(iss.ID, "build_event", "", "", "Iteration 2/5 started")
+
+	// Log timeline events — these should NOT be used for story/iteration parsing
+	d.LogActivity(iss.ID, "state_change", "queued", "building", "auto")
+
+	resp, err := http.Get(apiURL(srv, "/api/issues/" + iss.ID))
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if result["current_story"] != "US-003" {
+		t.Fatalf("expected current_story 'US-003', got %v", result["current_story"])
+	}
+	iteration := int(result["iteration"].(float64))
+	if iteration != 2 {
+		t.Fatalf("expected iteration 2, got %d", iteration)
+	}
+	maxIterations := int(result["max_iterations"].(float64))
+	if maxIterations != 5 {
+		t.Fatalf("expected max_iterations 5, got %d", maxIterations)
+	}
+}
+
+func TestAPI_GetIssue_DefaultAndCustomLimitsOffsets(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue", State: "building"})
+
+	// Create 10 timeline events
+	for i := range 10 {
+		d.LogActivity(iss.ID, "state_change", "a", "b", fmt.Sprintf("timeline-%d", i))
+	}
+	// Create 20 build events
+	for i := range 20 {
+		d.LogActivity(iss.ID, "build_event", "", "", fmt.Sprintf("build-%d", i))
+	}
+
+	// Test custom limits and offsets
+	resp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID+"?build_limit=5&timeline_limit=3&offset=2&timeline_offset=1"))
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	buildActivity := result["build_activity"].([]any)
+	if len(buildActivity) != 5 {
+		t.Fatalf("expected 5 build_activity entries with build_limit=5, got %d", len(buildActivity))
+	}
+
+	activity := result["activity"].([]any)
+	if len(activity) != 3 {
+		t.Fatalf("expected 3 activity entries with timeline_limit=3, got %d", len(activity))
+	}
+}
+
+func TestAPI_GetIssue_DefaultLimits(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue", State: "building"})
+
+	// Create 60 timeline events (more than default 50)
+	for i := range 60 {
+		d.LogActivity(iss.ID, "state_change", "a", "b", fmt.Sprintf("timeline-%d", i))
+	}
+	// Create 250 build events (more than default 200)
+	for i := range 250 {
+		d.LogActivity(iss.ID, "build_event", "", "", fmt.Sprintf("build-%d", i))
+	}
+
+	resp, err := http.Get(apiURL(srv, "/api/issues/" + iss.ID))
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	buildActivity := result["build_activity"].([]any)
+	if len(buildActivity) != 200 {
+		t.Fatalf("expected 200 build_activity entries (default build_limit), got %d", len(buildActivity))
+	}
+
+	activity := result["activity"].([]any)
+	if len(activity) != 50 {
+		t.Fatalf("expected 50 activity entries (default timeline_limit), got %d", len(activity))
 	}
 }

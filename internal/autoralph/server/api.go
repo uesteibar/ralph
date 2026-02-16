@@ -216,22 +216,40 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		projectName = proj.Name
 	}
 
-	limit := 20
-	offset := 0
-	if l := r.URL.Query().Get("limit"); l != "" {
+	buildLimit := 200
+	buildOffset := 0
+	timelineLimit := 50
+	timelineOffset := 0
+	if l := r.URL.Query().Get("build_limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
+			buildLimit = parsed
 		}
 	}
 	if o := r.URL.Query().Get("offset"); o != "" {
 		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
-			offset = parsed
+			buildOffset = parsed
+		}
+	}
+	if l := r.URL.Query().Get("timeline_limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			timelineLimit = parsed
+		}
+	}
+	if o := r.URL.Query().Get("timeline_offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+			timelineOffset = parsed
 		}
 	}
 
-	activity, err := h.db.ListActivity(issue.ID, limit, offset)
+	buildActivity, err := h.db.ListBuildActivity(issue.ID, buildLimit, buildOffset)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list activity")
+		writeError(w, http.StatusInternalServerError, "failed to list build activity")
+		return
+	}
+
+	timelineActivity, err := h.db.ListTimelineActivity(issue.ID, timelineLimit, timelineOffset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list timeline activity")
 		return
 	}
 
@@ -268,19 +286,26 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		CreatedAt        string                    `json:"created_at"`
 		UpdatedAt        string                    `json:"updated_at"`
 		Activity         []activityResponse         `json:"activity"`
+		BuildActivityOut []activityResponse         `json:"build_activity"`
 	}
 
-	activityResult := make([]activityResponse, len(activity))
-	for i, a := range activity {
-		activityResult[i] = activityResponse{
-			ID:        a.ID,
-			EventType: a.EventType,
-			FromState: a.FromState,
-			ToState:   a.ToState,
-			Detail:    a.Detail,
-			CreatedAt: a.CreatedAt.Format(time.RFC3339),
+	toResponse := func(entries []db.ActivityEntry) []activityResponse {
+		result := make([]activityResponse, len(entries))
+		for i, a := range entries {
+			result[i] = activityResponse{
+				ID:        a.ID,
+				EventType: a.EventType,
+				FromState: a.FromState,
+				ToState:   a.ToState,
+				Detail:    a.Detail,
+				CreatedAt: a.CreatedAt.Format(time.RFC3339),
+			}
 		}
+		return result
 	}
+
+	activityResult := toResponse(timelineActivity)
+	buildActivityResult := toResponse(buildActivity)
 
 	var buildActive bool
 	if h.buildChecker != nil {
@@ -307,8 +332,8 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		integrationTests = []integrationTestResponse{}
 	}
 
-	currentStory := parseCurrentStory(activity)
-	iteration, maxIterations := parseIteration(activity)
+	currentStory := parseCurrentStory(buildActivity)
+	iteration, maxIterations := parseIteration(buildActivity)
 
 	resp := issueDetailResponse{
 		ID:               issue.ID,
@@ -334,6 +359,7 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:        issue.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:        issue.UpdatedAt.Format(time.RFC3339),
 		Activity:         activityResult,
+		BuildActivityOut: buildActivityResult,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
