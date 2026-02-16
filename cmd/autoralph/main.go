@@ -567,6 +567,15 @@ func runOrchestratorLoop(
 					continue
 				}
 
+				// Async transitions: dispatch via worker instead of blocking.
+				if isAsyncTransition(tr) {
+					if dispatcher.IsRunning(issue.ID) {
+						continue
+					}
+					dispatchAsync(ctx, tr, issue, database, dispatcher, hub, logger)
+					continue
+				}
+
 				logger.Info("executing transition",
 					"issue", issue.Identifier,
 					"from", tr.From,
@@ -634,6 +643,89 @@ func runOrchestratorLoop(
 				}
 			}
 		}
+	}
+}
+
+// isAsyncTransition returns true for transitions that should be dispatched
+// through the worker instead of running synchronously in the orchestrator loop.
+// This covers feedback, fix-checks, and rebase (IN_REVIEW→IN_REVIEW) transitions.
+func isAsyncTransition(tr orchestrator.Transition) bool {
+	switch tr.From {
+	case orchestrator.StateAddressingFeedback, orchestrator.StateFixingChecks:
+		return true
+	case orchestrator.StateInReview:
+		return tr.To == orchestrator.StateInReview
+	default:
+		return false
+	}
+}
+
+// dispatchAsync dispatches an async transition through the worker dispatcher.
+// On completion, the action function handles the state transition and broadcasts
+// the state change via WebSocket — mirroring what sm.Execute + the orchestrator
+// loop would do for synchronous transitions.
+func dispatchAsync(
+	ctx context.Context,
+	tr orchestrator.Transition,
+	issue db.Issue,
+	database *db.DB,
+	dispatcher *worker.Dispatcher,
+	hub *server.Hub,
+	logger *slog.Logger,
+) {
+	logger.Info("dispatching async transition",
+		"issue", issue.Identifier,
+		"from", tr.From,
+		"to", tr.To,
+	)
+
+	actionFn := func(actionCtx context.Context) error {
+		// Run the action.
+		if tr.Action != nil {
+			if err := tr.Action(issue, database); err != nil {
+				return fmt.Errorf("running transition action: %w", err)
+			}
+		}
+
+		// Transition state in a transaction (mirrors sm.Execute post-action logic).
+		if err := database.Tx(func(tx *db.Tx) error {
+			current, err := tx.GetIssue(issue.ID)
+			if err != nil {
+				return fmt.Errorf("re-reading issue after action: %w", err)
+			}
+			current.State = string(tr.To)
+			if err := tx.UpdateIssue(current); err != nil {
+				return fmt.Errorf("updating issue state: %w", err)
+			}
+			if err := tx.LogActivity(
+				issue.ID,
+				"state_change",
+				string(tr.From),
+				string(tr.To),
+				fmt.Sprintf("Transitioned from %s to %s", tr.From, tr.To),
+			); err != nil {
+				return fmt.Errorf("logging activity: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		// Broadcast state change via WebSocket.
+		if hub != nil {
+			updated, err := database.GetIssue(issue.ID)
+			if err == nil {
+				if msg, wErr := server.NewWSMessage(server.MsgIssueStateChanged, updated); wErr == nil {
+					hub.Broadcast(msg)
+				}
+			}
+		}
+
+		return nil
+	}
+
+	if err := dispatcher.DispatchAction(ctx, issue, actionFn); err != nil {
+		logger.Warn("dispatching async transition", "issue", issue.Identifier, "error", err)
 	}
 }
 
