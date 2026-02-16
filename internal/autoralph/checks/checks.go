@@ -3,12 +3,14 @@ package checks
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
+	"github.com/uesteibar/ralph/internal/config"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
@@ -49,6 +51,11 @@ type ProjectGetter interface {
 	GetProject(id string) (db.Project, error)
 }
 
+// ConfigLoader loads a Ralph config from a file path.
+type ConfigLoader interface {
+	Load(path string) (*config.Config, error)
+}
+
 // Config holds the dependencies for the check-fixing action.
 type Config struct {
 	Invoker     Invoker
@@ -58,6 +65,7 @@ type Config struct {
 	Comments    PRCommenter
 	Git         GitOps
 	Projects    ProjectGetter
+	ConfigLoad  ConfigLoader
 	OverrideDir string
 	MaxAttempts int
 }
@@ -78,6 +86,17 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		project, err := cfg.Projects.GetProject(issue.ProjectID)
 		if err != nil {
 			return fmt.Errorf("loading project: %w", err)
+		}
+
+		// Load quality checks from ralph.yaml if a ConfigLoader is provided.
+		var qualityChecks []string
+		if cfg.ConfigLoad != nil {
+			ralphConfigPath := filepath.Join(project.LocalPath, project.RalphConfigPath)
+			ralphCfg, err := cfg.ConfigLoad.Load(ralphConfigPath)
+			if err != nil {
+				return fmt.Errorf("loading ralph config: %w", err)
+			}
+			qualityChecks = ralphCfg.QualityChecks
 		}
 
 		// Log start activity
@@ -126,7 +145,8 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 
 		// Render fix_checks.md template
 		prompt, err := ai.RenderFixChecks(ai.FixChecksData{
-			FailedChecks: failedChecks,
+			FailedChecks:  failedChecks,
+			QualityChecks: qualityChecks,
 		}, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering fix_checks prompt: %w", err)

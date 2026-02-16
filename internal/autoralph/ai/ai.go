@@ -89,7 +89,8 @@ type FailedCheckRun struct {
 
 // FixChecksData holds the context for rendering the fix_checks prompt.
 type FixChecksData struct {
-	FailedChecks []FailedCheckRun
+	FailedChecks  []FailedCheckRun
+	QualityChecks []string
 }
 
 // --- Render functions ---

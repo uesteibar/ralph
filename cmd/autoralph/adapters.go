@@ -35,6 +35,7 @@ var (
 	_ checks.LogFetcher      = (*ghclient.Client)(nil)
 	_ checks.PRFetcher       = (*ghclient.Client)(nil)
 	_ checks.PRCommenter     = (*ghclient.Client)(nil)
+	_ checks.ConfigLoader    = (*configLoaderAdapter)(nil)
 	_ feedback.ConfigLoader  = (*configLoaderAdapter)(nil)
 	_ ghpoller.GitHubClient  = (*ghclient.Client)(nil)
 	_ invoker.EventInvoker   = (*claudeInvoker)(nil)

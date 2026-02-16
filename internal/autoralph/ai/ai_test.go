@@ -368,6 +368,51 @@ func TestRenderAddressFeedback_WithoutQualityChecks_RendersGenericLine(t *testin
 	}
 }
 
+func TestRenderFixChecks_WithQualityChecks_RendersExplicitCommands(t *testing.T) {
+	data := FixChecksData{
+		FailedChecks: []FailedCheckRun{
+			{Name: "ci", Conclusion: "failure", Log: "error log"},
+		},
+		QualityChecks: []string{"just test", "just lint"},
+	}
+
+	out, err := RenderFixChecks(data, "")
+	if err != nil {
+		t.Fatalf("RenderFixChecks failed: %v", err)
+	}
+
+	for _, cmd := range []string{"ralph check just test", "ralph check just lint"} {
+		if !strings.Contains(out, cmd) {
+			t.Errorf("output should contain %q", cmd)
+		}
+	}
+
+	if !strings.Contains(out, "compact pass/fail output") {
+		t.Error("output should contain the ralph check note")
+	}
+}
+
+func TestRenderFixChecks_WithoutQualityChecks_RendersGenericLine(t *testing.T) {
+	data := FixChecksData{
+		FailedChecks: []FailedCheckRun{
+			{Name: "ci", Conclusion: "failure", Log: "error log"},
+		},
+	}
+
+	out, err := RenderFixChecks(data, "")
+	if err != nil {
+		t.Fatalf("RenderFixChecks failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Run quality checks after making changes") {
+		t.Error("output should contain generic quality checks line when no checks configured")
+	}
+
+	if strings.Contains(out, "ralph check") {
+		t.Error("output should not contain 'ralph check' commands when no quality checks configured")
+	}
+}
+
 // --- Override tests ---
 
 func TestRender_UsesOverrideWhenPresent(t *testing.T) {

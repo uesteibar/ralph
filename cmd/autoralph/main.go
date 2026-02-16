@@ -349,13 +349,14 @@ func runServe(args []string) error {
 				From: orchestrator.StateFixingChecks,
 				To:   orchestrator.StateInReview,
 				Action: checks.NewAction(checks.Config{
-					Invoker:   invoker,
-					CheckRuns: firstGitHub,
-					Logs:      firstGitHub,
-					PRs:       firstGitHub,
-					Comments:  firstGitHub,
-					Git:       &gitOpsAdapter{},
-					Projects:  database,
+					Invoker:    invoker,
+					CheckRuns:  firstGitHub,
+					Logs:       firstGitHub,
+					PRs:        firstGitHub,
+					Comments:   firstGitHub,
+					Git:        &gitOpsAdapter{},
+					Projects:   database,
+					ConfigLoad: &configLoaderAdapter{},
 				}),
 			})
 
