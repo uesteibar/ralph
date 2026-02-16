@@ -510,6 +510,103 @@ func TestAutoRalphDashboard_Content(t *testing.T) {
 	}
 }
 
+func repoRoot() string {
+	return filepath.Dir(docsDir())
+}
+
+func TestDeployDocsWorkflow_Exists(t *testing.T) {
+	path := filepath.Join(repoRoot(), ".github", "workflows", "deploy-docs.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("deploy-docs.yml not found: %v", err)
+	}
+	content := string(data)
+
+	required := []struct {
+		term string
+		desc string
+	}{
+		{"push:", "triggers on push"},
+		{"main", "targets main branch"},
+		{"actions/deploy-pages", "uses deploy-pages action"},
+		{"actions/upload-pages-artifact", "uses upload-pages-artifact action"},
+		{"mdbook", "installs mdBook"},
+		{"docs/book", "references correct build output path"},
+	}
+	for _, r := range required {
+		if !strings.Contains(content, r.term) {
+			t.Errorf("deploy-docs.yml missing %s (%q)", r.desc, r.term)
+		}
+	}
+}
+
+func TestDeployDocsWorkflow_PinsMdBookVersion(t *testing.T) {
+	path := filepath.Join(repoRoot(), ".github", "workflows", "deploy-docs.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("deploy-docs.yml not found: %v", err)
+	}
+	content := string(data)
+
+	// Should pin a specific mdBook version (e.g., v0.4.40 or similar)
+	re := regexp.MustCompile(`mdbook.*v\d+\.\d+\.\d+`)
+	if !re.MatchString(content) {
+		t.Error("deploy-docs.yml does not pin a specific mdBook version")
+	}
+}
+
+func TestDeployDocsWorkflow_RunsGenCLI(t *testing.T) {
+	path := filepath.Join(repoRoot(), ".github", "workflows", "deploy-docs.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("deploy-docs.yml not found: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "gen-cli-help") {
+		t.Error("deploy-docs.yml does not run docs-gen-cli step")
+	}
+}
+
+func TestCIWorkflow_HasDocBuildStep(t *testing.T) {
+	path := filepath.Join(repoRoot(), ".github", "workflows", "ci.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ci.yml not found: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "mdbook build") {
+		t.Error("ci.yml missing mdbook build step for doc validation")
+	}
+}
+
+func TestCIWorkflow_DocBuildRunsOnPRs(t *testing.T) {
+	path := filepath.Join(repoRoot(), ".github", "workflows", "ci.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ci.yml not found: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "pull_request") {
+		t.Error("ci.yml does not trigger on pull_request")
+	}
+}
+
+func TestReadme_HasDocsLink(t *testing.T) {
+	path := filepath.Join(repoRoot(), "README.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("README.md not found: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "uesteibar.github.io/ralph") {
+		t.Error("README.md missing link to published documentation site")
+	}
+}
+
 // extractSection returns the content between ## `cmd` and the next ## heading.
 func extractSection(content, cmd string) string {
 	header := "## `" + cmd + "`"
