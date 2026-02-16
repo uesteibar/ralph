@@ -99,6 +99,7 @@ type RebaseConflictData struct {
 	FeatureDiff    string
 	BaseDiff       string
 	ConflictFiles  string
+	QualityChecks  []string
 }
 
 // RenderRebaseConflict renders the prompt for rebase conflict resolution.

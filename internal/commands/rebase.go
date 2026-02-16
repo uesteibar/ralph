@@ -68,8 +68,10 @@ func Rebase(args []string) error {
 
 	promptsDir := cfg.PromptsDir()
 
+	qualityChecks := cfg.QualityChecks
+
 	for result.HasConflicts {
-		if err := resolveConflicts(ctx, r, wc, targetBranch, promptsDir); err != nil {
+		if err := resolveConflicts(ctx, r, wc, targetBranch, promptsDir, qualityChecks); err != nil {
 			return err
 		}
 
@@ -92,7 +94,7 @@ func Rebase(args []string) error {
 	return nil
 }
 
-func resolveConflicts(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch, promptsDir string) error {
+func resolveConflicts(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch, promptsDir string, qualityChecks []string) error {
 	conflictFiles, err := gitops.ConflictFiles(ctx, r)
 	if err != nil {
 		return fmt.Errorf("listing conflict files: %w", err)
@@ -100,7 +102,7 @@ func resolveConflicts(ctx context.Context, r *shell.Runner, wc workspace.WorkCon
 
 	fmt.Fprintf(os.Stderr, "conflicts detected in %d file(s): %s\n", len(conflictFiles), strings.Join(conflictFiles, ", "))
 
-	prompt, err := buildConflictPrompt(ctx, r, wc, targetBranch, conflictFiles, promptsDir)
+	prompt, err := buildConflictPrompt(ctx, r, wc, targetBranch, conflictFiles, promptsDir, qualityChecks)
 	if err != nil {
 		return fmt.Errorf("building conflict prompt: %w", err)
 	}
@@ -118,9 +120,10 @@ func resolveConflicts(ctx context.Context, r *shell.Runner, wc workspace.WorkCon
 	return nil
 }
 
-func buildConflictPrompt(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch string, conflictFiles []string, promptsDir string) (string, error) {
+func buildConflictPrompt(ctx context.Context, r *shell.Runner, wc workspace.WorkContext, targetBranch string, conflictFiles []string, promptsDir string, qualityChecks []string) (string, error) {
 	data := prompts.RebaseConflictData{
 		ConflictFiles: strings.Join(conflictFiles, "\n"),
+		QualityChecks: qualityChecks,
 	}
 
 	// Read PRD from workspace-level path for conflict resolution context.
