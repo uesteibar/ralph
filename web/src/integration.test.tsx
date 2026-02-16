@@ -123,6 +123,7 @@ const issueDetail: IssueDetailType = {
   created_at: '2025-03-01T10:00:00Z',
   updated_at: '2025-03-01T10:00:00Z',
   activity: [],
+  build_activity: [],
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -350,6 +351,7 @@ describe('IT-005: StateBadge shared module works across all pages', () => {
       state: 'building',
       build_active: true,
       activity: [],
+      build_activity: [],
     }
     vi.mocked(fetchIssue).mockResolvedValue(buildingIssue)
     renderApp('/issues/iss-q')

@@ -1156,13 +1156,22 @@ func TestIT010_IssueDetailAPI(t *testing.T) {
 		t.Errorf("expected project_name test-project, got %v", detail["project_name"])
 	}
 
-	// Verify activity timeline.
+	// Verify activity timeline (timeline events only, no build_event).
 	activity, ok := detail["activity"].([]any)
 	if !ok {
 		t.Fatal("expected activity array in response")
 	}
-	if len(activity) < 4 {
-		t.Errorf("expected at least 4 activity entries, got %d", len(activity))
+	if len(activity) < 3 {
+		t.Errorf("expected at least 3 timeline activity entries, got %d", len(activity))
+	}
+
+	// Verify build_activity contains build events.
+	buildActivity, ok := detail["build_activity"].([]any)
+	if !ok {
+		t.Fatal("expected build_activity array in response")
+	}
+	if len(buildActivity) < 1 {
+		t.Errorf("expected at least 1 build_activity entry, got %d", len(buildActivity))
 	}
 }
 

@@ -60,6 +60,8 @@ const mockIssue: IssueDetailType = {
       detail: 'Plan approved',
       created_at: '2025-02-11T12:15:00Z',
     },
+  ],
+  build_activity: [
     {
       id: 'act3',
       issue_id: 'iss1',
@@ -159,6 +161,7 @@ describe('IssueDetail', () => {
       current_story: 'US-002',
       build_active: false,
       activity: [],
+      build_activity: [],
     }
     vi.mocked(fetchIssue).mockResolvedValue(reviewIssue)
 
@@ -177,7 +180,7 @@ describe('IssueDetail', () => {
   })
 
   it('shows Resume button when paused', async () => {
-    const pausedIssue = { ...mockIssue, state: 'paused', build_active: false, activity: [], stories: [], integration_tests: [] }
+    const pausedIssue = { ...mockIssue, state: 'paused', build_active: false, activity: [], build_activity: [], stories: [], integration_tests: [] }
     vi.mocked(fetchIssue).mockResolvedValue(pausedIssue)
 
     renderIssueDetail()
@@ -193,6 +196,7 @@ describe('IssueDetail', () => {
       error_message: 'Build timed out',
       build_active: false,
       activity: [],
+      build_activity: [],
       stories: [],
       integration_tests: [],
     }
@@ -220,6 +224,7 @@ describe('IssueDetail', () => {
       pr_url: 'https://github.com/octocat/hello-world/pull/42',
       build_active: false,
       activity: [],
+      build_activity: [],
       stories: [],
       integration_tests: [],
     }
@@ -248,7 +253,8 @@ describe('IssueDetail', () => {
       ...mockIssue,
       state: 'completed',
       build_active: false,
-      activity: [
+      activity: [],
+      build_activity: [
         {
           id: 'act-b1',
           issue_id: 'iss1',
@@ -284,6 +290,7 @@ describe('IssueDetail', () => {
           created_at: '2025-02-11T12:00:00Z',
         },
       ],
+      build_activity: [],
       stories: [],
       integration_tests: [],
     }
@@ -297,7 +304,7 @@ describe('IssueDetail', () => {
   })
 
   it('shows empty timeline message when no activity', async () => {
-    const emptyIssue = { ...mockIssue, state: 'queued', build_active: false, activity: [], stories: [], integration_tests: [] }
+    const emptyIssue = { ...mockIssue, state: 'queued', build_active: false, activity: [], build_activity: [], stories: [], integration_tests: [] }
     vi.mocked(fetchIssue).mockResolvedValue(emptyIssue)
 
     renderIssueDetail()
@@ -313,8 +320,8 @@ describe('IssueDetail', () => {
     })
   })
 
-  it('filters tool-use build events from timeline', async () => {
-    const issueWithToolEvents = {
+  it('renders BuildLog from build_activity (not activity)', async () => {
+    const issueWithSplitActivity = {
       ...mockIssue,
       activity: [
         {
@@ -326,6 +333,8 @@ describe('IssueDetail', () => {
           detail: 'Started building',
           created_at: '2025-02-11T12:00:00Z',
         },
+      ],
+      build_activity: [
         {
           id: 'act-story',
           issue_id: 'iss1',
@@ -342,68 +351,52 @@ describe('IssueDetail', () => {
         },
       ],
     }
-    vi.mocked(fetchIssue).mockResolvedValue(issueWithToolEvents)
-
-    renderIssueDetail()
-    await waitFor(() => {
-      expect(screen.getByText('Started building')).toBeInTheDocument()
-    })
-    const timeline = screen.getByText('Timeline').closest('section')!
-    // Non-tool build event should appear in timeline
-    expect(timeline.textContent).toContain('Story US-001: Upload avatar')
-    // Tool-use build event should NOT appear in timeline
-    expect(timeline.textContent).not.toContain('→ Read file.go')
-  })
-
-  it('shows tool-use events in Agent Logs even when filtered from timeline', async () => {
-    const issueWithToolEvents = {
-      ...mockIssue,
-      activity: [
-        {
-          id: 'act-tool',
-          issue_id: 'iss1',
-          event_type: 'build_event',
-          detail: '→ Read file.go',
-          created_at: '2025-02-11T12:11:00Z',
-        },
-      ],
-    }
-    vi.mocked(fetchIssue).mockResolvedValue(issueWithToolEvents)
+    vi.mocked(fetchIssue).mockResolvedValue(issueWithSplitActivity)
 
     renderIssueDetail()
     await waitFor(() => {
       expect(screen.getByText('Agent Logs')).toBeInTheDocument()
     })
-    // Tool-use event should appear in Agent Logs section
     const agentLogs = screen.getByText('Agent Logs').closest('section')!
+    expect(agentLogs.textContent).toContain('Story US-001: Upload avatar')
     expect(agentLogs.textContent).toContain('→ Read file.go')
+    // Timeline should only show state_change, no build events
+    const timeline = screen.getByText('Timeline').closest('section')!
+    expect(timeline.textContent).toContain('Started building')
+    expect(timeline.textContent).not.toContain('Story US-001: Upload avatar')
+    expect(timeline.textContent).not.toContain('→ Read file.go')
   })
 
-  it('shows No activity yet when all activities are tool-use events', async () => {
-    const issueOnlyToolEvents = {
+  it('renders Timeline directly from activity without filtering', async () => {
+    const issueTimelineOnly = {
       ...mockIssue,
       activity: [
         {
-          id: 'act-tool1',
+          id: 'act-sc1',
           issue_id: 'iss1',
-          event_type: 'build_event',
-          detail: '→ Write output.txt',
-          created_at: '2025-02-11T12:11:00Z',
+          event_type: 'state_change',
+          from_state: 'queued',
+          to_state: 'building',
+          detail: 'Started building',
+          created_at: '2025-02-11T12:00:00Z',
         },
         {
-          id: 'act-tool2',
+          id: 'act-pr',
           issue_id: 'iss1',
-          event_type: 'build_event',
-          detail: '→ Bash npm test',
-          created_at: '2025-02-11T12:12:00Z',
+          event_type: 'pr_created',
+          detail: 'PR #42 created',
+          created_at: '2025-02-11T12:05:00Z',
         },
       ],
+      build_activity: [],
     }
-    vi.mocked(fetchIssue).mockResolvedValue(issueOnlyToolEvents)
+    vi.mocked(fetchIssue).mockResolvedValue(issueTimelineOnly)
 
     renderIssueDetail()
     await waitFor(() => {
-      expect(screen.getByText('No activity yet')).toBeInTheDocument()
+      expect(screen.getByText('Started building')).toBeInTheDocument()
     })
+    expect(screen.getByText('PR #42 created')).toBeInTheDocument()
+    expect(screen.queryByText('Agent Logs')).not.toBeInTheDocument()
   })
 })

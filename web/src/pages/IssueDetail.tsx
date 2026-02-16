@@ -452,44 +452,37 @@ export default function IssueDetail() {
       />
 
       {/* Agent Logs — visible whenever build events exist */}
-      {[...issue.activity, ...streamEvents].some(a => a.event_type === 'build_event') && (
+      {((issue.build_activity?.length ?? 0) > 0 || streamEvents.length > 0) && (
         <section style={{ marginBottom: '24px' }}>
           <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#374151', marginBottom: '12px' }}>
             Agent Logs
           </h2>
-          <BuildLog activities={[...issue.activity, ...streamEvents]} />
+          <BuildLog activities={[...(issue.build_activity ?? []), ...streamEvents]} />
         </section>
       )}
 
-      {/* Timeline — tool-use build events (detail starting with '→ ') are filtered out */}
-      {(() => {
-        const timelineActivities = issue.activity.filter(
-          a => !(a.event_type === 'build_event' && a.detail?.startsWith('→ '))
-        )
-        return (
-          <section>
-            <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#374151', marginBottom: '12px' }}>
-              Timeline
-            </h2>
-            {timelineActivities.length === 0 ? (
-              <p style={{ color: '#9ca3af', fontSize: '14px' }}>No activity yet</p>
-            ) : (
-              <div
-                style={{
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  padding: '12px 16px',
-                  backgroundColor: '#fff',
-                }}
-              >
-                {timelineActivities.map(a => (
-                  <TimelineItem key={a.id} activity={a} />
-                ))}
-              </div>
-            )}
-          </section>
-        )
-      })()}
+      {/* Timeline — API already excludes build_event entries */}
+      <section>
+        <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#374151', marginBottom: '12px' }}>
+          Timeline
+        </h2>
+        {issue.activity.length === 0 ? (
+          <p style={{ color: '#9ca3af', fontSize: '14px' }}>No activity yet</p>
+        ) : (
+          <div
+            style={{
+              border: '1px solid #e5e7eb',
+              borderRadius: '8px',
+              padding: '12px 16px',
+              backgroundColor: '#fff',
+            }}
+          >
+            {issue.activity.map(a => (
+              <TimelineItem key={a.id} activity={a} />
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   )
 }
