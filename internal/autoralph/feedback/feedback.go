@@ -22,9 +22,19 @@ type EventInvoker interface {
 	InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error)
 }
 
-// CommentFetcher fetches review comments from a GitHub PR.
+// CommentFetcher fetches line-specific review comments from a GitHub PR.
 type CommentFetcher interface {
 	FetchPRComments(ctx context.Context, owner, repo string, prNumber int) ([]github.Comment, error)
+}
+
+// ReviewFetcher fetches PR reviews (including body text) from GitHub.
+type ReviewFetcher interface {
+	FetchPRReviews(ctx context.Context, owner, repo string, prNumber int) ([]github.Review, error)
+}
+
+// IssueCommentFetcher fetches general PR/issue comments from GitHub.
+type IssueCommentFetcher interface {
+	FetchPRIssueComments(ctx context.Context, owner, repo string, prNumber int) ([]github.Comment, error)
 }
 
 // ReviewReplier replies to a review comment on a GitHub PR.
@@ -32,9 +42,19 @@ type ReviewReplier interface {
 	PostReviewReply(ctx context.Context, owner, repo string, prNumber int, commentID int64, body string) (github.Comment, error)
 }
 
+// PRCommenter posts general comments on a pull request.
+type PRCommenter interface {
+	PostPRComment(ctx context.Context, owner, repo string, prNumber int, body string) (github.Comment, error)
+}
+
 // CommentReactor adds emoji reactions to GitHub PR review comments.
 type CommentReactor interface {
 	ReactToReviewComment(ctx context.Context, owner, repo string, commentID int64, reaction string) error
+}
+
+// IssueCommentReactor adds emoji reactions to general PR/issue comments.
+type IssueCommentReactor interface {
+	ReactToIssueComment(ctx context.Context, owner, repo string, commentID int64, reaction string) error
 }
 
 // GitOps abstracts git operations for the feedback action.
@@ -56,16 +76,42 @@ type ConfigLoader interface {
 
 // Config holds the dependencies for the feedback action.
 type Config struct {
-	Invoker      EventInvoker
-	Comments     CommentFetcher
-	Replier      ReviewReplier
-	Git          GitOps
-	Projects     ProjectGetter
-	ConfigLoad   ConfigLoader
-	Reactor      CommentReactor
-	EventHandler events.EventHandler
-	OnBuildEvent func(issueID, detail string)
-	OverrideDir  string
+	Invoker       EventInvoker
+	Comments      CommentFetcher
+	Reviews       ReviewFetcher       // optional: fetches review bodies
+	IssueComments IssueCommentFetcher // optional: fetches general PR comments
+	Replier       ReviewReplier       // for inline (line-specific) replies
+	PRCommenter   PRCommenter         // optional: for general PR comment replies
+	Git           GitOps
+	Projects      ProjectGetter
+	ConfigLoad    ConfigLoader
+	Reactor       CommentReactor       // for line comment reactions
+	IssueReactor  IssueCommentReactor  // optional: for issue comment reactions
+	EventHandler  events.EventHandler
+	OnBuildEvent  func(issueID, detail string)
+	OverrideDir   string
+}
+
+// commentSource identifies where a feedback item originated.
+type commentSource int
+
+const (
+	sourceLineComment  commentSource = iota // line-specific review comment
+	sourceReviewBody                        // review submission body text
+	sourceIssueComment                      // general PR/issue comment
+)
+
+// feedbackItem is a normalized piece of feedback from any source.
+type feedbackItem struct {
+	id     int64
+	path   string // empty for non-line feedback
+	author string
+	body   string
+	source commentSource
+}
+
+func (f feedbackItem) isInline() bool {
+	return f.source == sourceLineComment
 }
 
 // IsAddressingFeedback returns true if the issue is in the addressing_feedback state.
@@ -74,8 +120,9 @@ func IsAddressingFeedback(issue db.Issue) bool {
 }
 
 // NewAction returns an orchestrator ActionFunc that addresses PR review feedback.
-// It fetches review comments, invokes AI with the address_feedback.md prompt,
-// commits and pushes changes, then replies to each comment on GitHub.
+// It fetches feedback from three sources (line comments, review bodies, and
+// general PR comments), invokes AI with the address_feedback.md prompt,
+// commits and pushes changes, then replies via the appropriate channel.
 func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	return func(issue db.Issue, database *db.DB) error {
 		ctx := context.Background()
@@ -100,33 +147,25 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			qualityChecks = ralphCfg.QualityChecks
 		}
 
-		comments, err := cfg.Comments.FetchPRComments(ctx, project.GithubOwner, project.GithubRepo, issue.PRNumber)
+		// Gather feedback from all sources (line comments, review bodies, issue comments).
+		items, err := gatherFeedback(ctx, cfg, project.GithubOwner, project.GithubRepo, issue.PRNumber)
 		if err != nil {
-			return fmt.Errorf("fetching PR comments: %w", err)
+			return err
 		}
-
-		// Filter to top-level comments only (skip replies)
-		topLevel := filterTopLevel(comments)
-		if len(topLevel) == 0 {
+		if len(items) == 0 {
 			return nil
 		}
 
-		// React 👀 to each top-level comment before invoking AI.
-		if cfg.Reactor != nil {
-			for _, c := range topLevel {
-				if err := cfg.Reactor.ReactToReviewComment(ctx, project.GithubOwner, project.GithubRepo, c.ID, "eyes"); err != nil {
-					slog.Warn("reacting to review comment", "comment_id", c.ID, "error", err)
-				}
-			}
-		}
+		// React 👀 to each feedback item before invoking AI.
+		reactToFeedback(ctx, cfg, project.GithubOwner, project.GithubRepo, items)
 
-		// Build AI prompt data from review comments
+		// Build AI prompt data from all feedback items.
 		var aiComments []ai.AddressFeedbackComment
-		for _, c := range topLevel {
+		for _, item := range items {
 			aiComments = append(aiComments, ai.AddressFeedbackComment{
-				Path:   c.Path,
-				Author: c.User,
-				Body:   c.Body,
+				Path:   item.path,
+				Author: item.author,
+				Body:   item.body,
 			})
 		}
 
@@ -160,7 +199,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			committed = true
 		}
 
-		// Build reply message per comment from AI response.
+		// Build reply reference from commit SHA.
 		var replyRef string
 		if committed {
 			sha, shaErr := cfg.Git.HeadSHA(ctx, treePath)
@@ -171,17 +210,12 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			}
 		}
 
-		for _, c := range topLevel {
-			replyMsg := buildReplyForComment(aiResponse, c, replyRef)
-			if _, err := cfg.Replier.PostReviewReply(ctx,
-				project.GithubOwner, project.GithubRepo,
-				issue.PRNumber, c.ID, replyMsg,
-			); err != nil {
-				return fmt.Errorf("replying to comment %d: %w", c.ID, err)
-			}
+		// Reply to each feedback item via the appropriate channel.
+		if err := replyToFeedback(ctx, cfg, project.GithubOwner, project.GithubRepo, issue.PRNumber, items, aiResponse, replyRef); err != nil {
+			return err
 		}
 
-		detail := fmt.Sprintf("Addressed %d comments", len(topLevel))
+		detail := fmt.Sprintf("Addressed %d comments", len(items))
 		if replyRef != "" {
 			detail += " in " + replyRef
 		}
@@ -191,6 +225,109 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 
 		return nil
 	}
+}
+
+// gatherFeedback collects feedback from all configured sources into a
+// normalized list of feedbackItems.
+func gatherFeedback(ctx context.Context, cfg Config, owner, repo string, prNumber int) ([]feedbackItem, error) {
+	var items []feedbackItem
+
+	// 1. Line-specific review comments.
+	comments, err := cfg.Comments.FetchPRComments(ctx, owner, repo, prNumber)
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR comments: %w", err)
+	}
+	for _, c := range filterTopLevel(comments) {
+		items = append(items, feedbackItem{
+			id:     c.ID,
+			path:   c.Path,
+			author: c.User,
+			body:   c.Body,
+			source: sourceLineComment,
+		})
+	}
+
+	// 2. Review submission bodies (optional).
+	if cfg.Reviews != nil {
+		reviews, err := cfg.Reviews.FetchPRReviews(ctx, owner, repo, prNumber)
+		if err != nil {
+			return nil, fmt.Errorf("fetching PR reviews: %w", err)
+		}
+		for _, r := range reviews {
+			if r.Body == "" || isBot(r.User) {
+				continue
+			}
+			if r.State != "CHANGES_REQUESTED" && r.State != "COMMENTED" {
+				continue
+			}
+			items = append(items, feedbackItem{
+				id:     r.ID,
+				author: r.User,
+				body:   r.Body,
+				source: sourceReviewBody,
+			})
+		}
+	}
+
+	// 3. General PR/issue comments (optional).
+	if cfg.IssueComments != nil {
+		issueComments, err := cfg.IssueComments.FetchPRIssueComments(ctx, owner, repo, prNumber)
+		if err != nil {
+			return nil, fmt.Errorf("fetching PR issue comments: %w", err)
+		}
+		for _, c := range issueComments {
+			if isBot(c.User) {
+				continue
+			}
+			items = append(items, feedbackItem{
+				id:     c.ID,
+				author: c.User,
+				body:   c.Body,
+				source: sourceIssueComment,
+			})
+		}
+	}
+
+	return items, nil
+}
+
+// reactToFeedback adds 👀 reactions to feedback items before AI invocation.
+func reactToFeedback(ctx context.Context, cfg Config, owner, repo string, items []feedbackItem) {
+	for _, item := range items {
+		switch item.source {
+		case sourceLineComment:
+			if cfg.Reactor != nil {
+				if err := cfg.Reactor.ReactToReviewComment(ctx, owner, repo, item.id, "eyes"); err != nil {
+					slog.Warn("reacting to review comment", "comment_id", item.id, "error", err)
+				}
+			}
+		case sourceIssueComment:
+			if cfg.IssueReactor != nil {
+				if err := cfg.IssueReactor.ReactToIssueComment(ctx, owner, repo, item.id, "eyes"); err != nil {
+					slog.Warn("reacting to issue comment", "comment_id", item.id, "error", err)
+				}
+			}
+		// sourceReviewBody: no reaction API for review submissions
+		}
+	}
+}
+
+// replyToFeedback sends replies to each feedback item via the appropriate channel:
+// line comments get review replies, everything else gets a general PR comment.
+func replyToFeedback(ctx context.Context, cfg Config, owner, repo string, prNumber int, items []feedbackItem, aiResponse, replyRef string) error {
+	for _, item := range items {
+		replyMsg := buildReplyForComment(aiResponse, item.path, replyRef)
+		if item.isInline() {
+			if _, err := cfg.Replier.PostReviewReply(ctx, owner, repo, prNumber, item.id, replyMsg); err != nil {
+				return fmt.Errorf("replying to comment %d: %w", item.id, err)
+			}
+		} else if cfg.PRCommenter != nil {
+			if _, err := cfg.PRCommenter.PostPRComment(ctx, owner, repo, prNumber, replyMsg); err != nil {
+				return fmt.Errorf("posting PR comment for feedback %d: %w", item.id, err)
+			}
+		}
+	}
+	return nil
 }
 
 // buildEventHandler wraps events from an AI invocation, stores them in the
@@ -253,6 +390,11 @@ func filterTopLevel(comments []github.Comment) []github.Comment {
 	return result
 }
 
+// isBot returns true if the username looks like a GitHub App bot (e.g. "my-app[bot]").
+func isBot(user string) bool {
+	return strings.HasSuffix(user, "[bot]")
+}
+
 // isNothingToCommit returns true when a git commit error indicates there was
 // nothing to commit (no staged changes).
 func isNothingToCommit(err error) bool {
@@ -260,16 +402,16 @@ func isNothingToCommit(err error) bool {
 		strings.Contains(err.Error(), "exited with code 1")
 }
 
-// buildReplyForComment constructs a reply message for a review comment.
+// buildReplyForComment constructs a reply message for a feedback item.
 // If code was committed, it references the commit SHA. Otherwise it extracts
 // the AI's explanation from its response.
-func buildReplyForComment(aiResponse string, c github.Comment, commitRef string) string {
+func buildReplyForComment(aiResponse, path, commitRef string) string {
 	if commitRef != "" {
 		return fmt.Sprintf("Addressed in %s", commitRef)
 	}
 	// No commit — extract AI's response for this file from the output.
-	if c.Path != "" {
-		if section := extractSection(aiResponse, c.Path); section != "" {
+	if path != "" {
+		if section := extractSection(aiResponse, path); section != "" {
 			return section
 		}
 	}
@@ -281,19 +423,18 @@ func buildReplyForComment(aiResponse string, c github.Comment, commitRef string)
 func extractSection(response, path string) string {
 	// Look for "### <path>" section in the AI output
 	marker := "### " + path
-	idx := strings.Index(response, marker)
-	if idx < 0 {
+	_, rest, found := strings.Cut(response, marker)
+	if !found {
 		return ""
 	}
-	rest := response[idx+len(marker):]
 
 	// Find **Response:** line
 	respMarker := "**Response:**"
-	rIdx := strings.Index(rest, respMarker)
-	if rIdx < 0 {
+	_, after, found := strings.Cut(rest, respMarker)
+	if !found {
 		return ""
 	}
-	after := strings.TrimSpace(rest[rIdx+len(respMarker):])
+	after = strings.TrimSpace(after)
 
 	// Take until next "###" section or end
 	nextSection := strings.Index(after, "\n###")

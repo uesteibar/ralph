@@ -31,16 +31,23 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ checks.CheckRunFetcher = (*ghclient.Client)(nil)
-	_ checks.LogFetcher      = (*ghclient.Client)(nil)
-	_ checks.PRFetcher       = (*ghclient.Client)(nil)
-	_ checks.PRCommenter     = (*ghclient.Client)(nil)
-	_ checks.ConfigLoader    = (*configLoaderAdapter)(nil)
-	_ checks.EventInvoker    = (*claudeInvoker)(nil)
-	_ feedback.ConfigLoader  = (*configLoaderAdapter)(nil)
-	_ feedback.EventInvoker  = (*claudeInvoker)(nil)
-	_ ghpoller.GitHubClient  = (*ghclient.Client)(nil)
-	_ invoker.EventInvoker   = (*claudeInvoker)(nil)
+	_ checks.CheckRunFetcher       = (*ghclient.Client)(nil)
+	_ checks.LogFetcher            = (*ghclient.Client)(nil)
+	_ checks.PRFetcher             = (*ghclient.Client)(nil)
+	_ checks.PRCommenter           = (*ghclient.Client)(nil)
+	_ checks.ConfigLoader          = (*configLoaderAdapter)(nil)
+	_ checks.EventInvoker          = (*claudeInvoker)(nil)
+	_ feedback.ConfigLoader        = (*configLoaderAdapter)(nil)
+	_ feedback.EventInvoker        = (*claudeInvoker)(nil)
+	_ feedback.CommentFetcher      = (*ghclient.Client)(nil)
+	_ feedback.ReviewFetcher       = (*ghclient.Client)(nil)
+	_ feedback.IssueCommentFetcher = (*ghclient.Client)(nil)
+	_ feedback.ReviewReplier       = (*ghclient.Client)(nil)
+	_ feedback.PRCommenter         = (*ghclient.Client)(nil)
+	_ feedback.CommentReactor      = (*ghclient.Client)(nil)
+	_ feedback.IssueCommentReactor = (*ghclient.Client)(nil)
+	_ ghpoller.GitHubClient        = (*ghclient.Client)(nil)
+	_ invoker.EventInvoker         = (*claudeInvoker)(nil)
 )
 
 // claudeInvoker wraps claude.Invoke to satisfy the Invoker interface used by

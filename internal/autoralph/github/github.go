@@ -244,6 +244,35 @@ func (c *Client) FetchPRComments(ctx context.Context, owner, repo string, prNumb
 	}, c.retryOpts()...)
 }
 
+// FetchPRIssueComments returns all issue-level comments on the given pull request.
+// These are general comments not attached to specific code lines.
+func (c *Client) FetchPRIssueComments(ctx context.Context, owner, repo string, prNumber int) ([]Comment, error) {
+	return retry.DoVal(ctx, func() ([]Comment, error) {
+		var all []Comment
+		opts := &gh.IssueListCommentsOptions{
+			ListOptions: gh.ListOptions{PerPage: 100},
+		}
+		for {
+			comments, resp, err := c.gh.Issues.ListComments(ctx, owner, repo, prNumber, opts)
+			if err != nil {
+				return nil, classifyErr(fmt.Errorf("fetching PR issue comments: %w", err))
+			}
+			for _, cm := range comments {
+				all = append(all, Comment{
+					ID:   cm.GetID(),
+					Body: cm.GetBody(),
+					User: cm.GetUser().GetLogin(),
+				})
+			}
+			if resp.NextPage == 0 {
+				break
+			}
+			opts.Page = resp.NextPage
+		}
+		return all, nil
+	}, c.retryOpts()...)
+}
+
 // PostPRComment posts a general comment on the pull request (issue comment).
 func (c *Client) PostPRComment(ctx context.Context, owner, repo string, prNumber int, body string) (Comment, error) {
 	return retry.DoVal(ctx, func() (Comment, error) {
@@ -346,6 +375,18 @@ func classifyErr(err error) error {
 			return retry.Permanent(err)
 		}
 	}
+	return err
+}
+
+// ReactToIssueComment adds an emoji reaction to a general issue/PR comment.
+func (c *Client) ReactToIssueComment(ctx context.Context, owner, repo string, commentID int64, reaction string) error {
+	_, err := retry.DoVal(ctx, func() (struct{}, error) {
+		_, _, err := c.gh.Reactions.CreateIssueCommentReaction(ctx, owner, repo, commentID, reaction)
+		if err != nil {
+			return struct{}{}, classifyErr(fmt.Errorf("reacting to issue comment: %w", err))
+		}
+		return struct{}{}, nil
+	}, c.retryOpts()...)
 	return err
 }
 

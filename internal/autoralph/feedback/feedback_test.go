@@ -87,6 +87,24 @@ func (m *mockCommentFetcher) FetchPRComments(_ context.Context, _, _ string, _ i
 	return m.comments, m.err
 }
 
+type mockReviewFetcher struct {
+	reviews []github.Review
+	err     error
+}
+
+func (m *mockReviewFetcher) FetchPRReviews(_ context.Context, _, _ string, _ int) ([]github.Review, error) {
+	return m.reviews, m.err
+}
+
+type mockIssueCommentFetcher struct {
+	comments []github.Comment
+	err      error
+}
+
+func (m *mockIssueCommentFetcher) FetchPRIssueComments(_ context.Context, _, _ string, _ int) ([]github.Comment, error) {
+	return m.comments, m.err
+}
+
 type mockReviewReplier struct {
 	calls []replyCall
 	err   error
@@ -102,6 +120,22 @@ type replyCall struct {
 func (m *mockReviewReplier) PostReviewReply(_ context.Context, owner, repo string, prNumber int, commentID int64, body string) (github.Comment, error) {
 	m.calls = append(m.calls, replyCall{owner: owner, repo: repo, prNumber: prNumber, commentID: commentID, body: body})
 	return github.Comment{ID: commentID + 100, Body: body}, m.err
+}
+
+type mockPRCommenter struct {
+	calls []prCommentCall
+	err   error
+}
+
+type prCommentCall struct {
+	owner, repo string
+	prNumber    int
+	body        string
+}
+
+func (m *mockPRCommenter) PostPRComment(_ context.Context, owner, repo string, prNumber int, body string) (github.Comment, error) {
+	m.calls = append(m.calls, prCommentCall{owner: owner, repo: repo, prNumber: prNumber, body: body})
+	return github.Comment{ID: 999, Body: body}, m.err
 }
 
 type mockGitOps struct {
@@ -783,6 +817,18 @@ func (m *mockCommentReactor) ReactToReviewComment(_ context.Context, owner, repo
 	return m.err
 }
 
+// --- IssueCommentReactor mock ---
+
+type mockIssueCommentReactor struct {
+	calls []reactCall
+	err   error
+}
+
+func (m *mockIssueCommentReactor) ReactToIssueComment(_ context.Context, owner, repo string, commentID int64, reaction string) error {
+	m.calls = append(m.calls, reactCall{owner: owner, repo: repo, commentID: commentID, reaction: reaction})
+	return m.err
+}
+
 // --- Reactor tests ---
 
 func TestNewAction_ReactsToTopLevelComments(t *testing.T) {
@@ -953,4 +999,485 @@ func TestIsAddressingFeedback_WrongState(t *testing.T) {
 	if IsAddressingFeedback(issue) {
 		t.Error("expected false for in_review state")
 	}
+}
+
+// --- Review body and issue comment tests ---
+
+func TestNewAction_ReviewBody_IncludedInPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil // no line comments
+
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "COMMENTED", Body: "Please fix the naming convention", User: "reviewer"},
+		},
+	}
+	cfg.PRCommenter = &mockPRCommenter{}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastPrompt == "" {
+		t.Fatal("expected AI prompt to be set")
+	}
+	if !strings.Contains(inv.lastPrompt, "Please fix the naming convention") {
+		t.Error("expected prompt to contain review body text")
+	}
+	if !strings.Contains(inv.lastPrompt, "General feedback") {
+		t.Error("expected prompt to contain 'General feedback' for non-line comment")
+	}
+}
+
+func TestNewAction_IssueComment_IncludedInPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil // no line comments
+
+	cfg.IssueComments = &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 200, Body: "The tests are flaky on CI", User: "reviewer"},
+		},
+	}
+	cfg.PRCommenter = &mockPRCommenter{}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastPrompt == "" {
+		t.Fatal("expected AI prompt to be set")
+	}
+	if !strings.Contains(inv.lastPrompt, "The tests are flaky on CI") {
+		t.Error("expected prompt to contain issue comment body")
+	}
+}
+
+func TestNewAction_OnlyReviewBody_ProcessedCorrectly(t *testing.T) {
+	// This is the original bug case: review with only a body, no line comments.
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
+	fetcher.comments = nil // no line comments
+
+	prCommenter := &mockPRCommenter{}
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Please refactor the auth module", User: "reviewer"},
+		},
+	}
+	cfg.PRCommenter = prCommenter
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// AI should be invoked with the review body
+	if !strings.Contains(inv.lastPrompt, "Please refactor the auth module") {
+		t.Error("expected AI to receive review body in prompt")
+	}
+
+	// Should NOT use PostReviewReply (no inline comments)
+	if len(replier.calls) != 0 {
+		t.Errorf("expected 0 review reply calls, got %d", len(replier.calls))
+	}
+
+	// Should use PostPRComment for the reply
+	if len(prCommenter.calls) != 1 {
+		t.Fatalf("expected 1 PR comment call, got %d", len(prCommenter.calls))
+	}
+	if prCommenter.calls[0].prNumber != 10 {
+		t.Errorf("expected prNumber 10, got %d", prCommenter.calls[0].prNumber)
+	}
+}
+
+func TestNewAction_MixedSources_AllIncluded(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
+
+	// Line comment
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this line", User: "reviewer"},
+	}
+	// Review body
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "COMMENTED", Body: "Overall architecture needs work", User: "reviewer"},
+		},
+	}
+	// Issue comment
+	cfg.IssueComments = &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 200, Body: "CI is broken", User: "tester"},
+		},
+	}
+	prCommenter := &mockPRCommenter{}
+	cfg.PRCommenter = prCommenter
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// All three should appear in the prompt
+	if !strings.Contains(inv.lastPrompt, "Fix this line") {
+		t.Error("expected prompt to contain line comment")
+	}
+	if !strings.Contains(inv.lastPrompt, "Overall architecture needs work") {
+		t.Error("expected prompt to contain review body")
+	}
+	if !strings.Contains(inv.lastPrompt, "CI is broken") {
+		t.Error("expected prompt to contain issue comment")
+	}
+
+	// Line comment replied via PostReviewReply
+	if len(replier.calls) != 1 {
+		t.Fatalf("expected 1 review reply call, got %d", len(replier.calls))
+	}
+	if replier.calls[0].commentID != 1 {
+		t.Errorf("expected reply to comment 1, got %d", replier.calls[0].commentID)
+	}
+
+	// Review body + issue comment replied via PostPRComment
+	if len(prCommenter.calls) != 2 {
+		t.Fatalf("expected 2 PR comment calls, got %d", len(prCommenter.calls))
+	}
+}
+
+func TestNewAction_BotReviewBody_Filtered(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "COMMENTED", Body: "Automated review", User: "ci-bot[bot]"},
+		},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Bot review should be filtered, so no AI invocation (no feedback at all)
+	if inv.lastPrompt != "" {
+		t.Error("expected AI not to be invoked for bot-only reviews")
+	}
+}
+
+func TestNewAction_EmptyReviewBody_Filtered(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "COMMENTED", Body: "", User: "reviewer"},
+		},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Empty body should be filtered
+	if inv.lastPrompt != "" {
+		t.Error("expected AI not to be invoked for empty review body")
+	}
+}
+
+func TestNewAction_ApprovedReviewBody_Filtered(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "APPROVED", Body: "LGTM!", User: "reviewer"},
+		},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// APPROVED reviews should be filtered (not actionable)
+	if inv.lastPrompt != "" {
+		t.Error("expected AI not to be invoked for APPROVED reviews")
+	}
+}
+
+func TestNewAction_BotIssueComment_Filtered(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.IssueComments = &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 200, Body: "Addressed in abc1234", User: "autoralph[bot]"},
+		},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Bot issue comments should be filtered
+	if inv.lastPrompt != "" {
+		t.Error("expected AI not to be invoked for bot-only issue comments")
+	}
+}
+
+func TestNewAction_FetchReviewsError(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.Reviews = &mockReviewFetcher{err: errors.New("github 500")}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "fetching PR reviews") {
+		t.Errorf("expected 'fetching PR reviews' in error, got: %s", err.Error())
+	}
+}
+
+func TestNewAction_FetchIssueCommentsError(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.IssueComments = &mockIssueCommentFetcher{err: errors.New("github 500")}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "fetching PR issue comments") {
+		t.Errorf("expected 'fetching PR issue comments' in error, got: %s", err.Error())
+	}
+}
+
+func TestNewAction_PRCommentError(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "COMMENTED", Body: "Fix this", User: "reviewer"},
+		},
+	}
+	cfg.PRCommenter = &mockPRCommenter{err: errors.New("github 403")}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "posting PR comment") {
+		t.Errorf("expected 'posting PR comment' in error, got: %s", err.Error())
+	}
+}
+
+func TestNewAction_IssueCommentReaction(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	issueReactor := &mockIssueCommentReactor{}
+	cfg.IssueReactor = issueReactor
+	cfg.IssueComments = &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 200, Body: "Please fix the flaky test", User: "reviewer"},
+		},
+	}
+	cfg.PRCommenter = &mockPRCommenter{}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(issueReactor.calls) != 1 {
+		t.Fatalf("expected 1 issue comment reaction, got %d", len(issueReactor.calls))
+	}
+	if issueReactor.calls[0].commentID != 200 {
+		t.Errorf("expected reaction on comment 200, got %d", issueReactor.calls[0].commentID)
+	}
+	if issueReactor.calls[0].reaction != "eyes" {
+		t.Errorf("expected 'eyes' reaction, got %q", issueReactor.calls[0].reaction)
+	}
+}
+
+func TestNewAction_NilOptionalInterfaces_Safe(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+	// All new optional interfaces are nil — should still work with just line comments
+	cfg.Reviews = nil
+	cfg.IssueComments = nil
+	cfg.PRCommenter = nil
+	cfg.IssueReactor = nil
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastPrompt == "" {
+		t.Fatal("expected AI to be invoked with just line comments")
+	}
+}
+
+func TestNewAction_NoLineComments_ReviewBodyOnly_NoReviewReply(t *testing.T) {
+	// Verifies that review body items don't attempt PostReviewReply
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, replier, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	prCommenter := &mockPRCommenter{}
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "COMMENTED", Body: "General feedback", User: "reviewer"},
+		},
+	}
+	cfg.PRCommenter = prCommenter
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No inline replies
+	if len(replier.calls) != 0 {
+		t.Errorf("expected 0 review reply calls for review body, got %d", len(replier.calls))
+	}
+	// One general PR comment
+	if len(prCommenter.calls) != 1 {
+		t.Errorf("expected 1 PR comment call, got %d", len(prCommenter.calls))
+	}
+}
+
+func TestNewAction_NilPRCommenter_SkipsGeneralReply(t *testing.T) {
+	// When PRCommenter is nil, non-inline feedback is processed but no reply is posted.
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "COMMENTED", Body: "General feedback", User: "reviewer"},
+		},
+	}
+	cfg.PRCommenter = nil // no PR commenter
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// AI should still be invoked
+	if inv.lastPrompt == "" {
+		t.Fatal("expected AI to be invoked")
+	}
+	// No replies of any kind
+	if len(replier.calls) != 0 {
+		t.Errorf("expected 0 review reply calls, got %d", len(replier.calls))
+	}
+}
+
+func TestNewAction_FeedbackCountIncludesAllSources(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, _, _ := defaultMocks(project)
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "line comment", User: "reviewer"},
+	}
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "COMMENTED", Body: "review body", User: "reviewer"},
+		},
+	}
+	cfg.IssueComments = &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 200, Body: "issue comment", User: "tester"},
+		},
+	}
+	cfg.PRCommenter = &mockPRCommenter{}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	activities, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+
+	for _, a := range activities {
+		if a.EventType == "feedback_finish" {
+			if !strings.Contains(a.Detail, "3 comment") {
+				t.Errorf("expected detail to mention 3 comments (all sources), got: %s", a.Detail)
+			}
+			return
+		}
+	}
+	t.Error("expected feedback_finish activity")
 }

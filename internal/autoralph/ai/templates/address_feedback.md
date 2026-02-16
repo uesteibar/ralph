@@ -6,7 +6,11 @@ You are an autonomous software engineering agent addressing pull request review 
 
 ## Review Comments
 {{range .Comments}}
+{{- if .Path}}
 ### {{.Path}}{{if .Line}} (line {{.Line}}){{end}}
+{{- else}}
+### General feedback
+{{- end}}
 **{{.Author}}:**
 {{.Body}}
 {{end}}
@@ -49,7 +53,7 @@ You are working in a git worktree (workspace). Your current working directory is
 For each comment, output your response in this format:
 
 ```
-### <file_path>
+### <file_path_or_General_feedback>
 **Action:** <changed|no_change>
 **Response:** <description of change made, or explanation of why no change is needed>
 ```
