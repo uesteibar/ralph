@@ -31,4 +31,10 @@ Analyze each failed check and fix the root cause of the failure:
 - Do not refactor unrelated code while fixing checks
 - Do not add workarounds like retry logic, test skips, or `@ignore` annotations
 - If a failure is caused by a missing dependency or configuration, fix the configuration
+{{- if .QualityChecks}}
+- Run quality checks after making changes:
+{{range .QualityChecks}}  - `ralph check {{.}}`
+{{end}}  > **Note:** `ralph check` wraps each command with compact pass/fail output. Full output is saved to the log file path shown in the output. If the truncated output is insufficient for debugging, you can grep or read the full log file.
+{{- else}}
 - Run quality checks after making changes to ensure nothing else breaks
+{{- end}}

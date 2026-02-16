@@ -14,6 +14,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/ghpoller"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
+	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
@@ -21,6 +22,9 @@ import (
 
 // Compile-time check: gitOpsAdapter satisfies checks.GitOps.
 var _ checks.GitOps = (*gitOpsAdapter)(nil)
+
+// Compile-time check: claudeInvoker satisfies invoker.EventInvoker.
+var _ invoker.EventInvoker = (*claudeInvoker)(nil)
 
 func initTestRepo(t *testing.T) string {
 	t.Helper()

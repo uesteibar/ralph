@@ -108,6 +108,10 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("resolving default base: %w", err)
 		}
 
+		if err := database.LogActivity(issue.ID, "rebase_start", "", "", fmt.Sprintf("Rebasing %s onto %s", issue.Identifier, base)); err != nil {
+			return fmt.Errorf("logging activity: %w", err)
+		}
+
 		projectConfigPath := filepath.Join(project.LocalPath, project.RalphConfigPath)
 
 		if err := cfg.Runner.RunRebase(ctx, base, issue.WorkspaceName, projectConfigPath); err != nil {
@@ -120,14 +124,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("force pushing branch: %w", err)
 		}
 
-		detail := fmt.Sprintf("Rebased onto %s and force pushed", base)
-		if err := database.LogActivity(
-			issue.ID,
-			"auto_rebase",
-			"",
-			"",
-			detail,
-		); err != nil {
+		if err := database.LogActivity(issue.ID, "rebase_finish", "", "", fmt.Sprintf("Rebased onto %s and force pushed", base)); err != nil {
 			return fmt.Errorf("logging activity: %w", err)
 		}
 

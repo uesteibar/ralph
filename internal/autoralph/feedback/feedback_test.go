@@ -9,6 +9,8 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
+	"github.com/uesteibar/ralph/internal/config"
+	"github.com/uesteibar/ralph/internal/events"
 )
 
 func testDB(t *testing.T) *db.DB {
@@ -64,13 +66,15 @@ func createTestIssue(t *testing.T, d *db.DB, project db.Project) db.Issue {
 // --- Mocks ---
 
 type mockInvoker struct {
-	lastPrompt string
-	response   string
-	err        error
+	lastPrompt  string
+	lastHandler events.EventHandler
+	response    string
+	err         error
 }
 
-func (m *mockInvoker) Invoke(_ context.Context, prompt, dir string) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(_ context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
 	m.lastPrompt = prompt
+	m.lastHandler = handler
 	return m.response, m.err
 }
 
@@ -140,6 +144,15 @@ type mockProjectGetter struct {
 
 func (m *mockProjectGetter) GetProject(_ string) (db.Project, error) {
 	return m.project, m.err
+}
+
+type mockConfigLoader struct {
+	cfg *config.Config
+	err error
+}
+
+func (m *mockConfigLoader) Load(_ string) (*config.Config, error) {
+	return m.cfg, m.err
 }
 
 func defaultMocks(project db.Project) (Config, *mockInvoker, *mockCommentFetcher, *mockReviewReplier, *mockGitOps) {
@@ -285,7 +298,7 @@ func TestNewAction_LogsActivity(t *testing.T) {
 
 	found := false
 	for _, a := range activities {
-		if a.EventType == "feedback_addressed" {
+		if a.EventType == "feedback_finish" {
 			found = true
 			if !strings.Contains(a.Detail, "abc1234") {
 				t.Errorf("expected detail to contain commit SHA, got: %s", a.Detail)
@@ -296,7 +309,7 @@ func TestNewAction_LogsActivity(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("expected feedback_addressed activity")
+		t.Error("expected feedback_finish activity")
 	}
 }
 
@@ -509,6 +522,246 @@ func TestNewAction_HeadSHAError_UsesUnknown(t *testing.T) {
 	}
 	if !strings.Contains(replier.calls[0].body, "latest commit") {
 		t.Errorf("expected reply to contain 'latest commit' fallback, got: %s", replier.calls[0].body)
+	}
+}
+
+func TestNewAction_WithConfigLoader_IncludesQualityChecksInPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+	cfg.ConfigLoad = &mockConfigLoader{
+		cfg: &config.Config{
+			Project:       "test",
+			Repo:          config.RepoConfig{DefaultBase: "main"},
+			QualityChecks: []string{"just test", "just vet"},
+		},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, cmd := range []string{"ralph check just test", "ralph check just vet"} {
+		if !strings.Contains(inv.lastPrompt, cmd) {
+			t.Errorf("expected prompt to contain %q", cmd)
+		}
+	}
+}
+
+func TestNewAction_WithConfigLoader_Error_ReturnsError(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+	cfg.ConfigLoad = &mockConfigLoader{err: errors.New("config not found")}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "loading ralph config") {
+		t.Errorf("expected 'loading ralph config' in error, got: %s", err.Error())
+	}
+}
+
+func TestNewAction_WithoutConfigLoader_SkipsQualityChecks(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+	// ConfigLoad is nil — should not crash and should not include quality checks
+	cfg.ConfigLoad = nil
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(inv.lastPrompt, "ralph check") {
+		t.Error("expected prompt NOT to contain 'ralph check' when ConfigLoad is nil")
+	}
+}
+
+func TestNewAction_PassesEventHandlerToInvoker(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastHandler == nil {
+		t.Fatal("expected event handler to be passed to InvokeWithEvents")
+	}
+}
+
+func TestNewAction_EventHandlerLogsBuildEvents(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+
+	var callbackIssueID, callbackDetail string
+	cfg.OnBuildEvent = func(issueID, detail string) {
+		callbackIssueID = issueID
+		callbackDetail = detail
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Simulate a tool-use event through the handler
+	inv.lastHandler.Handle(events.ToolUse{Name: "Edit", Detail: "main.go"})
+
+	// Verify build_event was logged to the activity table
+	activities, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+
+	found := false
+	for _, a := range activities {
+		if a.EventType == "build_event" && strings.Contains(a.Detail, "Edit") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected build_event activity with tool name 'Edit'")
+	}
+
+	// Verify OnBuildEvent callback was called
+	if callbackIssueID != issue.ID {
+		t.Errorf("expected callback issueID %q, got %q", issue.ID, callbackIssueID)
+	}
+	if !strings.Contains(callbackDetail, "Edit") {
+		t.Errorf("expected callback detail to contain 'Edit', got %q", callbackDetail)
+	}
+}
+
+func TestNewAction_EventHandlerForwardsToUpstream(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+
+	var upstreamReceived []events.Event
+	cfg.EventHandler = &mockEventHandler{handleFn: func(e events.Event) {
+		upstreamReceived = append(upstreamReceived, e)
+	}}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Send event through the handler
+	ev := events.ToolUse{Name: "Bash", Detail: "go test ./..."}
+	inv.lastHandler.Handle(ev)
+
+	if len(upstreamReceived) != 1 {
+		t.Fatalf("expected 1 upstream event, got %d", len(upstreamReceived))
+	}
+	if tu, ok := upstreamReceived[0].(events.ToolUse); !ok || tu.Name != "Bash" {
+		t.Error("expected upstream to receive ToolUse event with name 'Bash'")
+	}
+}
+
+// mockEventHandler is a test helper for verifying event forwarding.
+type mockEventHandler struct {
+	handleFn func(e events.Event)
+}
+
+func (m *mockEventHandler) Handle(e events.Event) {
+	if m.handleFn != nil {
+		m.handleFn(e)
+	}
+}
+
+func TestNewAction_LogsFeedbackStartAndFinish(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	activities, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+
+	var foundStart, foundFinish bool
+	for _, a := range activities {
+		if a.EventType == "feedback_start" {
+			foundStart = true
+			if !strings.Contains(a.Detail, "PROJ-42") {
+				t.Errorf("expected feedback_start detail to contain issue identifier, got: %s", a.Detail)
+			}
+		}
+		if a.EventType == "feedback_finish" {
+			foundFinish = true
+			if !strings.Contains(a.Detail, "2 comment") {
+				t.Errorf("expected feedback_finish detail to mention comment count, got: %s", a.Detail)
+			}
+		}
+	}
+	if !foundStart {
+		t.Error("expected feedback_start activity")
+	}
+	if !foundFinish {
+		t.Error("expected feedback_finish activity")
+	}
+}
+
+func TestNewAction_NoComments_LogsStartButSkipsFinish(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	activities, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+
+	var foundStart, foundFinish bool
+	for _, a := range activities {
+		if a.EventType == "feedback_start" {
+			foundStart = true
+		}
+		if a.EventType == "feedback_finish" {
+			foundFinish = true
+		}
+	}
+	if !foundStart {
+		t.Error("expected feedback_start activity even with no comments")
+	}
+	if foundFinish {
+		t.Error("expected no feedback_finish activity when no comments")
 	}
 }
 

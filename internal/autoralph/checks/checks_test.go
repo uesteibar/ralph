@@ -10,6 +10,8 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
+	"github.com/uesteibar/ralph/internal/config"
+	"github.com/uesteibar/ralph/internal/events"
 )
 
 func testDB(t *testing.T) *db.DB {
@@ -67,15 +69,17 @@ func createTestIssue(t *testing.T, d *db.DB, project db.Project, attempts int) d
 // --- Mocks ---
 
 type mockInvoker struct {
-	lastPrompt string
-	lastDir    string
-	response   string
-	err        error
+	lastPrompt  string
+	lastDir     string
+	lastHandler events.EventHandler
+	response    string
+	err         error
 }
 
-func (m *mockInvoker) Invoke(_ context.Context, prompt, dir string) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(_ context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
 	m.lastPrompt = prompt
 	m.lastDir = dir
+	m.lastHandler = handler
 	return m.response, m.err
 }
 
@@ -297,7 +301,7 @@ func TestNewAction_IncrementsCheckFixAttempts(t *testing.T) {
 	}
 }
 
-func TestNewAction_LogsChecksFixingActivity(t *testing.T) {
+func TestNewAction_LogsChecksStartAndFinish(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
 	issue := createTestIssue(t, d, project, 0)
@@ -309,29 +313,31 @@ func TestNewAction_LogsChecksFixingActivity(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	activities, err := d.ListActivity(issue.ID, 10, 0)
+	activities, err := d.ListActivity(issue.ID, 20, 0)
 	if err != nil {
 		t.Fatalf("listing activities: %v", err)
 	}
 
-	foundFixing := false
-	foundFixed := false
+	var foundStart, foundFinish bool
 	for _, a := range activities {
-		if a.EventType == "checks_fixing" {
-			foundFixing = true
+		if a.EventType == "checks_start" {
+			foundStart = true
+			if !strings.Contains(a.Detail, "PROJ-42") {
+				t.Errorf("expected checks_start detail to contain issue identifier, got: %s", a.Detail)
+			}
 		}
-		if a.EventType == "checks_fixed" {
-			foundFixed = true
+		if a.EventType == "checks_finish" {
+			foundFinish = true
 			if !strings.Contains(a.Detail, "test") {
-				t.Errorf("expected checks_fixed detail to contain check name, got: %s", a.Detail)
+				t.Errorf("expected checks_finish detail to contain check name, got: %s", a.Detail)
 			}
 		}
 	}
-	if !foundFixing {
-		t.Error("expected checks_fixing activity")
+	if !foundStart {
+		t.Error("expected checks_start activity")
 	}
-	if !foundFixed {
-		t.Error("expected checks_fixed activity")
+	if !foundFinish {
+		t.Error("expected checks_finish activity")
 	}
 }
 
@@ -609,6 +615,180 @@ func TestTruncateLog_OverLimit(t *testing.T) {
 	resultLines := strings.Split(result, "\n")
 	if len(resultLines) != 500 {
 		t.Errorf("expected 500 lines, got %d", len(resultLines))
+	}
+}
+
+type mockConfigLoader struct {
+	cfg *config.Config
+	err error
+}
+
+func (m *mockConfigLoader) Load(_ string) (*config.Config, error) {
+	return m.cfg, m.err
+}
+
+func TestNewAction_WithConfigLoader_IncludesQualityChecksInPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+	cfg.ConfigLoad = &mockConfigLoader{
+		cfg: &config.Config{
+			Project:       "test",
+			Repo:          config.RepoConfig{DefaultBase: "main"},
+			QualityChecks: []string{"just test", "just lint"},
+		},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, cmd := range []string{"ralph check just test", "ralph check just lint"} {
+		if !strings.Contains(inv.lastPrompt, cmd) {
+			t.Errorf("expected prompt to contain %q", cmd)
+		}
+	}
+}
+
+func TestNewAction_WithConfigLoader_Error_ReturnsError(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, _, _, _, _, _, _ := defaultMocks(project)
+	cfg.ConfigLoad = &mockConfigLoader{err: errors.New("config not found")}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "loading ralph config") {
+		t.Errorf("expected 'loading ralph config' in error, got: %s", err.Error())
+	}
+}
+
+func TestNewAction_WithoutConfigLoader_SkipsQualityChecks(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+	// ConfigLoad is nil — should not crash and should not include quality checks
+	cfg.ConfigLoad = nil
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(inv.lastPrompt, "ralph check") {
+		t.Error("expected prompt NOT to contain 'ralph check' when ConfigLoad is nil")
+	}
+}
+
+func TestNewAction_PassesEventHandlerToInvoker(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastHandler == nil {
+		t.Fatal("expected event handler to be passed to InvokeWithEvents")
+	}
+}
+
+func TestNewAction_EventHandlerLogsBuildEvents(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+
+	var callbackIssueID, callbackDetail string
+	cfg.OnBuildEvent = func(issueID, detail string) {
+		callbackIssueID = issueID
+		callbackDetail = detail
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Simulate a tool-use event through the handler
+	inv.lastHandler.Handle(events.ToolUse{Name: "Bash", Detail: "go test ./..."})
+
+	// Verify build_event was logged to the activity table
+	activities, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+
+	found := false
+	for _, a := range activities {
+		if a.EventType == "build_event" && strings.Contains(a.Detail, "Bash") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected build_event activity with tool name 'Bash'")
+	}
+
+	// Verify OnBuildEvent callback was called
+	if callbackIssueID != issue.ID {
+		t.Errorf("expected callback issueID %q, got %q", issue.ID, callbackIssueID)
+	}
+	if !strings.Contains(callbackDetail, "Bash") {
+		t.Errorf("expected callback detail to contain 'Bash', got %q", callbackDetail)
+	}
+}
+
+func TestNewAction_EventHandlerForwardsToUpstream(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+
+	var upstreamReceived []events.Event
+	cfg.EventHandler = &mockEventHandler{handleFn: func(e events.Event) {
+		upstreamReceived = append(upstreamReceived, e)
+	}}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Send event through the handler
+	ev := events.ToolUse{Name: "Read", Detail: "main.go"}
+	inv.lastHandler.Handle(ev)
+
+	if len(upstreamReceived) != 1 {
+		t.Fatalf("expected 1 upstream event, got %d", len(upstreamReceived))
+	}
+	if tu, ok := upstreamReceived[0].(events.ToolUse); !ok || tu.Name != "Read" {
+		t.Error("expected upstream to receive ToolUse event with name 'Read'")
+	}
+}
+
+// mockEventHandler is a test helper for verifying event forwarding.
+type mockEventHandler struct {
+	handleFn func(e events.Event)
+}
+
+func (m *mockEventHandler) Handle(e events.Event) {
+	if m.handleFn != nil {
+		m.handleFn(e)
 	}
 }
 

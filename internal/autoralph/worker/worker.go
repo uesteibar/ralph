@@ -165,6 +165,77 @@ func (d *Dispatcher) ActiveCount() int {
 	return len(d.active)
 }
 
+// DispatchAction starts a goroutine that runs an arbitrary action function for
+// the given issue. It reuses the same semaphore and per-issue tracking as
+// Dispatch to prevent concurrent actions on the same issue. On failure,
+// it logs to the activity table and sets issue.ErrorMessage (same as
+// handleFailure). Context cancellation is treated as a clean exit.
+func (d *Dispatcher) DispatchAction(ctx context.Context, issue db.Issue, actionFn func(ctx context.Context) error) error {
+	d.mu.Lock()
+	if _, ok := d.active[issue.ID]; ok {
+		d.mu.Unlock()
+		return fmt.Errorf("issue %s is already running", issue.ID)
+	}
+	d.mu.Unlock()
+
+	// Try to acquire a worker slot (non-blocking).
+	select {
+	case d.sem <- struct{}{}:
+	default:
+		return fmt.Errorf("no worker slot available (max %d)", d.maxWorkers)
+	}
+
+	actionCtx, cancel := context.WithCancel(ctx)
+
+	d.mu.Lock()
+	d.active[issue.ID] = cancel
+	d.mu.Unlock()
+
+	d.wg.Add(1)
+	go d.runAction(actionCtx, cancel, issue, actionFn)
+
+	return nil
+}
+
+// runAction executes an arbitrary action function in a goroutine. It handles
+// cleanup (semaphore release, active map removal) and error handling (logging
+// to activity table and setting issue.ErrorMessage on failure).
+func (d *Dispatcher) runAction(ctx context.Context, cancel context.CancelFunc, issue db.Issue, actionFn func(ctx context.Context) error) {
+	defer d.wg.Done()
+	defer func() {
+		<-d.sem // release worker slot
+		d.mu.Lock()
+		delete(d.active, issue.ID)
+		d.mu.Unlock()
+		cancel()
+	}()
+
+	actionErr := actionFn(ctx)
+	if actionErr == nil {
+		return
+	}
+
+	// Context cancellation: clean exit, don't mark as failed
+	if errors.Is(actionErr, context.Canceled) || errors.Is(actionErr, context.DeadlineExceeded) {
+		d.logger.Info("action cancelled", "issue", issue.ID)
+		return
+	}
+
+	d.handleActionFailure(issue, actionErr)
+}
+
+func (d *Dispatcher) handleActionFailure(issue db.Issue, actionErr error) {
+	issue.State = "failed"
+	issue.ErrorMessage = actionErr.Error()
+	if err := d.db.UpdateIssue(issue); err != nil {
+		d.logger.Error("updating issue to failed after action", "issue", issue.ID, "error", err)
+		return
+	}
+	if err := d.db.LogActivity(issue.ID, "action_failed", "", "failed", actionErr.Error()); err != nil {
+		d.logger.Error("logging action_failed activity", "issue", issue.ID, "error", err)
+	}
+}
+
 // RecoverBuilding queries the database for issues in the BUILDING state and
 // re-dispatches them. This is called on startup to resume builds that were
 // interrupted by a process restart.

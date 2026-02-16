@@ -75,8 +75,9 @@ type AddressFeedbackComment struct {
 
 // AddressFeedbackData holds the context for rendering the address_feedback prompt.
 type AddressFeedbackData struct {
-	Comments    []AddressFeedbackComment
-	CodeContext string
+	Comments      []AddressFeedbackComment
+	CodeContext   string
+	QualityChecks []string
 }
 
 // FailedCheckRun represents a single failed CI check run.
@@ -88,7 +89,8 @@ type FailedCheckRun struct {
 
 // FixChecksData holds the context for rendering the fix_checks prompt.
 type FixChecksData struct {
-	FailedChecks []FailedCheckRun
+	FailedChecks  []FailedCheckRun
+	QualityChecks []string
 }
 
 // --- Render functions ---

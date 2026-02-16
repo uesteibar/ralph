@@ -10,8 +10,10 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/build"
 	"github.com/uesteibar/ralph/internal/autoralph/checks"
 	"github.com/uesteibar/ralph/internal/autoralph/complete"
+	"github.com/uesteibar/ralph/internal/autoralph/feedback"
 	"github.com/uesteibar/ralph/internal/autoralph/ghpoller"
 	ghclient "github.com/uesteibar/ralph/internal/autoralph/github"
+	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/uesteibar/ralph/internal/claude"
 	"github.com/uesteibar/ralph/internal/config"
+	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/gitops"
 	"github.com/uesteibar/ralph/internal/loop"
 	"github.com/uesteibar/ralph/internal/prd"
@@ -26,14 +29,18 @@ import (
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
-// Compile-time interface checks: github.Client satisfies the checks package
-// interfaces and the ghpoller GitHubClient interface directly.
+// Compile-time interface checks.
 var (
 	_ checks.CheckRunFetcher = (*ghclient.Client)(nil)
 	_ checks.LogFetcher      = (*ghclient.Client)(nil)
 	_ checks.PRFetcher       = (*ghclient.Client)(nil)
 	_ checks.PRCommenter     = (*ghclient.Client)(nil)
+	_ checks.ConfigLoader    = (*configLoaderAdapter)(nil)
+	_ checks.EventInvoker    = (*claudeInvoker)(nil)
+	_ feedback.ConfigLoader  = (*configLoaderAdapter)(nil)
+	_ feedback.EventInvoker  = (*claudeInvoker)(nil)
 	_ ghpoller.GitHubClient  = (*ghclient.Client)(nil)
+	_ invoker.EventInvoker   = (*claudeInvoker)(nil)
 )
 
 // claudeInvoker wraps claude.Invoke to satisfy the Invoker interface used by
@@ -50,6 +57,16 @@ func (c *claudeInvoker) Invoke(ctx context.Context, prompt, dir string) (string,
 		Dir:             dir,
 		Print:           true,
 		DisallowedTools: c.DisallowedTools,
+	})
+}
+
+func (c *claudeInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+	return claude.Invoke(ctx, claude.InvokeOpts{
+		Prompt:          prompt,
+		Dir:             dir,
+		Print:           true,
+		DisallowedTools: c.DisallowedTools,
+		EventHandler:    handler,
 	})
 }
 
@@ -181,7 +198,7 @@ func (w *workspaceRemoverAdapter) RemoveWorkspace(ctx context.Context, repoPath,
 	return workspace.RemoveWorkspace(ctx, r, repoPath, name)
 }
 
-// configLoaderAdapter satisfies both build.ConfigLoader and pr.ConfigLoader.
+// configLoaderAdapter satisfies build.ConfigLoader, feedback.ConfigLoader, and pr.ConfigLoader.
 type configLoaderAdapter struct{}
 
 func (c *configLoaderAdapter) Load(path string) (*config.Config, error) {

@@ -548,6 +548,68 @@ func TestRenderQAFix_ContainsAllSections(t *testing.T) {
 	}
 }
 
+func TestRenderRebaseConflict_WithQualityChecks_RendersExplicitCommands(t *testing.T) {
+	data := RebaseConflictData{
+		PRDDescription: "Test feature",
+		Stories:        "- US-001: Test [pending]",
+		ConflictFiles:  "main.go",
+		QualityChecks:  []string{"just test", "just vet"},
+	}
+
+	out, err := RenderRebaseConflict(data, "")
+	if err != nil {
+		t.Fatalf("RenderRebaseConflict failed: %v", err)
+	}
+
+	checks := []string{
+		"ralph check just test",
+		"ralph check just vet",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderRebaseConflict_WithoutQualityChecks_OmitsCheckSection(t *testing.T) {
+	data := RebaseConflictData{
+		PRDDescription: "Test feature",
+		Stories:        "- US-001: Test [pending]",
+		ConflictFiles:  "main.go",
+	}
+
+	out, err := RenderRebaseConflict(data, "")
+	if err != nil {
+		t.Fatalf("RenderRebaseConflict failed: %v", err)
+	}
+
+	if strings.Contains(out, "ralph check") {
+		t.Error("output should not contain 'ralph check' when QualityChecks is empty")
+	}
+	// Should still contain the standard rebase instructions
+	if !strings.Contains(out, "git rebase --continue") {
+		t.Error("output should contain 'git rebase --continue'")
+	}
+}
+
+func TestRenderRebaseConflict_WithQualityChecks_ContainsLogFileNote(t *testing.T) {
+	data := RebaseConflictData{
+		PRDDescription: "Test feature",
+		ConflictFiles:  "main.go",
+		QualityChecks:  []string{"just test"},
+	}
+
+	out, err := RenderRebaseConflict(data, "")
+	if err != nil {
+		t.Fatalf("RenderRebaseConflict failed: %v", err)
+	}
+
+	if !strings.Contains(out, "log file") {
+		t.Error("output should contain a note about the log file for debugging")
+	}
+}
+
 // --- ralph check wrapping tests ---
 
 func TestRenderLoopIteration_WrapsQualityChecksWithRalphCheck(t *testing.T) {
