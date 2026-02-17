@@ -64,30 +64,9 @@ organization use:
 
 ### Setting Up a GitHub App
 
-1. **Create the app**: GitHub → Settings → Developer settings → GitHub Apps →
-   New GitHub App
-   - Give it a name (e.g., "AutoRalph - My Org")
-   - Set Homepage URL to any valid URL
-   - Under Webhook, uncheck Active (AutoRalph polls, no webhooks needed)
-   - Under Permissions → Repository permissions, grant:
-     - **Contents**: Read and write
-     - **Pull requests**: Read and write
-     - **Issues**: Read and write
-   - Click Create GitHub App
-
-2. **Get the Client ID**: On the app settings page, copy the Client ID
-   (starts with `Iv`) → `github_app_client_id`
-
-3. **Generate a private key**: On the app page → Private keys → Generate a
-   private key → save the `.pem` file (e.g., `~/.autoralph/my-app.pem`) →
-   `github_app_private_key_path`
-
-4. **Install the app**: Install App tab → select your org/account → choose
-   repositories → Install
-
-5. **Get the Installation ID**: After installing, the URL will be
-   `https://github.com/settings/installations/12345678` — that number is
-   your `github_app_installation_id`
+See the [GitHub App Setup](github-app.md) guide for a complete walkthrough
+covering app creation, permissions, private key management, and installing on
+organizations.
 
 ## Credential Isolation
 

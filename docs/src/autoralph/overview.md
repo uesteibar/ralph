@@ -75,5 +75,6 @@ autoralph --version
 - [Lifecycle](lifecycle.md) — the full issue state machine
 - [Abilities](abilities.md) — what AutoRalph can do at each stage
 - [Configuration](configuration.md) — setting up credentials and projects
+- [GitHub App Setup](github-app.md) — creating and installing a GitHub App
 - [Security](security.md) — authentication and access controls
 - [Dashboard](dashboard.md) — the web UI and API
