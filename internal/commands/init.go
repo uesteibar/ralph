@@ -13,6 +13,7 @@ import (
 
 	"github.com/uesteibar/ralph/internal/claude"
 	"github.com/uesteibar/ralph/internal/config"
+	"github.com/uesteibar/ralph/internal/knowledge"
 )
 
 // invokeClaudeFn is the function used to invoke Claude CLI. It can be
@@ -159,6 +160,7 @@ func Init(args []string, in io.Reader) error {
 		ralphDir,
 		filepath.Join(ralphDir, "tasks"),
 		filepath.Join(ralphDir, "skills"),
+		filepath.Join(ralphDir, "knowledge"),
 		filepath.Join(ralphDir, "workspaces"),
 		stateDir,
 		filepath.Join(stateDir, "archive"),
@@ -219,6 +221,11 @@ func Init(args []string, in io.Reader) error {
 		if err := os.WriteFile(keepPath, []byte(""), 0644); err != nil {
 			return fmt.Errorf("writing .gitkeep: %w", err)
 		}
+	}
+
+	// Seed knowledge base README (only if it doesn't exist)
+	if err := knowledge.SeedReadme(cwd); err != nil {
+		return fmt.Errorf("seeding knowledge base: %w", err)
 	}
 
 	// Install /finish Claude skill (always write to keep up to date)

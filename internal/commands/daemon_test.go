@@ -207,6 +207,40 @@ func TestDaemon_UsesFileHandler(t *testing.T) {
 	}
 }
 
+func TestDaemon_PassesKnowledgePath(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	initTestRepo(t, dir)
+	wsName := "test-knowledge"
+	setupWorkspace(t, dir, wsName, allPassingPRD(wsName))
+
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(dir)
+
+	var capturedKnowledgePath string
+	origRunLoop := daemonRunLoopFn
+	daemonRunLoopFn = func(ctx context.Context, cfg loop.Config) error {
+		capturedKnowledgePath = cfg.KnowledgePath
+		return nil
+	}
+	defer func() { daemonRunLoopFn = origRunLoop }()
+
+	err := Daemon([]string{"--workspace", wsName})
+	if err != nil {
+		t.Fatalf("Daemon returned error: %v", err)
+	}
+
+	if capturedKnowledgePath == "" {
+		t.Error("expected KnowledgePath to be set")
+	}
+	if !strings.Contains(capturedKnowledgePath, ".ralph") || !strings.Contains(capturedKnowledgePath, "knowledge") {
+		t.Errorf("expected KnowledgePath to contain .ralph/knowledge, got %q", capturedKnowledgePath)
+	}
+	if !strings.Contains(capturedKnowledgePath, wsName) {
+		t.Errorf("expected KnowledgePath to point to workspace tree, got %q", capturedKnowledgePath)
+	}
+}
+
 func TestDaemon_RedirectsOutputToDevNull(t *testing.T) {
 	dir := realPath(t, t.TempDir())
 	initTestRepo(t, dir)

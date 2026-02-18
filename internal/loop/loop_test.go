@@ -1566,6 +1566,163 @@ func TestRun_EmitsWarningLogOnClaudeError(t *testing.T) {
 	}
 }
 
+func TestRun_KnowledgePathPassedToStoryPrompt(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var capturedPrompt string
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		capturedPrompt = opts.prompt
+		testPRD.UserStories[0].Passes = true
+		prd.Write(prdPath, testPRD)
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		KnowledgePath: "/tmp/test/.ralph/knowledge",
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	if !contains(capturedPrompt, "/tmp/test/.ralph/knowledge") {
+		t.Error("expected story prompt to contain knowledge path")
+	}
+}
+
+func TestRun_KnowledgePathPassedToQAVerification(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+		IntegrationTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var capturedQAPrompt string
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		if opts.isQAVerification {
+			capturedQAPrompt = opts.prompt
+			testPRD.IntegrationTests[0].Passes = true
+			prd.Write(prdPath, testPRD)
+		}
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		KnowledgePath: "/tmp/test/.ralph/knowledge",
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	if !contains(capturedQAPrompt, "/tmp/test/.ralph/knowledge") {
+		t.Error("expected QA verification prompt to contain knowledge path")
+	}
+}
+
+func TestRun_KnowledgePathPassedToQAFix(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+		IntegrationTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var capturedFixPrompt string
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		if opts.isQAFix {
+			capturedFixPrompt = opts.prompt
+			testPRD.IntegrationTests[0].Passes = true
+			prd.Write(prdPath, testPRD)
+		}
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+		KnowledgePath: "/tmp/test/.ralph/knowledge",
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	if !contains(capturedFixPrompt, "/tmp/test/.ralph/knowledge") {
+		t.Error("expected QA fix prompt to contain knowledge path")
+	}
+}
+
 func TestRun_EmitsWarningLogOnGitCheckFailure(t *testing.T) {
 	dir := t.TempDir()
 	prdPath := filepath.Join(dir, "prd.json")

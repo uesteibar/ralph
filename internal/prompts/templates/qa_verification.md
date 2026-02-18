@@ -10,6 +10,11 @@ Even if you consider the feature is sufficiently tested, you MUST still plan, bu
 - **Progress log**: `{{.ProgressPath}}`
 - **Quality checks**: {{range .QualityChecks}}`ralph check {{.}}` {{end}}
 
+{{if .KnowledgePath}}
+## Knowledge Base
+
+A project knowledge base is available at `{{.KnowledgePath}}`. Before starting work, use Glob and Grep to search for relevant learnings, patterns, and testing gotchas.
+{{end}}
 ## Your Task
 
 1. Read the PRD at `{{.PRDPath}}` and locate the `integrationTests` array

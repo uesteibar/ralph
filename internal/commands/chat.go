@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/uesteibar/ralph/internal/claude"
+	"github.com/uesteibar/ralph/internal/knowledge"
 	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/prompts"
 	"github.com/uesteibar/ralph/internal/shell"
@@ -38,6 +39,7 @@ func Chat(args []string) error {
 	data := prompts.ChatSystemData{
 		ProjectName:   cfg.Project,
 		WorkspaceName: wc.Name,
+		KnowledgePath: knowledge.Dir(wc.WorkDir),
 	}
 
 	// Read config YAML for context

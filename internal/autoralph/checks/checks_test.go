@@ -792,5 +792,23 @@ func (m *mockEventHandler) Handle(e events.Event) {
 	}
 }
 
+func TestNewAction_IncludesKnowledgePath(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The knowledge path is computed from workspace.TreePath
+	if !strings.Contains(inv.lastPrompt, ".ralph/knowledge") {
+		t.Error("expected prompt to contain knowledge path")
+	}
+}
+
 // Suppress unused import warning for ai package
 var _ = ai.FixChecksData{}

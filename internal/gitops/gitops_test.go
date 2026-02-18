@@ -670,6 +670,51 @@ func TestCopyDotRalph_SkipsRalphYamlAndProgressTxt(t *testing.T) {
 	}
 }
 
+func TestCopyDotRalph_CopiesKnowledgeDirectory(t *testing.T) {
+	repoDir := t.TempDir()
+	worktreeDir := t.TempDir()
+
+	// Create .ralph/knowledge/ with a README and a nested topic file.
+	knowledgeDir := filepath.Join(repoDir, ".ralph", "knowledge")
+	subDir := filepath.Join(knowledgeDir, "testing")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(knowledgeDir, "README.md"), []byte("# Knowledge Base"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "flaky-ci.md"), []byte("## Tags: testing, ci\nRetry flaky tests"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CopyDotRalph(repoDir, worktreeDir); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify knowledge directory exists in worktree.
+	wtKnowledge := filepath.Join(worktreeDir, ".ralph", "knowledge")
+	if _, err := os.Stat(wtKnowledge); err != nil {
+		t.Fatalf("expected knowledge directory in worktree: %v", err)
+	}
+
+	// Verify files were copied with correct content.
+	data, err := os.ReadFile(filepath.Join(wtKnowledge, "README.md"))
+	if err != nil {
+		t.Fatalf("expected README.md to exist: %v", err)
+	}
+	if string(data) != "# Knowledge Base" {
+		t.Errorf("README.md content = %q, want %q", string(data), "# Knowledge Base")
+	}
+
+	data, err = os.ReadFile(filepath.Join(wtKnowledge, "testing", "flaky-ci.md"))
+	if err != nil {
+		t.Fatalf("expected testing/flaky-ci.md to exist: %v", err)
+	}
+	if !strings.Contains(string(data), "flaky") {
+		t.Errorf("expected flaky-ci.md to contain 'flaky', got %q", string(data))
+	}
+}
+
 func TestCopyDotClaude_CopiesDirectory(t *testing.T) {
 	repoDir := t.TempDir()
 	worktreeDir := t.TempDir()

@@ -12,6 +12,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
 	"github.com/uesteibar/ralph/internal/config"
 	"github.com/uesteibar/ralph/internal/events"
+	"github.com/uesteibar/ralph/internal/knowledge"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
@@ -146,17 +147,18 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			})
 		}
 
+		// Invoke AI in the workspace worktree
+		treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
+
 		// Render fix_checks.md template
 		prompt, err := ai.RenderFixChecks(ai.FixChecksData{
 			FailedChecks:  failedChecks,
 			QualityChecks: qualityChecks,
+			KnowledgePath: knowledge.Dir(treePath),
 		}, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering fix_checks prompt: %w", err)
 		}
-
-		// Invoke AI in the workspace worktree
-		treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
 		handler := newBuildEventHandler(database, issue.ID, cfg.EventHandler, cfg.OnBuildEvent)
 		if _, err := cfg.Invoker.InvokeWithEvents(ctx, prompt, treePath, handler); err != nil {
 			return fmt.Errorf("invoking AI: %w", err)

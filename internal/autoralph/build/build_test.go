@@ -513,5 +513,25 @@ func TestSanitizeName(t *testing.T) {
 	}
 }
 
+func TestBuildAction_IncludesKnowledgePath(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "approved")
+
+	cfg := defaultConfig()
+	cfg.Projects = d
+	invoker := cfg.Invoker.(*mockInvoker)
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The knowledge path should be computed from project.LocalPath (/tmp/test)
+	if !strings.Contains(invoker.lastPrompt, ".ralph/knowledge") {
+		t.Error("expected prompt to contain knowledge path")
+	}
+}
+
 // Branch pattern validation is intentionally skipped by autoralph —
 // autoralph uses its own branch prefix which may not match the ralph config pattern.

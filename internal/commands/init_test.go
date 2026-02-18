@@ -410,6 +410,91 @@ func TestInit_CreatesWorkspaceInfrastructure(t *testing.T) {
 	}
 }
 
+func TestInit_CreatesKnowledgeDirectory(t *testing.T) {
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	in := strings.NewReader("1\nn\n")
+	if err := Init(nil, in); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Knowledge directory should exist
+	knowledgeDir := filepath.Join(dir, ".ralph", "knowledge")
+	info, err := os.Stat(knowledgeDir)
+	if err != nil {
+		t.Fatalf("knowledge directory should exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("knowledge should be a directory")
+	}
+
+	// README.md should exist with tagging info
+	readmePath := filepath.Join(knowledgeDir, "README.md")
+	data, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("README.md should exist: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Tags") {
+		t.Error("README.md should mention Tags format")
+	}
+	if !strings.Contains(content, "Knowledge Base") {
+		t.Error("README.md should explain the knowledge base purpose")
+	}
+}
+
+func TestInit_KnowledgeDirectory_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	// First run
+	in1 := strings.NewReader("1\nn\n")
+	if err := Init(nil, in1); err != nil {
+		t.Fatalf("first Init failed: %v", err)
+	}
+
+	// Write a custom file to the knowledge directory
+	customFile := filepath.Join(dir, ".ralph", "knowledge", "my-learning.md")
+	if err := os.WriteFile(customFile, []byte("## Tags: go\nmy learning"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Modify README to verify it's not overwritten
+	readmePath := filepath.Join(dir, ".ralph", "knowledge", "README.md")
+	if err := os.WriteFile(readmePath, []byte("custom readme"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second run
+	in2 := strings.NewReader("1\nn\n")
+	if err := Init(nil, in2); err != nil {
+		t.Fatalf("second Init failed: %v", err)
+	}
+
+	// Custom file should still exist
+	data, err := os.ReadFile(customFile)
+	if err != nil {
+		t.Fatalf("custom knowledge file should still exist: %v", err)
+	}
+	if !strings.Contains(string(data), "my learning") {
+		t.Error("custom knowledge file content should be preserved")
+	}
+
+	// README should not be overwritten
+	readmeData, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(readmeData) != "custom readme" {
+		t.Error("README.md should not be overwritten on re-run")
+	}
+}
+
 func TestFinishSkillContent_ContainsOverviewFields(t *testing.T) {
 	tests := []struct {
 		name    string

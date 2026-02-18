@@ -19,6 +19,11 @@ You are an autonomous software engineering agent generating a PRD (Product Requi
 {{.ArchitectureOverview}}
 {{end}}
 
+{{if .KnowledgePath}}
+## Knowledge Base
+
+A project knowledge base is available at `{{.KnowledgePath}}`. Before writing the PRD, use Glob and Grep to search for relevant learnings, patterns, and past decisions that may inform story design.
+{{end}}
 ## Your Task
 
 Write a PRD as a JSON file to the following path:
