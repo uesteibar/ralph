@@ -1029,6 +1029,167 @@ func (r *commitDuringLoopRunner) Run(ctx context.Context, cfg LoopConfig) error 
 	return nil
 }
 
+func TestFormatEventDetail_AgentText_ReturnsTextContent(t *testing.T) {
+	e := events.AgentText{Text: "Analyzing the code structure"}
+	got := formatEventDetail(e)
+	want := "Analyzing the code structure"
+	if got != want {
+		t.Errorf("formatEventDetail(AgentText) = %q, want %q", got, want)
+	}
+}
+
+func TestFormatEventDetail_AgentText_DoesNotStartWithArrow(t *testing.T) {
+	e := events.AgentText{Text: "Thinking about the next step"}
+	got := formatEventDetail(e)
+	if strings.HasPrefix(got, "→") {
+		t.Errorf("AgentText detail should not start with →, got %q", got)
+	}
+}
+
+func TestFormatEventDetail_ExistingTypes_Unchanged(t *testing.T) {
+	tests := []struct {
+		name  string
+		event events.Event
+		want  string
+	}{
+		{"ToolUse with detail", events.ToolUse{Name: "Read", Detail: "main.go"}, "→ Read main.go"},
+		{"ToolUse without detail", events.ToolUse{Name: "Bash"}, "→ Bash"},
+		{"IterationStart", events.IterationStart{Iteration: 1, MaxIterations: 5}, "Iteration 1/5 started"},
+		{"StoryStarted", events.StoryStarted{StoryID: "US-001", Title: "Add feature"}, "Story US-001: Add feature"},
+		{"QAPhaseStarted", events.QAPhaseStarted{Phase: "verification"}, "QA phase: verification"},
+		{"LogMessage", events.LogMessage{Level: "info", Message: "hello"}, "[info] hello"},
+		{"InvocationDone", events.InvocationDone{NumTurns: 3, DurationMS: 1500}, "Invocation done: 3 turns in 1500ms"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatEventDetail(tt.event)
+			if got != tt.want {
+				t.Errorf("formatEventDetail(%s) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildEventHandler_AgentText_EndToEnd(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "building")
+
+	handler := &collectingHandler{}
+
+	var mu sync.Mutex
+	var broadcasts []struct{ issueID, detail string }
+
+	runner := &agentTextForwardingRunner{}
+	disp := New(Config{
+		DB:           d,
+		MaxWorkers:   1,
+		LoopRunner:   runner,
+		Projects:     d,
+		EventHandler: handler,
+		OnBuildEvent: func(issueID, detail string) {
+			mu.Lock()
+			broadcasts = append(broadcasts, struct{ issueID, detail string }{issueID, detail})
+			mu.Unlock()
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	// 1. Verify AgentText was persisted to activity_log as build_event
+	entries, err := d.ListActivity(issue.ID, 50, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+
+	var agentTextEntry, toolUseEntry bool
+	for _, e := range entries {
+		if e.EventType != "build_event" {
+			continue
+		}
+		if e.Detail == "Analyzing the code structure" {
+			agentTextEntry = true
+		}
+		if strings.HasPrefix(e.Detail, "→ Read") {
+			toolUseEntry = true
+		}
+	}
+	if !agentTextEntry {
+		t.Error("expected AgentText to be persisted as build_event with text content")
+	}
+	if !toolUseEntry {
+		t.Error("expected ToolUse to still be persisted as build_event with → prefix")
+	}
+
+	// 2. Verify onBuildEvent callback was invoked for both event types
+	mu.Lock()
+	bc := make([]struct{ issueID, detail string }, len(broadcasts))
+	copy(bc, broadcasts)
+	mu.Unlock()
+
+	var agentBroadcast, toolBroadcast bool
+	for _, b := range bc {
+		if b.issueID != issue.ID {
+			t.Errorf("broadcast issueID = %q, want %q", b.issueID, issue.ID)
+		}
+		if b.detail == "Analyzing the code structure" {
+			agentBroadcast = true
+		}
+		if strings.HasPrefix(b.detail, "→ Read") {
+			toolBroadcast = true
+		}
+	}
+	if !agentBroadcast {
+		t.Error("expected onBuildEvent to be called with AgentText content")
+	}
+	if !toolBroadcast {
+		t.Error("expected onBuildEvent to be called with ToolUse content")
+	}
+
+	// 3. Verify AgentText detail does NOT start with →
+	for _, b := range bc {
+		if b.detail == "Analyzing the code structure" && strings.HasPrefix(b.detail, "→") {
+			t.Error("AgentText detail should not start with →")
+		}
+	}
+
+	// 4. Verify events were forwarded to upstream handler
+	evts := handler.getEvents()
+	var agentTextForwarded, toolUseForwarded bool
+	for _, e := range evts {
+		if at, ok := e.(events.AgentText); ok && at.Text == "Analyzing the code structure" {
+			agentTextForwarded = true
+		}
+		if tu, ok := e.(events.ToolUse); ok && tu.Name == "Read" {
+			toolUseForwarded = true
+		}
+	}
+	if !agentTextForwarded {
+		t.Error("expected AgentText event to be forwarded to upstream handler")
+	}
+	if !toolUseForwarded {
+		t.Error("expected ToolUse event to be forwarded to upstream handler")
+	}
+}
+
+// agentTextForwardingRunner emits both AgentText and ToolUse events to verify
+// the full pipeline handles both types correctly.
+type agentTextForwardingRunner struct{}
+
+func (r *agentTextForwardingRunner) Run(ctx context.Context, cfg LoopConfig) error {
+	if cfg.EventHandler != nil {
+		cfg.EventHandler.Handle(events.AgentText{Text: "Analyzing the code structure"})
+		cfg.EventHandler.Handle(events.ToolUse{Name: "Read", Detail: "main.go"})
+	}
+	return nil
+}
+
 // --- DispatchAction tests ---
 
 func TestDispatcher_DispatchAction_RunsActionAndCleansUp(t *testing.T) {
