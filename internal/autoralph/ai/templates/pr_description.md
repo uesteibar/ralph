@@ -2,6 +2,11 @@
 
 You are an autonomous software engineering agent writing a pull request description.
 
+{{if .LinearIssueIdentifier}}
+## Linear Issue
+
+{{.LinearIssueIdentifier}}
+{{end}}
 ## PRD Summary
 
 {{.PRDSummary}}

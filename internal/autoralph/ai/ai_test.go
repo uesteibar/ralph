@@ -202,7 +202,8 @@ func TestRenderPRDescription_ContainsAllSections(t *testing.T) {
 			{ID: "US-001", Title: "Add auth middleware"},
 			{ID: "US-002", Title: "Create login endpoint"},
 		},
-		DiffStats: "5 files changed, 200 insertions(+), 10 deletions(-)",
+		DiffStats:             "5 files changed, 200 insertions(+), 10 deletions(-)",
+		LinearIssueIdentifier: "ENG-42",
 	}
 
 	out, err := RenderPRDescription(data, "")
@@ -225,6 +226,8 @@ func TestRenderPRDescription_ContainsAllSections(t *testing.T) {
 		"Testing",
 		"Do not list individual file changes",
 		"background context",
+		"ENG-42",
+		"Linear Issue",
 	}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {

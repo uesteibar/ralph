@@ -62,9 +62,10 @@ type PRDescriptionStory struct {
 
 // PRDescriptionData holds the context for rendering the pr_description prompt.
 type PRDescriptionData struct {
-	PRDSummary string
-	Stories    []PRDescriptionStory
-	DiffStats  string
+	PRDSummary            string
+	Stories               []PRDescriptionStory
+	DiffStats             string
+	LinearIssueIdentifier string
 }
 
 // AddressFeedbackComment represents a single review comment.

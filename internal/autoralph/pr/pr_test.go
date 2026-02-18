@@ -257,6 +257,9 @@ func TestNewAction_InvokesAIWithPRPrompt(t *testing.T) {
 	if !strings.Contains(inv.lastPrompt, "3 files changed") {
 		t.Errorf("expected prompt to contain diff stats")
 	}
+	if !strings.Contains(inv.lastPrompt, "PROJ-42") {
+		t.Errorf("expected prompt to contain issue identifier")
+	}
 }
 
 func TestNewAction_CreatesGitHubPR(t *testing.T) {

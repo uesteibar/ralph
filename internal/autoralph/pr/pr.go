@@ -150,9 +150,10 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		}
 
 		prompt, err := ai.RenderPRDescription(ai.PRDescriptionData{
-			PRDSummary: prdInfo.Description,
-			Stories:    stories,
-			DiffStats:  diffStats,
+			PRDSummary:            prdInfo.Description,
+			Stories:               stories,
+			DiffStats:             diffStats,
+			LinearIssueIdentifier: issue.Identifier,
 		}, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering PR prompt: %w", err)
