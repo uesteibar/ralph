@@ -367,6 +367,43 @@ describe('IssueDetail', () => {
     expect(timeline.textContent).not.toContain('→ Read file.go')
   })
 
+  it('renders tool use entries and agent thoughts in different colors', async () => {
+    const issueWithMixedEvents = {
+      ...mockIssue,
+      activity: [],
+      build_activity: [
+        {
+          id: 'act-tool',
+          issue_id: 'iss1',
+          event_type: 'build_event',
+          detail: '→ Read file.go',
+          created_at: '2025-02-11T12:11:00Z',
+        },
+        {
+          id: 'act-thought',
+          issue_id: 'iss1',
+          event_type: 'build_event',
+          detail: 'Analyzing the code structure',
+          created_at: '2025-02-11T12:12:00Z',
+        },
+      ],
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(issueWithMixedEvents)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Agent Logs')).toBeInTheDocument()
+    })
+
+    const toolUseText = screen.getByText('→ Read file.go')
+    const thoughtText = screen.getByText('Analyzing the code structure')
+
+    // Tool use entry should use default color (jsdom normalizes hex to rgb)
+    expect(toolUseText.closest('span')!.style.color).toBe('rgb(212, 212, 212)')
+    // Agent thought should use distinct purple color
+    expect(thoughtText.closest('span')!.style.color).toBe('rgb(201, 160, 220)')
+  })
+
   it('renders Timeline directly from activity without filtering', async () => {
     const issueTimelineOnly = {
       ...mockIssue,

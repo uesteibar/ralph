@@ -450,6 +450,8 @@ func formatEventDetail(e events.Event) string {
 		return fmt.Sprintf("QA phase: %s", ev.Phase)
 	case events.LogMessage:
 		return fmt.Sprintf("[%s] %s", ev.Level, ev.Message)
+	case events.AgentText:
+		return ev.Text
 	case events.InvocationDone:
 		return fmt.Sprintf("Invocation done: %d turns in %dms", ev.NumTurns, ev.DurationMS)
 	default:

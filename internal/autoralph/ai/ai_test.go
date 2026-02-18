@@ -708,6 +708,8 @@ func TestRenderRefineIssue_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
 	checks := []string{
 		"Knowledge Base",
 		"/repo/.ralph/knowledge/",
+		"read-only",
+		"Do NOT write",
 	}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {
@@ -747,6 +749,8 @@ func TestRenderGeneratePRD_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
 	checks := []string{
 		"Knowledge Base",
 		"/repo/.ralph/knowledge/",
+		"read-only",
+		"Do NOT write",
 	}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {

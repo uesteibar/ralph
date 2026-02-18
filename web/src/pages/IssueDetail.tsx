@@ -107,14 +107,20 @@ function BuildLog({ activities }: { activities: Activity[] }) {
         marginBottom: '16px',
       }}
     >
-      {buildEvents.map(event => (
-        <div key={event.id} style={{ padding: '2px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          <span style={{ color: '#6a9955' }}>
-            {new Date(event.created_at).toLocaleTimeString()}
-          </span>{' '}
-          {event.detail || event.event_type}
-        </div>
-      ))}
+      {buildEvents.map(event => {
+        const detail = event.detail || event.event_type
+        const isToolUse = detail.startsWith('→')
+        return (
+          <div key={event.id} style={{ padding: '2px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            <span style={{ color: '#6a9955' }}>
+              {new Date(event.created_at).toLocaleTimeString()}
+            </span>{' '}
+            <span style={{ color: isToolUse ? '#d4d4d4' : '#c9a0dc' }}>
+              {detail}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }

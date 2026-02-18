@@ -20,9 +20,11 @@ You are an autonomous software engineering agent generating a PRD (Product Requi
 {{end}}
 
 {{if .KnowledgePath}}
-## Knowledge Base
+## Knowledge Base (read-only)
 
 A project knowledge base is available at `{{.KnowledgePath}}`. Before writing the PRD, use Glob and Grep to search for relevant learnings, patterns, and past decisions that may inform story design.
+
+**Do NOT write to the knowledge base during PRD generation.** Knowledge writing happens during implementation in a workspace.
 {{end}}
 ## Your Task
 

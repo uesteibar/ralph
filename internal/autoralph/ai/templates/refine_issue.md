@@ -17,9 +17,11 @@ You are an autonomous software engineering agent analyzing a Linear issue to pre
 {{end}}
 {{end}}
 {{if .KnowledgePath}}
-## Knowledge Base
+## Knowledge Base (read-only)
 
 A project knowledge base is available at `{{.KnowledgePath}}`. Before analyzing, use Glob and Grep to search for relevant learnings, architectural patterns, and past decisions.
+
+**Do NOT write to the knowledge base during refinement.** Knowledge writing happens during implementation in a workspace.
 {{end}}
 ## Your Task
 
