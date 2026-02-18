@@ -125,3 +125,23 @@ export async function deleteIssue(id: string): Promise<{ status: string }> {
   }
   return resp.json()
 }
+
+export interface CCUsageLine {
+  label: string
+  percentage: number
+  reset_duration: string
+}
+
+export interface CCUsageGroup {
+  group_label: string
+  lines: CCUsageLine[]
+}
+
+export interface CCUsage {
+  available: boolean
+  groups?: CCUsageGroup[]
+}
+
+export function fetchCCUsage(): Promise<CCUsage> {
+  return fetchJSON<CCUsage>('/cc-usage')
+}

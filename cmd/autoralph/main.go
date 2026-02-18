@@ -11,6 +11,7 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/approve"
 	"github.com/uesteibar/ralph/internal/autoralph/build"
+	"github.com/uesteibar/ralph/internal/autoralph/ccusage"
 	"github.com/uesteibar/ralph/internal/autoralph/checks"
 	"github.com/uesteibar/ralph/internal/autoralph/complete"
 	"github.com/uesteibar/ralph/internal/autoralph/credentials"
@@ -464,9 +465,11 @@ func runServe(args []string) error {
 	// --- 9. Start pollers ---
 	linearPoller := poller.New(database, pollerProjects, 30*time.Second, logger)
 	githubPoller := ghpoller.New(database, ghPollerProjects, 30*time.Second, logger, completeAction)
+	ccPoller := ccusage.NewPoller("ccstats", 60*time.Second, logger)
 
 	go linearPoller.Run(ctx)
 	go githubPoller.Run(ctx)
+	go ccPoller.Start(ctx)
 
 	// --- 10. Orchestrator evaluation loop ---
 	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger)
@@ -488,6 +491,7 @@ func runServe(args []string) error {
 		WorkspaceRemover: &workspaceRemoverAdapter{},
 		BuildChecker:     dispatcher,
 		PRDPathFn:        workspace.PRDPathForWorkspace,
+		CCUsageProvider:  ccPoller,
 	}
 	srv, err := server.New(addr, cfg)
 	if err != nil {
