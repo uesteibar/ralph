@@ -95,7 +95,7 @@ func Daemon(args []string) error {
 		ProgressPath:  wc.ProgressPath,
 		PromptsDir:    promptsDir,
 		QualityChecks: cfg.QualityChecks,
-		KnowledgePath: knowledge.Dir(cfg.Repo.Path),
+		KnowledgePath: knowledge.Dir(wc.WorkDir),
 		EventHandler:  handler,
 	})
 

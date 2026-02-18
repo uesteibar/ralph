@@ -236,6 +236,9 @@ func TestDaemon_PassesKnowledgePath(t *testing.T) {
 	if !strings.Contains(capturedKnowledgePath, ".ralph") || !strings.Contains(capturedKnowledgePath, "knowledge") {
 		t.Errorf("expected KnowledgePath to contain .ralph/knowledge, got %q", capturedKnowledgePath)
 	}
+	if !strings.Contains(capturedKnowledgePath, wsName) {
+		t.Errorf("expected KnowledgePath to point to workspace tree, got %q", capturedKnowledgePath)
+	}
 }
 
 func TestDaemon_RedirectsOutputToDevNull(t *testing.T) {

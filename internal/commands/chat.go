@@ -39,7 +39,7 @@ func Chat(args []string) error {
 	data := prompts.ChatSystemData{
 		ProjectName:   cfg.Project,
 		WorkspaceName: wc.Name,
-		KnowledgePath: knowledge.Dir(cfg.Repo.Path),
+		KnowledgePath: knowledge.Dir(wc.WorkDir),
 	}
 
 	// Read config YAML for context
