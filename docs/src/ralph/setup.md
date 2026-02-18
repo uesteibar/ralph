@@ -28,7 +28,6 @@ During init, Ralph asks two questions:
 | Path | Purpose |
 |------|---------|
 | `.ralph/ralph.yaml` | Project configuration (edit this!) |
-| `.ralph/progress.txt` | Shared progress log across features |
 | `.ralph/tasks/` | Task markdown files |
 | `.ralph/skills/` | Project-specific skills for the agent |
 | `.ralph/workspaces/` | Workspace directories (gitignored) |

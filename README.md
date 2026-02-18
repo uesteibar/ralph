@@ -309,7 +309,6 @@ gets:
 your-project/
   .ralph/
     ralph.yaml                  # project config (committed)
-    progress.txt                # shared progress log (committed)
     workspaces/                 # gitignored
       login-page/
         workspace.json          # metadata (name, branch, createdAt)
@@ -367,7 +366,6 @@ ralph init
 | Path | Purpose |
 |------|---------|
 | `.ralph/ralph.yaml` | Project configuration (edit this!) |
-| `.ralph/progress.txt` | Shared progress log across features |
 | `.ralph/tasks/` | Task markdown files |
 | `.ralph/skills/` | Project-specific skills for the agent |
 | `.ralph/workspaces/` | Workspace directories (gitignored) |
