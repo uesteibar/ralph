@@ -41,12 +41,13 @@ type LoopIterationData struct {
 	PRDPath               string
 	FeatureOverview       string
 	ArchitectureOverview  string
+	KnowledgePath         string
 }
 
 // RenderLoopIteration renders the prompt for a single Ralph loop iteration.
 // If overrideDir is non-empty and contains loop_iteration.md, that file is used
 // instead of the embedded template.
-func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath, prdPath, overrideDir, featureOverview, architectureOverview string) (string, error) {
+func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath, prdPath, overrideDir, featureOverview, architectureOverview, knowledgePath string) (string, error) {
 	data := LoopIterationData{
 		StoryID:              story.ID,
 		StoryTitle:           story.Title,
@@ -57,6 +58,7 @@ func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath,
 		PRDPath:              prdPath,
 		FeatureOverview:      featureOverview,
 		ArchitectureOverview: architectureOverview,
+		KnowledgePath:        knowledgePath,
 	}
 	return render("templates/loop_iteration.md", data, overrideDir)
 }
@@ -84,6 +86,7 @@ type ChatSystemData struct {
 	// When non-empty and not "base", the template renders workspace boundary
 	// instructions so the AI stays inside the workspace tree.
 	WorkspaceName string
+	KnowledgePath string
 }
 
 // RenderChatSystem renders the system prompt for a free-form chat session.
@@ -112,6 +115,7 @@ type QAVerificationData struct {
 	PRDPath       string
 	ProgressPath  string
 	QualityChecks []string
+	KnowledgePath string
 }
 
 // RenderQAVerification renders the prompt for QA integration test verification.
@@ -125,6 +129,7 @@ type QAFixData struct {
 	ProgressPath  string
 	QualityChecks []string
 	FailedTests   []prd.IntegrationTest
+	KnowledgePath string
 }
 
 // RenderQAFix renders the prompt for fixing integration test failures.

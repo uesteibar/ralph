@@ -650,3 +650,43 @@ func TestReadTemplate_Override(t *testing.T) {
 		t.Error("embedded content should differ from override")
 	}
 }
+
+// --- KnowledgePath field tests ---
+
+func TestRefineIssueData_KnowledgePath_Field(t *testing.T) {
+	data := RefineIssueData{
+		Title:         "Test",
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+	if data.KnowledgePath != "/repo/.ralph/knowledge/" {
+		t.Errorf("KnowledgePath = %q, want %q", data.KnowledgePath, "/repo/.ralph/knowledge/")
+	}
+}
+
+func TestGeneratePRDData_KnowledgePath_Field(t *testing.T) {
+	data := GeneratePRDData{
+		PlanText:      "plan",
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+	if data.KnowledgePath != "/repo/.ralph/knowledge/" {
+		t.Errorf("KnowledgePath = %q, want %q", data.KnowledgePath, "/repo/.ralph/knowledge/")
+	}
+}
+
+func TestAddressFeedbackData_KnowledgePath_Field(t *testing.T) {
+	data := AddressFeedbackData{
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+	if data.KnowledgePath != "/repo/.ralph/knowledge/" {
+		t.Errorf("KnowledgePath = %q, want %q", data.KnowledgePath, "/repo/.ralph/knowledge/")
+	}
+}
+
+func TestFixChecksData_KnowledgePath_Field(t *testing.T) {
+	data := FixChecksData{
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+	if data.KnowledgePath != "/repo/.ralph/knowledge/" {
+		t.Errorf("KnowledgePath = %q, want %q", data.KnowledgePath, "/repo/.ralph/knowledge/")
+	}
+}

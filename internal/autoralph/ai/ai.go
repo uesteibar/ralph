@@ -37,9 +37,10 @@ type RefineIssueComment struct {
 
 // RefineIssueData holds the context for rendering the refine_issue prompt.
 type RefineIssueData struct {
-	Title       string
-	Description string
-	Comments    []RefineIssueComment
+	Title         string
+	Description   string
+	Comments      []RefineIssueComment
+	KnowledgePath string
 }
 
 // GeneratePRDData holds the context for rendering the generate_prd prompt.
@@ -50,6 +51,7 @@ type GeneratePRDData struct {
 	ArchitectureOverview string
 	PRDPath              string
 	BranchName           string
+	KnowledgePath        string
 }
 
 // PRDescriptionStory represents a story for the PR description prompt.
@@ -78,6 +80,7 @@ type AddressFeedbackData struct {
 	Comments      []AddressFeedbackComment
 	CodeContext   string
 	QualityChecks []string
+	KnowledgePath string
 }
 
 // FailedCheckRun represents a single failed CI check run.
@@ -91,6 +94,7 @@ type FailedCheckRun struct {
 type FixChecksData struct {
 	FailedChecks  []FailedCheckRun
 	QualityChecks []string
+	KnowledgePath string
 }
 
 // --- Render functions ---
