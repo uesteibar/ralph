@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import type { Project, Issue } from '../api'
-import { fetchProjects, fetchIssues } from '../api'
+import type { Project, Issue, CCUsage } from '../api'
+import { fetchProjects, fetchIssues, fetchCCUsage } from '../api'
+import { CCUsageSection } from '../components/CCUsageBar'
 import { useWebSocket } from '../useWebSocket'
 import { StateBadge, STATE_COLORS } from '../components/StateBadge'
 
@@ -108,6 +109,7 @@ function IssueRow({ issue }: { issue: Issue }) {
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[]>([])
   const [issues, setIssues] = useState<Issue[]>([])
+  const [ccUsage, setCCUsage] = useState<CCUsage | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -127,9 +129,19 @@ export default function Dashboard() {
     }
   }, [])
 
+  const loadCCUsage = useCallback(async () => {
+    try {
+      const data = await fetchCCUsage()
+      setCCUsage(data)
+    } catch {
+      // Silently ignore — usage display is optional
+    }
+  }, [])
+
   useEffect(() => {
     loadData()
-  }, [loadData])
+    loadCCUsage()
+  }, [loadData, loadCCUsage])
 
   const handleWSMessage = useCallback(() => {
     loadData()
@@ -163,6 +175,16 @@ export default function Dashboard() {
           {projects.length} project{projects.length !== 1 ? 's' : ''} &middot; {activeIssues.length} active issue{activeIssues.length !== 1 ? 's' : ''}
         </p>
       </header>
+
+      {/* CC Usage */}
+      {ccUsage?.available && ccUsage.groups && (
+        <section style={{ marginBottom: '32px' }}>
+          <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#374151', marginBottom: '12px' }}>Claude Code Usage</h2>
+          <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px', backgroundColor: '#fff' }}>
+            <CCUsageSection groups={ccUsage.groups} />
+          </div>
+        </section>
+      )}
 
       {/* Project Summary Cards */}
       {projects.length > 0 && (

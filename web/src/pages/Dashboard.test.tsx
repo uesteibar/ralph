@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import Dashboard from './Dashboard'
-import type { Project, Issue } from '../api'
+import type { Project, Issue, CCUsage } from '../api'
 
 // Mock the api module
 vi.mock('../api', () => ({
   fetchProjects: vi.fn(),
   fetchIssues: vi.fn(),
+  fetchCCUsage: vi.fn(),
 }))
 
 // Mock the WebSocket hook — no-op in tests
@@ -15,7 +16,7 @@ vi.mock('../useWebSocket', () => ({
   useWebSocket: vi.fn(),
 }))
 
-import { fetchProjects, fetchIssues } from '../api'
+import { fetchProjects, fetchIssues, fetchCCUsage } from '../api'
 
 const mockProjects: Project[] = [
   {
@@ -72,9 +73,25 @@ function renderDashboard() {
   )
 }
 
+const mockCCUsageAvailable: CCUsage = {
+  available: true,
+  groups: [
+    {
+      group_label: 'Claude Code Usage Statistics',
+      lines: [
+        { label: '5-hour', percentage: 50, reset_duration: '3h 13m' },
+        { label: '7-day', percentage: 83, reset_duration: '2d 5h' },
+      ],
+    },
+  ],
+}
+
+const mockCCUsageUnavailable: CCUsage = { available: false }
+
 beforeEach(() => {
   vi.mocked(fetchProjects).mockResolvedValue(mockProjects)
   vi.mocked(fetchIssues).mockResolvedValue(mockIssues)
+  vi.mocked(fetchCCUsage).mockResolvedValue(mockCCUsageUnavailable)
 })
 
 describe('Dashboard', () => {
@@ -202,5 +219,45 @@ describe('Dashboard', () => {
     const secondLink = screen.getByText('second-project').closest('a')
     expect(firstLink).toHaveAttribute('href', '/projects/p1')
     expect(secondLink).toHaveAttribute('href', '/projects/p2')
+  })
+
+  it('shows Claude Code Usage section when data is available', async () => {
+    vi.mocked(fetchCCUsage).mockResolvedValue(mockCCUsageAvailable)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Claude Code Usage')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Claude Code Usage Statistics')).toBeInTheDocument()
+    expect(screen.getByText('5-hour')).toBeInTheDocument()
+    expect(screen.getByText('50%')).toBeInTheDocument()
+    expect(screen.getByText('resets in 3h 13m')).toBeInTheDocument()
+    expect(screen.getByText('7-day')).toBeInTheDocument()
+    expect(screen.getByText('83%')).toBeInTheDocument()
+  })
+
+  it('hides usage section when API returns available: false', async () => {
+    vi.mocked(fetchCCUsage).mockResolvedValue(mockCCUsageUnavailable)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('my-project')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Claude Code Usage')).not.toBeInTheDocument()
+  })
+
+  it('hides usage section when fetchCCUsage fails', async () => {
+    vi.mocked(fetchCCUsage).mockRejectedValue(new Error('fail'))
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('my-project')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Claude Code Usage')).not.toBeInTheDocument()
+  })
+
+  it('fetches CC usage on mount', async () => {
+    vi.mocked(fetchCCUsage).mockResolvedValue(mockCCUsageUnavailable)
+    renderDashboard()
+    await waitFor(() => {
+      expect(fetchCCUsage).toHaveBeenCalled()
+    })
   })
 })
