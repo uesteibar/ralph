@@ -147,17 +147,10 @@ func runServe(args []string) error {
 		return fmt.Errorf("listing projects: %w", err)
 	}
 
-	type gitIdentity struct {
-		name  string
-		email string
-	}
-
 	var (
 		pollerProjects   []poller.ProjectInfo
 		ghPollerProjects []ghpoller.ProjectInfo
-		firstLinear      *linear.Client
-		firstGitHub      *ghclient.Client
-		firstGitID       *gitIdentity
+		registry         = make(clientRegistry)
 	)
 
 	for _, proj := range dbProjects {
@@ -229,10 +222,11 @@ func runServe(args []string) error {
 			}
 		}
 
-		if firstLinear == nil {
-			firstLinear = lc
-			firstGitHub = gc
-			firstGitID = &gitIdentity{name: creds.GitAuthorName, email: creds.GitAuthorEmail}
+		registry[proj.ID] = &projectClients{
+			linear:   lc,
+			github:   gc,
+			gitName:  creds.GitAuthorName,
+			gitEmail: creds.GitAuthorEmail,
 		}
 
 		pollerProjects = append(pollerProjects, poller.ProjectInfo{
@@ -258,10 +252,21 @@ func runServe(args []string) error {
 	// --- 5. WebSocket hub ---
 	hub := server.NewHub(logger)
 
+	// Derive capability flags from registry contents.
+	hasLinear, hasGitHub := false, false
+	for _, c := range registry {
+		if c.linear != nil {
+			hasLinear = true
+		}
+		if c.github != nil {
+			hasGitHub = true
+		}
+	}
+
 	// --- 6. Orchestrator with transitions ---
 	sm := orchestrator.New(database)
 
-	if firstLinear != nil {
+	if hasLinear {
 		invoker := &claudeInvoker{}
 		// readOnlyInvoker blocks write tools so the AI can only read the
 		// codebase during refinement and iteration — no code changes.
@@ -274,61 +279,92 @@ func runServe(args []string) error {
 			pullFn:        gitops.PullFFOnly,
 		}
 
-		gitOps := &gitOpsAdapter{
-			gitAuthorName:  firstGitID.name,
-			gitAuthorEmail: firstGitID.email,
-		}
-
 		// QUEUED → REFINING
 		sm.Register(orchestrator.Transition{
 			From: orchestrator.StateQueued,
 			To:   orchestrator.StateRefining,
-			Action: refine.NewAction(refine.Config{
-				Invoker:   readOnlyInvoker,
-				Poster:    &linearCommentPoster{client: firstLinear},
-				Projects:  database,
-				GitPuller: puller,
-			}),
+			Action: func(issue db.Issue, database *db.DB) error {
+				lc, err := registry.mustLinear(issue.ProjectID)
+				if err != nil {
+					return err
+				}
+				return refine.NewAction(refine.Config{
+					Invoker:   readOnlyInvoker,
+					Poster:    &linearCommentPoster{client: lc},
+					Projects:  database,
+					GitPuller: puller,
+				})(issue, database)
+			},
 		})
 
 		// REFINING → APPROVED (approval check — must be registered BEFORE iteration)
 		sm.Register(orchestrator.Transition{
-			From:      orchestrator.StateRefining,
-			To:        orchestrator.StateApproved,
-			Condition: approve.IsApproval(firstLinear),
-			Action: approve.NewApprovalAction(approve.Config{
-				Comments: firstLinear,
-				Projects: database,
-				Reactor:  firstLinear,
-			}),
+			From: orchestrator.StateRefining,
+			To:   orchestrator.StateApproved,
+			Condition: func(issue db.Issue) bool {
+				lc, err := registry.mustLinear(issue.ProjectID)
+				if err != nil {
+					return false
+				}
+				return approve.IsApproval(lc)(issue)
+			},
+			Action: func(issue db.Issue, database *db.DB) error {
+				lc, err := registry.mustLinear(issue.ProjectID)
+				if err != nil {
+					return err
+				}
+				return approve.NewApprovalAction(approve.Config{
+					Comments: lc,
+					Projects: database,
+					Reactor:  lc,
+				})(issue, database)
+			},
 		})
 
 		// REFINING → REFINING (iteration on new comments)
 		sm.Register(orchestrator.Transition{
-			From:      orchestrator.StateRefining,
-			To:        orchestrator.StateRefining,
-			Condition: approve.IsIteration(firstLinear),
-			Action: approve.NewIterationAction(approve.Config{
-				Invoker:   readOnlyInvoker,
-				Comments:  firstLinear,
-				Projects:  database,
-				GitPuller: puller,
-				Reactor:   firstLinear,
-			}),
+			From: orchestrator.StateRefining,
+			To:   orchestrator.StateRefining,
+			Condition: func(issue db.Issue) bool {
+				lc, err := registry.mustLinear(issue.ProjectID)
+				if err != nil {
+					return false
+				}
+				return approve.IsIteration(lc)(issue)
+			},
+			Action: func(issue db.Issue, database *db.DB) error {
+				lc, err := registry.mustLinear(issue.ProjectID)
+				if err != nil {
+					return err
+				}
+				return approve.NewIterationAction(approve.Config{
+					Invoker:   readOnlyInvoker,
+					Comments:  lc,
+					Projects:  database,
+					GitPuller: puller,
+					Reactor:   lc,
+				})(issue, database)
+			},
 		})
 
 		// APPROVED → BUILDING
 		sm.Register(orchestrator.Transition{
 			From: orchestrator.StateApproved,
 			To:   orchestrator.StateBuilding,
-			Action: build.NewAction(build.Config{
-				Invoker:    invoker,
-				Workspace:  &workspaceCreatorAdapter{pullFn: gitops.PullFFOnly},
-				ConfigLoad: &configLoaderAdapter{},
-				Linear:     &buildLinearUpdater{client: firstLinear},
-				PRDRead:    &buildPRDReaderAdapter{},
-				Projects:   database,
-			}),
+			Action: func(issue db.Issue, database *db.DB) error {
+				lc, err := registry.mustLinear(issue.ProjectID)
+				if err != nil {
+					return err
+				}
+				return build.NewAction(build.Config{
+					Invoker:    invoker,
+					Workspace:  &workspaceCreatorAdapter{pullFn: gitops.PullFFOnly},
+					ConfigLoad: &configLoaderAdapter{},
+					Linear:     &buildLinearUpdater{client: lc},
+					PRDRead:    &buildPRDReaderAdapter{},
+					Projects:   database,
+				})(issue, database)
+			},
 		})
 
 		// OnBuildEvent callback for feedback and checks actions to broadcast
@@ -347,42 +383,59 @@ func runServe(args []string) error {
 		}
 
 		// ADDRESSING_FEEDBACK → IN_REVIEW
-		if firstGitHub != nil {
+		if hasGitHub {
 			sm.Register(orchestrator.Transition{
 				From:      orchestrator.StateAddressingFeedback,
 				To:        orchestrator.StateInReview,
 				Condition: feedback.IsAddressingFeedback,
-				Action: feedback.NewAction(feedback.Config{
-					Invoker:       invoker,
-					Comments:      firstGitHub,
-					Reviews:       firstGitHub,
-					IssueComments: firstGitHub,
-					Replier:       firstGitHub,
-					PRCommenter:   firstGitHub,
-					Git:           gitOps,
-					Projects:      database,
-					ConfigLoad:    &configLoaderAdapter{},
-					Reactor:       firstGitHub,
-					IssueReactor:  firstGitHub,
-					OnBuildEvent:  onBuildEvent,
-				}),
+				Action: func(issue db.Issue, database *db.DB) error {
+					gc, err := registry.mustGitHub(issue.ProjectID)
+					if err != nil {
+						return err
+					}
+					gitName, gitEmail := registry.gitIdentity(issue.ProjectID)
+					gitOps := &gitOpsAdapter{
+						gitAuthorName:  gitName,
+						gitAuthorEmail: gitEmail,
+					}
+					return feedback.NewAction(feedback.Config{
+						Invoker:       invoker,
+						Comments:      gc,
+						Reviews:       gc,
+						IssueComments: gc,
+						Replier:       gc,
+						PRCommenter:   gc,
+						Git:           gitOps,
+						Projects:      database,
+						ConfigLoad:    &configLoaderAdapter{},
+						Reactor:       gc,
+						IssueReactor:  gc,
+						OnBuildEvent:  onBuildEvent,
+					})(issue, database)
+				},
 			})
 
 			// FIXING_CHECKS → IN_REVIEW
 			sm.Register(orchestrator.Transition{
 				From: orchestrator.StateFixingChecks,
 				To:   orchestrator.StateInReview,
-				Action: checks.NewAction(checks.Config{
-					Invoker:      invoker,
-					CheckRuns:    firstGitHub,
-					Logs:         firstGitHub,
-					PRs:          firstGitHub,
-					Comments:     firstGitHub,
-					Git:          &gitOpsAdapter{},
-					Projects:     database,
-					ConfigLoad:   &configLoaderAdapter{},
-					OnBuildEvent: onBuildEvent,
-				}),
+				Action: func(issue db.Issue, database *db.DB) error {
+					gc, err := registry.mustGitHub(issue.ProjectID)
+					if err != nil {
+						return err
+					}
+					return checks.NewAction(checks.Config{
+						Invoker:      invoker,
+						CheckRuns:    gc,
+						Logs:         gc,
+						PRs:          gc,
+						Comments:     gc,
+						Git:          &gitOpsAdapter{},
+						Projects:     database,
+						ConfigLoad:   &configLoaderAdapter{},
+						OnBuildEvent: onBuildEvent,
+					})(issue, database)
+				},
 			})
 
 			// IN_REVIEW → IN_REVIEW (rebase when branch falls behind base)
@@ -406,48 +459,59 @@ func runServe(args []string) error {
 
 	// --- 7. PR and complete actions ---
 	var prAction worker.PRCreator
-	if firstLinear != nil && firstGitHub != nil {
-		gitOps := &gitOpsAdapter{
-			gitAuthorName:  firstGitID.name,
-			gitAuthorEmail: firstGitID.email,
-		}
-		prAction = &prActionAdapter{pr.NewAction(pr.Config{
-			Invoker:    &claudeInvoker{},
-			Git:        gitOps,
-			Diff:       gitOps,
-			PRD:        &prdReaderAdapter{},
-			GitHub:     &ghPRCreatorAdapter{client: firstGitHub},
-			Linear:     &linearPoster{client: firstLinear},
-			Projects:   database,
-			ConfigLoad: &configLoaderAdapter{},
-			Rebase:     gitOps,
-		})}
+	if hasLinear && hasGitHub {
+		prAction = &prActionAdapter{fn: func(issue db.Issue, database *db.DB) error {
+			lc, err := registry.mustLinear(issue.ProjectID)
+			if err != nil {
+				return err
+			}
+			gc, err := registry.mustGitHub(issue.ProjectID)
+			if err != nil {
+				return err
+			}
+			gitName, gitEmail := registry.gitIdentity(issue.ProjectID)
+			gitOps := &gitOpsAdapter{
+				gitAuthorName:  gitName,
+				gitAuthorEmail: gitEmail,
+			}
+			return pr.NewAction(pr.Config{
+				Invoker:    &claudeInvoker{},
+				Git:        gitOps,
+				Diff:       gitOps,
+				PRD:        &prdReaderAdapter{},
+				GitHub:     &ghPRCreatorAdapter{client: gc},
+				Linear:     &linearPoster{client: lc},
+				Projects:   database,
+				ConfigLoad: &configLoaderAdapter{},
+				Rebase:     gitOps,
+			})(issue, database)
+		}}
 	}
 
 	var completeAction ghpoller.CompleteFunc
-	if firstLinear != nil {
-		completeAction = complete.NewAction(complete.Config{
-			Workspace: &workspaceRemoverAdapter{},
-			Linear:    &completeLinearUpdater{client: firstLinear},
-			Projects:  database,
-		})
+	if hasLinear {
+		completeAction = func(issue db.Issue, database *db.DB) error {
+			lc, err := registry.mustLinear(issue.ProjectID)
+			if err != nil {
+				return err
+			}
+			return complete.NewAction(complete.Config{
+				Workspace: &workspaceRemoverAdapter{},
+				Linear:    &completeLinearUpdater{client: lc},
+				Projects:  database,
+			})(issue, database)
+		}
 	}
 
 	// --- 8. Build worker dispatcher ---
-	var dispatcherGitName, dispatcherGitEmail string
-	if firstGitID != nil {
-		dispatcherGitName = firstGitID.name
-		dispatcherGitEmail = firstGitID.email
-	}
 	dispatcher := worker.New(worker.Config{
-		DB:             database,
-		MaxWorkers:     2,
-		LoopRunner:     &loopRunnerAdapter{},
-		Projects:       database,
-		PR:             prAction,
-		GitAuthorName:  dispatcherGitName,
-		GitAuthorEmail: dispatcherGitEmail,
-		Logger:         logger,
+		DB:            database,
+		MaxWorkers:    2,
+		LoopRunner:    &loopRunnerAdapter{},
+		Projects:      database,
+		PR:            prAction,
+		GitIdentityFn: registry.gitIdentity,
+		Logger:        logger,
 		OnBuildEvent: func(issueID, detail string) {
 			if hub == nil {
 				return
@@ -738,6 +802,42 @@ func dispatchAsync(
 	if err := dispatcher.DispatchAction(ctx, issue, actionFn); err != nil {
 		logger.Warn("dispatching async transition", "issue", issue.Identifier, "error", err)
 	}
+}
+
+// projectClients holds the per-project Linear, GitHub, and git identity
+// clients resolved at startup.
+type projectClients struct {
+	linear   *linear.Client
+	github   *ghclient.Client
+	gitName  string
+	gitEmail string
+}
+
+// clientRegistry maps project IDs to their resolved clients.
+type clientRegistry map[string]*projectClients
+
+func (r clientRegistry) mustLinear(projectID string) (*linear.Client, error) {
+	c, ok := r[projectID]
+	if !ok || c.linear == nil {
+		return nil, fmt.Errorf("no Linear client for project %s", projectID)
+	}
+	return c.linear, nil
+}
+
+func (r clientRegistry) mustGitHub(projectID string) (*ghclient.Client, error) {
+	c, ok := r[projectID]
+	if !ok || c.github == nil {
+		return nil, fmt.Errorf("no GitHub client for project %s", projectID)
+	}
+	return c.github, nil
+}
+
+func (r clientRegistry) gitIdentity(projectID string) (name, email string) {
+	c, ok := r[projectID]
+	if !ok {
+		return "", ""
+	}
+	return c.gitName, c.gitEmail
 }
 
 // isTerminalState returns true for states that should not be evaluated by the

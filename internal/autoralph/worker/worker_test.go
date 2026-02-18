@@ -919,8 +919,9 @@ func TestDispatcher_Dispatch_ConfiguresGitIdentityInWorktree(t *testing.T) {
 		MaxWorkers:     1,
 		LoopRunner:     runner,
 		Projects:       d,
-		GitAuthorName:  "autoralph-bot",
-		GitAuthorEmail: "autoralph-bot@noreply",
+		GitIdentityFn: func(projectID string) (string, string) {
+			return "autoralph-bot", "autoralph-bot@noreply"
+		},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -983,8 +984,9 @@ func TestDispatcher_Dispatch_GitIdentityUsedBySubsequentCommits(t *testing.T) {
 		MaxWorkers:     1,
 		LoopRunner:     commitRunner,
 		Projects:       d,
-		GitAuthorName:  "autoralph-ci",
-		GitAuthorEmail: "autoralph-ci@noreply",
+		GitIdentityFn: func(projectID string) (string, string) {
+			return "autoralph-ci", "autoralph-ci@noreply"
+		},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -58,12 +58,12 @@ type Config struct {
 	EventHandler events.EventHandler
 	Logger       *slog.Logger
 
-	// GitAuthorName and GitAuthorEmail are used to configure repo-local
-	// git identity in worktrees before starting a build loop. This ensures
-	// that commits created by Claude CLI's internal git operations use the
-	// autoralph identity.
-	GitAuthorName  string
-	GitAuthorEmail string
+	// GitIdentityFn resolves the git author name and email for a given
+	// project ID. This is used to configure repo-local git identity in
+	// worktrees before starting a build loop, ensuring that commits
+	// created by Claude CLI's internal git operations use the correct
+	// per-project identity.
+	GitIdentityFn func(projectID string) (name, email string)
 
 	// OnBuildEvent is called whenever a build event is logged to the activity
 	// table. The callback receives the issue ID and event detail string. This
@@ -83,8 +83,7 @@ type Dispatcher struct {
 	handler        events.EventHandler
 	onBuildEvent   func(issueID, detail string)
 	logger         *slog.Logger
-	gitAuthorName  string
-	gitAuthorEmail string
+	gitIdentityFn func(projectID string) (name, email string)
 
 	mu       sync.Mutex
 	active   map[string]context.CancelFunc // issue ID → cancel func
@@ -111,8 +110,7 @@ func New(cfg Config) *Dispatcher {
 		handler:        cfg.EventHandler,
 		onBuildEvent:   cfg.OnBuildEvent,
 		logger:         logger,
-		gitAuthorName:  cfg.GitAuthorName,
-		gitAuthorEmail: cfg.GitAuthorEmail,
+		gitIdentityFn:  cfg.GitIdentityFn,
 		active:         make(map[string]context.CancelFunc),
 		sem:            make(chan struct{}, maxWorkers),
 	}
@@ -310,13 +308,16 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 	}
 
 	// Set repo-local git identity in the worktree so that commits created
-	// by Claude CLI's internal git operations use the autoralph identity.
-	if d.gitAuthorName != "" && d.gitAuthorEmail != "" {
-		r := &shell.Runner{Dir: workDir}
-		if err := gitops.ConfigureGitIdentity(ctx, r, d.gitAuthorName, d.gitAuthorEmail); err != nil {
-			d.logger.Error("configuring git identity", "issue", issue.ID, "error", err)
-			d.handleFailure(issue, fmt.Errorf("configuring git identity: %w", err))
-			return
+	// by Claude CLI's internal git operations use the correct per-project identity.
+	if d.gitIdentityFn != nil {
+		gitName, gitEmail := d.gitIdentityFn(issue.ProjectID)
+		if gitName != "" && gitEmail != "" {
+			r := &shell.Runner{Dir: workDir}
+			if err := gitops.ConfigureGitIdentity(ctx, r, gitName, gitEmail); err != nil {
+				d.logger.Error("configuring git identity", "issue", issue.ID, "error", err)
+				d.handleFailure(issue, fmt.Errorf("configuring git identity: %w", err))
+				return
+			}
 		}
 	}
 
