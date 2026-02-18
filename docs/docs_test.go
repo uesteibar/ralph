@@ -594,6 +594,46 @@ func TestCIWorkflow_DocBuildRunsOnPRs(t *testing.T) {
 	}
 }
 
+func TestReadme_NoBaseProgressTxt(t *testing.T) {
+	path := filepath.Join(repoRoot(), "README.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("README.md not found: %v", err)
+	}
+	content := string(data)
+
+	if strings.Contains(content, "| `.ralph/progress.txt`") {
+		t.Error("README.md should not list .ralph/progress.txt in file table (removed in favor of workspace-scoped progress)")
+	}
+
+	// The directory tree should not contain a bare progress.txt line (under .ralph/ root)
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "progress.txt                # shared progress log (committed)" {
+			t.Error("README.md should not list progress.txt in the directory tree (removed in favor of workspace-scoped progress)")
+		}
+	}
+
+	// Workspace-scoped progress should still be referenced
+	if !strings.Contains(content, "progress") {
+		t.Error("README.md should still reference progress (workspace-scoped)")
+	}
+}
+
+func TestSetup_NoBaseProgressTxt(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "setup.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("setup.md not found: %v", err)
+	}
+	content := string(data)
+
+	if strings.Contains(content, "| `.ralph/progress.txt`") {
+		t.Error("setup.md should not list .ralph/progress.txt in file table (removed in favor of workspace-scoped progress)")
+	}
+}
+
 func TestReadme_HasDocsLink(t *testing.T) {
 	path := filepath.Join(repoRoot(), "README.md")
 	data, err := os.ReadFile(path)

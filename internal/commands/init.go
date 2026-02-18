@@ -144,7 +144,6 @@ func Init(args []string, in io.Reader) error {
 	ralphDir := filepath.Join(cwd, ".ralph")
 	stateDir := filepath.Join(ralphDir, "state")
 	configPath := filepath.Join(ralphDir, "ralph.yaml")
-	progressPath := filepath.Join(ralphDir, "progress.txt")
 	finishSkillPath := filepath.Join(cwd, ".claude", "commands", "finish.md")
 
 	var created, skipped []string
@@ -212,16 +211,6 @@ func Init(args []string, in io.Reader) error {
 		created = append(created, ".ralph/ralph.yaml")
 	} else {
 		skipped = append(skipped, ".ralph/ralph.yaml (already exists)")
-	}
-
-	// Write progress.txt (only if it doesn't exist)
-	if _, err := os.Stat(progressPath); err != nil {
-		if err := os.WriteFile(progressPath, []byte("# Ralph Progress Log\n\n## Codebase Patterns\n\n---\n"), 0644); err != nil {
-			return fmt.Errorf("writing progress.txt: %w", err)
-		}
-		created = append(created, ".ralph/progress.txt")
-	} else {
-		skipped = append(skipped, ".ralph/progress.txt (already exists)")
 	}
 
 	// Write .gitkeep files (idempotent)

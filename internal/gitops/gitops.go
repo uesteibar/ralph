@@ -92,7 +92,8 @@ func CopyDotRalph(repoPath, worktreePath string) error {
 	// the tree path instead of the real repo root, causing doubled paths in
 	// workspace resolution.
 	skipFiles := map[string]bool{
-		"ralph.yaml": true,
+		"ralph.yaml":   true,
+		"progress.txt": true,
 	}
 
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {

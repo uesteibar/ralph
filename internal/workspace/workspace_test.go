@@ -465,9 +465,8 @@ func TestResolveWorkContext_BaseFallback(t *testing.T) {
 	if wc.PRDPath != filepath.Join(repo, ".ralph", "state", "prd.json") {
 		t.Errorf("PRDPath = %q, want default state path", wc.PRDPath)
 	}
-	wantProgress := filepath.Join(repo, ".ralph", "progress.txt")
-	if wc.ProgressPath != wantProgress {
-		t.Errorf("ProgressPath = %q, want %q", wc.ProgressPath, wantProgress)
+	if wc.ProgressPath != "" {
+		t.Errorf("ProgressPath = %q, want empty string", wc.ProgressPath)
 	}
 }
 

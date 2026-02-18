@@ -306,7 +306,7 @@ func ResolveWorkContext(workspaceFlag, envVar, cwd, repoPath string) (WorkContex
 		Name:         "base",
 		WorkDir:      repoPath,
 		PRDPath:      filepath.Join(repoPath, ".ralph", "state", "prd.json"),
-		ProgressPath: filepath.Join(repoPath, ".ralph", "progress.txt"),
+		ProgressPath: "",
 	}, nil
 }
 
