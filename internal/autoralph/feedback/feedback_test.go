@@ -1481,3 +1481,33 @@ func TestNewAction_FeedbackCountIncludesAllSources(t *testing.T) {
 	}
 	t.Error("expected feedback_finish activity")
 }
+
+func TestNewAction_IncludesKnowledgePath(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+	issue := createTestIssue(t, d, p)
+
+	invoker := &mockInvoker{response: "Addressed feedback"}
+	comments := &mockCommentFetcher{comments: []github.Comment{
+		{ID: 1, Path: "main.go", User: "reviewer", Body: "Fix this"},
+	}}
+
+	action := NewAction(Config{
+		Invoker:    invoker,
+		Comments:   comments,
+		Replier:    &mockReviewReplier{},
+		Git:        &mockGitOps{},
+		Projects:   d,
+		ConfigLoad: &mockConfigLoader{cfg: &config.Config{}},
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The knowledge path is computed from workspace.TreePath(project.LocalPath, issue.WorkspaceName)
+	if !strings.Contains(invoker.lastPrompt, ".ralph/knowledge") {
+		t.Error("expected prompt to contain knowledge path")
+	}
+}

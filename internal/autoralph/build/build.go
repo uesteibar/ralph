@@ -10,6 +10,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/config"
+	"github.com/uesteibar/ralph/internal/knowledge"
 	"github.com/uesteibar/ralph/internal/prd"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
@@ -121,10 +122,11 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			_ = database.LogActivity(issue.ID, "build_event", "", "", "Creating PRD...")
 
 			prompt, err := ai.RenderGeneratePRD(ai.GeneratePRDData{
-				PlanText:    issue.PlanText,
-				ProjectName: ralphCfg.Project,
-				PRDPath:     prdPath,
-				BranchName:  branch,
+				PlanText:      issue.PlanText,
+				ProjectName:   ralphCfg.Project,
+				PRDPath:       prdPath,
+				BranchName:    branch,
+				KnowledgePath: knowledge.Dir(project.LocalPath),
 			}, cfg.OverrideDir)
 			if err != nil {
 				return fmt.Errorf("rendering PRD prompt: %w", err)

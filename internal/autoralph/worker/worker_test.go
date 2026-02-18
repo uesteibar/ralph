@@ -72,17 +72,19 @@ type mockLoopRunner struct {
 }
 
 type loopRunCall struct {
-	workDir      string
-	prdPath      string
-	progressPath string
+	workDir       string
+	prdPath       string
+	progressPath  string
+	knowledgePath string
 }
 
 func (m *mockLoopRunner) Run(ctx context.Context, cfg LoopConfig) error {
 	m.mu.Lock()
 	m.calls = append(m.calls, loopRunCall{
-		workDir:      cfg.WorkDir,
-		prdPath:      cfg.PRDPath,
-		progressPath: cfg.ProgressPath,
+		workDir:       cfg.WorkDir,
+		prdPath:       cfg.PRDPath,
+		progressPath:  cfg.ProgressPath,
+		knowledgePath: cfg.KnowledgePath,
 	})
 	err := m.err
 	block := m.blockCtx
@@ -1283,5 +1285,43 @@ func TestDispatcher_DispatchAction_IsRunningDuringExecution(t *testing.T) {
 
 	if disp.IsRunning(issue.ID) {
 		t.Error("expected issue to not be running after completion")
+	}
+}
+
+func TestDispatcher_Dispatch_PassesKnowledgePath(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "building")
+
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := disp.Dispatch(ctx, issue)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	disp.Wait()
+
+	calls := runner.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+
+	if calls[0].knowledgePath == "" {
+		t.Error("expected KnowledgePath to be set")
+	}
+
+	expectedKnowledge := filepath.Join("/tmp/test", ".ralph", "workspaces", "proj-42", "tree", ".ralph", "knowledge")
+	if calls[0].knowledgePath != expectedKnowledge {
+		t.Errorf("expected knowledgePath %q, got %q", expectedKnowledge, calls[0].knowledgePath)
 	}
 }

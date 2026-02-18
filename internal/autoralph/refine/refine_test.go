@@ -460,3 +460,27 @@ func TestRefineAction_EmptyDescription_StillWorks(t *testing.T) {
 		t.Error("expected prompt to contain issue title")
 	}
 }
+
+func TestRefineAction_IncludesKnowledgePath(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "queued")
+
+	invoker := &mockInvoker{response: "AI output"}
+	poster := &mockPoster{}
+
+	action := NewAction(Config{
+		Invoker:  invoker,
+		Poster:   poster,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The knowledge path should be computed from project.LocalPath (/tmp/test)
+	if !strings.Contains(invoker.lastPrompt, ".ralph/knowledge") {
+		t.Error("expected prompt to contain knowledge path")
+	}
+}

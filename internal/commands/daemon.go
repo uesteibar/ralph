@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/uesteibar/ralph/internal/events"
+	"github.com/uesteibar/ralph/internal/knowledge"
 	"github.com/uesteibar/ralph/internal/loop"
 	"github.com/uesteibar/ralph/internal/runstate"
 	"github.com/uesteibar/ralph/internal/workspace"
@@ -94,6 +95,7 @@ func Daemon(args []string) error {
 		ProgressPath:  wc.ProgressPath,
 		PromptsDir:    promptsDir,
 		QualityChecks: cfg.QualityChecks,
+		KnowledgePath: knowledge.Dir(cfg.Repo.Path),
 		EventHandler:  handler,
 	})
 

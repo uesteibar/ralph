@@ -141,6 +141,7 @@ type Config struct {
 	ProgressPath  string
 	PromptsDir    string
 	QualityChecks []string
+	KnowledgePath string
 	Verbose       bool
 	EventHandler  events.EventHandler
 }
@@ -242,7 +243,7 @@ func Run(ctx context.Context, cfg Config) error {
 			Title:   story.Title,
 		})
 
-		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath, cfg.PRDPath, cfg.PromptsDir, prd.RawJSONToString(currentPRD.FeatureOverview), prd.RawJSONToString(currentPRD.ArchitectureOverview), "")
+		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath, cfg.PRDPath, cfg.PromptsDir, prd.RawJSONToString(currentPRD.FeatureOverview), prd.RawJSONToString(currentPRD.ArchitectureOverview), cfg.KnowledgePath)
 		if err != nil {
 			return fmt.Errorf("rendering prompt for %s: %w", story.ID, err)
 		}
@@ -317,6 +318,7 @@ func runQAVerification(ctx context.Context, cfg Config) error {
 		PRDPath:       cfg.PRDPath,
 		ProgressPath:  cfg.ProgressPath,
 		QualityChecks: cfg.QualityChecks,
+		KnowledgePath: cfg.KnowledgePath,
 	}, cfg.PromptsDir)
 	if err != nil {
 		return fmt.Errorf("rendering QA verification prompt: %w", err)
@@ -339,6 +341,7 @@ func runQAFix(ctx context.Context, cfg Config, failedTests []prd.IntegrationTest
 		ProgressPath:  cfg.ProgressPath,
 		QualityChecks: cfg.QualityChecks,
 		FailedTests:   failedTests,
+		KnowledgePath: cfg.KnowledgePath,
 	}, cfg.PromptsDir)
 	if err != nil {
 		return fmt.Errorf("rendering QA fix prompt: %w", err)

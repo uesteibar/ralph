@@ -13,6 +13,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
 	"github.com/uesteibar/ralph/internal/config"
 	"github.com/uesteibar/ralph/internal/events"
+	"github.com/uesteibar/ralph/internal/knowledge"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
@@ -169,15 +170,16 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			})
 		}
 
+		treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
+
 		prompt, err := ai.RenderAddressFeedback(ai.AddressFeedbackData{
 			Comments:      aiComments,
 			QualityChecks: qualityChecks,
+			KnowledgePath: knowledge.Dir(treePath),
 		}, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering feedback prompt: %w", err)
 		}
-
-		treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
 
 		handler := newBuildEventHandler(database, issue.ID, cfg.EventHandler, cfg.OnBuildEvent)
 		aiResponse, err := cfg.Invoker.InvokeWithEvents(ctx, prompt, treePath, handler)

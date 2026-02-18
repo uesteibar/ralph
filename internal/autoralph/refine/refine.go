@@ -7,6 +7,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/approve"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/knowledge"
 )
 
 // Invoker invokes an AI model with a prompt and returns the response.
@@ -58,8 +59,9 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		_ = database.LogActivity(issue.ID, "ai_invocation", "", "", "Invoking AI to refine issue...")
 
 		prompt, err := ai.RenderRefineIssue(ai.RefineIssueData{
-			Title:       issue.Title,
-			Description: issue.Description,
+			Title:         issue.Title,
+			Description:   issue.Description,
+			KnowledgePath: knowledge.Dir(project.LocalPath),
 		}, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering refine prompt: %w", err)

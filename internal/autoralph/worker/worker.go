@@ -11,6 +11,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/gitops"
+	"github.com/uesteibar/ralph/internal/knowledge"
 	"github.com/uesteibar/ralph/internal/runstate"
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
@@ -26,6 +27,7 @@ type LoopConfig struct {
 	ProgressPath  string
 	PromptsDir    string
 	QualityChecks []string
+	KnowledgePath string
 	Verbose       bool
 	EventHandler  events.EventHandler
 }
@@ -312,6 +314,7 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 		PRDPath:       prdPath,
 		ProgressPath:  progressPath,
 		QualityChecks: nil, // loaded by loop from Ralph config
+		KnowledgePath: knowledge.Dir(workDir),
 		EventHandler:  handler,
 	}
 

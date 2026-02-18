@@ -88,6 +88,7 @@ func (l *loopRunnerAdapter) Run(ctx context.Context, cfg worker.LoopConfig) erro
 		ProgressPath:  cfg.ProgressPath,
 		PromptsDir:    cfg.PromptsDir,
 		QualityChecks: cfg.QualityChecks,
+		KnowledgePath: cfg.KnowledgePath,
 		Verbose:       cfg.Verbose,
 		EventHandler:  cfg.EventHandler,
 	})
