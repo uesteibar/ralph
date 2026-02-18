@@ -108,7 +108,9 @@ func (p *Poller) poll(ctx context.Context) {
 	}
 }
 
-// pollProject checks GitHub for each issue in IN_REVIEW, ADDRESSING_FEEDBACK, or FIXING_CHECKS.
+// pollProject checks GitHub for each issue in IN_REVIEW, ADDRESSING_FEEDBACK, FIXING_CHECKS, or FAILED.
+// Failed issues with a PR number are included so we can detect merges that happened
+// while an action was running, recovering them to "completed" instead of leaving them stuck.
 func (p *Poller) pollProject(ctx context.Context, proj ProjectInfo) {
 	issues, err := p.db.ListIssues(db.IssueFilter{
 		ProjectID: proj.ProjectID,
@@ -116,6 +118,7 @@ func (p *Poller) pollProject(ctx context.Context, proj ProjectInfo) {
 			string(orchestrator.StateInReview),
 			string(orchestrator.StateAddressingFeedback),
 			string(orchestrator.StateFixingChecks),
+			string(orchestrator.StateFailed),
 		},
 	})
 	if err != nil {
@@ -153,6 +156,11 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 			p.transitionIssue(issue, string(orchestrator.StateCompleted), "pr_merged",
 				fmt.Sprintf("PR #%d merged", issue.PRNumber))
 		}
+		return
+	}
+
+	// Failed issues are only checked for merge status — don't evaluate checks or reviews.
+	if issue.State == string(orchestrator.StateFailed) {
 		return
 	}
 

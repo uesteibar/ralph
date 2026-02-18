@@ -227,9 +227,21 @@ func (d *Dispatcher) runAction(ctx context.Context, cancel context.CancelFunc, i
 }
 
 func (d *Dispatcher) handleActionFailure(issue db.Issue, actionErr error) {
-	issue.State = "failed"
-	issue.ErrorMessage = actionErr.Error()
-	if err := d.db.UpdateIssue(issue); err != nil {
+	// Re-read to avoid overwriting a concurrent completed/paused transition.
+	current, err := d.db.GetIssue(issue.ID)
+	if err != nil {
+		d.logger.Error("re-reading issue before marking failed", "issue", issue.ID, "error", err)
+		return
+	}
+	if current.State == "completed" || current.State == "paused" {
+		d.logger.Info("skipping action failure — issue already in terminal state",
+			"issue", issue.ID, "state", current.State, "error", actionErr)
+		return
+	}
+
+	current.State = "failed"
+	current.ErrorMessage = actionErr.Error()
+	if err := d.db.UpdateIssue(current); err != nil {
 		d.logger.Error("updating issue to failed after action", "issue", issue.ID, "error", err)
 		return
 	}
@@ -394,9 +406,21 @@ func (d *Dispatcher) handleConflict(issue db.Issue, conflictErr *pr.ConflictErro
 }
 
 func (d *Dispatcher) handleFailure(issue db.Issue, buildErr error) {
-	issue.State = "failed"
-	issue.ErrorMessage = buildErr.Error()
-	if err := d.db.UpdateIssue(issue); err != nil {
+	// Re-read to avoid overwriting a concurrent completed/paused transition.
+	current, err := d.db.GetIssue(issue.ID)
+	if err != nil {
+		d.logger.Error("re-reading issue before marking failed", "issue", issue.ID, "error", err)
+		return
+	}
+	if current.State == "completed" || current.State == "paused" {
+		d.logger.Info("skipping build failure — issue already in terminal state",
+			"issue", issue.ID, "state", current.State, "error", buildErr)
+		return
+	}
+
+	current.State = "failed"
+	current.ErrorMessage = buildErr.Error()
+	if err := d.db.UpdateIssue(current); err != nil {
 		d.logger.Error("updating issue to failed", "issue", issue.ID, "error", err)
 		return
 	}

@@ -1235,6 +1235,117 @@ func TestEvaluateCheckRuns_Empty(t *testing.T) {
 	}
 }
 
+func TestPollProject_FailedIssueWithMergedPR_TransitionsToCompleted(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateFailed), 42)
+
+	mock := &mockGitHub{merged: true}
+
+	var completeCalled bool
+	completeFn := func(iss db.Issue, database *db.DB) error {
+		completeCalled = true
+		iss.State = string(orchestrator.StateCompleted)
+		return database.UpdateIssue(iss)
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), completeFn)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	if !completeCalled {
+		t.Fatal("expected CompleteFunc to be called for failed issue with merged PR")
+	}
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != string(orchestrator.StateCompleted) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateCompleted, updated.State)
+	}
+}
+
+func TestPollProject_FailedIssueWithUnmergedPR_StaysInFailed(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateFailed), 42)
+
+	mock := &mockGitHub{
+		merged: false,
+		pr:     github.PR{HeadSHA: "abc123"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "test", Status: "completed", Conclusion: "failure"},
+		},
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "reviewer"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// State should remain failed — unmerged PRs don't recover
+	if updated.State != string(orchestrator.StateFailed) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateFailed, updated.State)
+	}
+	// Check runs and reviews should NOT have been fetched for failed issues
+	if mock.prCalls != 0 {
+		t.Errorf("expected 0 PR fetch calls for failed issue, got %d", mock.prCalls)
+	}
+	if mock.checkCalls != 0 {
+		t.Errorf("expected 0 check run calls for failed issue, got %d", mock.checkCalls)
+	}
+	if mock.fetchCalls != 0 {
+		t.Errorf("expected 0 review fetch calls for failed issue, got %d", mock.fetchCalls)
+	}
+}
+
+func TestPollProject_FailedIssueWithoutPR_Skipped(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateFailed), 0)
+
+	mock := &mockGitHub{}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	// Should not have called GitHub at all
+	if mock.mergeCalls != 0 {
+		t.Errorf("expected 0 merge calls, got %d", mock.mergeCalls)
+	}
+
+	updated, _ := d.GetIssue(issue.ID)
+	if updated.State != string(orchestrator.StateFailed) {
+		t.Errorf("expected state unchanged, got %q", updated.State)
+	}
+}
+
 func TestPollProject_FixingChecks_NoCheckFixAttemptsReset(t *testing.T) {
 	d := testDB(t)
 	proj := testProject(t, d)

@@ -1449,6 +1449,115 @@ func TestDispatcher_DispatchAction_IsRunningDuringExecution(t *testing.T) {
 	}
 }
 
+func TestDispatcher_DispatchAction_SkipsFailureWhenAlreadyCompleted(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "addressing_feedback")
+
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := disp.DispatchAction(ctx, issue, func(ctx context.Context) error {
+		// Simulate external merge: set issue to completed while action is running.
+		issue.State = "completed"
+		if err := d.UpdateIssue(issue); err != nil {
+			t.Fatalf("setting issue to completed: %v", err)
+		}
+		return errors.New("push to deleted branch")
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	disp.Wait()
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != "completed" {
+		t.Errorf("expected state %q (unchanged), got %q", "completed", updated.State)
+	}
+	if updated.ErrorMessage != "" {
+		t.Errorf("expected empty error message, got %q", updated.ErrorMessage)
+	}
+}
+
+func TestDispatcher_Dispatch_SkipsFailureWhenAlreadyCompleted(t *testing.T) {
+	d := testDB(t)
+	projectPath := t.TempDir()
+	wsName := "proj-42"
+
+	initTreeRepo(t, projectPath, wsName)
+
+	p, err := d.CreateProject(db.Project{
+		Name:             "skip-fail-test",
+		LocalPath:        projectPath,
+		LinearTeamID:     "team-abc",
+		LinearAssigneeID: "user-xyz",
+		RalphConfigPath:  ".ralph/ralph.yaml",
+		BranchPrefix:     "autoralph/",
+		MaxIterations:    5,
+	})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	issue := createTestIssue(t, d, p, "building")
+
+	// Runner that sets issue to completed before returning an error.
+	runner := &stateChangingRunner{db: d, issueID: issue.ID, toState: "completed"}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != "completed" {
+		t.Errorf("expected state %q (unchanged), got %q", "completed", updated.State)
+	}
+}
+
+// stateChangingRunner sets the issue to a given state before returning an error,
+// simulating a concurrent state change during a build.
+type stateChangingRunner struct {
+	db      *db.DB
+	issueID string
+	toState string
+}
+
+func (r *stateChangingRunner) Run(ctx context.Context, cfg LoopConfig) error {
+	issue, err := r.db.GetIssue(r.issueID)
+	if err != nil {
+		return err
+	}
+	issue.State = r.toState
+	if err := r.db.UpdateIssue(issue); err != nil {
+		return err
+	}
+	return errors.New("build failed after external merge")
+}
+
 func TestDispatcher_Dispatch_PassesKnowledgePath(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
