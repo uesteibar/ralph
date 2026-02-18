@@ -51,13 +51,16 @@ function ProjectCard({ project }: { project: Project }) {
   )
 }
 
-function IssueRow({ issue }: { issue: Issue }) {
+function IssueRow({ issue, projectName }: { issue: Issue; projectName: string }) {
   return (
     <tr style={{ borderBottom: '1px solid #f3f4f6' }}>
       <td style={{ padding: '10px 12px', fontSize: '13px', fontWeight: 500, color: '#6b7280' }}>
         <Link to={`/issues/${issue.id}`} style={{ color: '#6b7280', textDecoration: 'none' }}>
           {issue.identifier}
         </Link>
+      </td>
+      <td style={{ padding: '10px 12px', fontSize: '13px', color: '#6b7280' }}>
+        {projectName}
       </td>
       <td style={{ padding: '10px 12px', fontSize: '14px' }}>
         <Link to={`/issues/${issue.id}`} style={{ color: '#111827', textDecoration: 'none' }}>
@@ -166,6 +169,7 @@ export default function Dashboard() {
   }
 
   const activeIssues = issues.filter(i => !['completed', 'failed', 'dismissed'].includes(i.state))
+  const projectNames = new Map(projects.map(p => [p.id, p.name]))
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
@@ -211,6 +215,7 @@ export default function Dashboard() {
               <thead>
                 <tr style={{ backgroundColor: '#f9fafb' }}>
                   <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>ID</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Project</th>
                   <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Title</th>
                   <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>State</th>
                   <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Info</th>
@@ -218,7 +223,7 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {activeIssues.map(issue => (
-                  <IssueRow key={issue.id} issue={issue} />
+                  <IssueRow key={issue.id} issue={issue} projectName={projectNames.get(issue.project_id) || ''} />
                 ))}
               </tbody>
             </table>

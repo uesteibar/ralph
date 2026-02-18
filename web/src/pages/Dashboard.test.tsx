@@ -30,6 +30,42 @@ const mockProjects: Project[] = [
   },
 ]
 
+const mockMultipleProjects: Project[] = [
+  ...mockProjects,
+  {
+    id: 'p2',
+    name: 'second-project',
+    local_path: '/tmp/proj2',
+    github_owner: 'octocat',
+    github_repo: 'second-repo',
+    active_issue_count: 1,
+    state_breakdown: { building: 1 },
+  },
+]
+
+const mockMultiProjectIssues: Issue[] = [
+  {
+    id: 'iss1',
+    project_id: 'p1',
+    identifier: 'PROJ-1',
+    title: 'Add user avatars',
+    state: 'building',
+    build_active: true,
+    created_at: '2025-02-11T12:00:00Z',
+    updated_at: '2025-02-11T12:30:00Z',
+  },
+  {
+    id: 'iss2',
+    project_id: 'p2',
+    identifier: 'SEC-1',
+    title: 'Fix auth flow',
+    state: 'in_review',
+    build_active: false,
+    created_at: '2025-02-11T11:00:00Z',
+    updated_at: '2025-02-11T12:00:00Z',
+  },
+]
+
 const mockIssues: Issue[] = [
   {
     id: 'iss1',
@@ -105,7 +141,7 @@ describe('Dashboard', () => {
   it('renders project cards with name and active count', async () => {
     renderDashboard()
     await waitFor(() => {
-      expect(screen.getByText('my-project')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'my-project' })).toBeInTheDocument()
     })
     expect(screen.getByText('2 active')).toBeInTheDocument()
     expect(screen.getByText('octocat/hello-world')).toBeInTheDocument()
@@ -183,18 +219,18 @@ describe('Dashboard', () => {
   it('project cards link to /projects/:id', async () => {
     renderDashboard()
     await waitFor(() => {
-      expect(screen.getByText('my-project')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'my-project' })).toBeInTheDocument()
     })
-    const projectLink = screen.getByText('my-project').closest('a')
+    const projectLink = screen.getByRole('heading', { name: 'my-project' }).closest('a')
     expect(projectLink).toHaveAttribute('href', '/projects/p1')
   })
 
   it('project card links have no underline', async () => {
     renderDashboard()
     await waitFor(() => {
-      expect(screen.getByText('my-project')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'my-project' })).toBeInTheDocument()
     })
-    const projectLink = screen.getByText('my-project').closest('a')
+    const projectLink = screen.getByRole('heading', { name: 'my-project' }).closest('a')
     expect(projectLink).toHaveStyle({ textDecoration: 'none' })
   })
 
@@ -213,10 +249,10 @@ describe('Dashboard', () => {
     ])
     renderDashboard()
     await waitFor(() => {
-      expect(screen.getByText('second-project')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'second-project' })).toBeInTheDocument()
     })
-    const firstLink = screen.getByText('my-project').closest('a')
-    const secondLink = screen.getByText('second-project').closest('a')
+    const firstLink = screen.getByRole('heading', { name: 'my-project' }).closest('a')
+    const secondLink = screen.getByRole('heading', { name: 'second-project' }).closest('a')
     expect(firstLink).toHaveAttribute('href', '/projects/p1')
     expect(secondLink).toHaveAttribute('href', '/projects/p2')
   })
@@ -239,7 +275,7 @@ describe('Dashboard', () => {
     vi.mocked(fetchCCUsage).mockResolvedValue(mockCCUsageUnavailable)
     renderDashboard()
     await waitFor(() => {
-      expect(screen.getByText('my-project')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'my-project' })).toBeInTheDocument()
     })
     expect(screen.queryByText('Claude Code Usage')).not.toBeInTheDocument()
   })
@@ -248,7 +284,7 @@ describe('Dashboard', () => {
     vi.mocked(fetchCCUsage).mockRejectedValue(new Error('fail'))
     renderDashboard()
     await waitFor(() => {
-      expect(screen.getByText('my-project')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'my-project' })).toBeInTheDocument()
     })
     expect(screen.queryByText('Claude Code Usage')).not.toBeInTheDocument()
   })
@@ -259,5 +295,55 @@ describe('Dashboard', () => {
     await waitFor(() => {
       expect(fetchCCUsage).toHaveBeenCalled()
     })
+  })
+
+  it('displays Project column header between ID and Title', async () => {
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Add user avatars')).toBeInTheDocument()
+    })
+    const headers = screen.getAllByRole('columnheader')
+    const headerTexts = headers.map(h => h.textContent)
+    expect(headerTexts).toEqual(['ID', 'Project', 'Title', 'State', 'Info'])
+  })
+
+  it('displays correct project name for each issue across multiple projects', async () => {
+    vi.mocked(fetchProjects).mockResolvedValue(mockMultipleProjects)
+    vi.mocked(fetchIssues).mockResolvedValue(mockMultiProjectIssues)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Add user avatars')).toBeInTheDocument()
+    })
+    // Each issue row should show its project name
+    const rows = screen.getAllByRole('row')
+    // rows[0] is the header row, rows[1] and rows[2] are data rows
+    expect(rows[1]).toHaveTextContent('my-project')
+    expect(rows[2]).toHaveTextContent('second-project')
+  })
+
+  it('shows empty string when project name cannot be resolved', async () => {
+    const orphanIssue: Issue[] = [
+      {
+        id: 'iss-orphan',
+        project_id: 'nonexistent',
+        identifier: 'ORPHAN-1',
+        title: 'Orphan issue',
+        state: 'building',
+        build_active: false,
+        created_at: '2025-02-11T12:00:00Z',
+        updated_at: '2025-02-11T12:30:00Z',
+      },
+    ]
+    vi.mocked(fetchProjects).mockResolvedValue(mockProjects)
+    vi.mocked(fetchIssues).mockResolvedValue(orphanIssue)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Orphan issue')).toBeInTheDocument()
+    })
+    // The project cell should not crash and should show empty or fallback
+    const rows = screen.getAllByRole('row')
+    const cells = rows[1].querySelectorAll('td')
+    // Project cell is the second cell (index 1)
+    expect(cells[1].textContent).toBe('')
   })
 })

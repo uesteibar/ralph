@@ -159,11 +159,11 @@ describe('IT-001: End-to-end navigation flow', () => {
 
     // Step 1-2: Dashboard renders with project card
     await waitFor(() => {
-      expect(screen.getByText('alpha-project')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'alpha-project' })).toBeInTheDocument()
     })
 
     // Step 3: Click on project card
-    const projectLink = screen.getByText('alpha-project').closest('a')!
+    const projectLink = screen.getByRole('heading', { name: 'alpha-project' }).closest('a')!
     await user.click(projectLink)
 
     // Step 4: Navigated to ProjectDetail — project name displayed
@@ -338,7 +338,7 @@ describe('IT-005: StateBadge shared module works across all pages', () => {
   it('renders StateBadge correctly on Dashboard for state breakdowns', async () => {
     renderApp('/')
     await waitFor(() => {
-      expect(screen.getByText('alpha-project')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'alpha-project' })).toBeInTheDocument()
     })
     // Dashboard shows state breakdown as "1 queued", "1 building" badges
     expect(screen.getByText('1 queued')).toBeInTheDocument()
