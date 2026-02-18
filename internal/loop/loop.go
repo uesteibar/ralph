@@ -155,9 +155,11 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.MaxIterations = DefaultMaxIterations
 	}
 
-	// Ensure the progress file exists. For workspaces this lives at
-	// .ralph/workspaces/<name>/progress.txt; for base at .ralph/progress.txt.
-	ensureProgressFile(cfg.ProgressPath)
+	// Ensure the progress file exists (workspace-scoped at
+	// .ralph/workspaces/<name>/progress.txt).
+	if cfg.ProgressPath != "" {
+		ensureProgressFile(cfg.ProgressPath)
+	}
 
 	for i := 1; i <= cfg.MaxIterations; i++ {
 		emitEvent(cfg.EventHandler, events.IterationStart{

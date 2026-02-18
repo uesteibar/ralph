@@ -39,11 +39,6 @@ func (c *Config) StateArchiveDir() string {
 	return filepath.Join(c.Repo.Path, ".ralph", "state", "archive")
 }
 
-// ProgressPath returns the path to the shared progress file.
-func (c *Config) ProgressPath() string {
-	return filepath.Join(c.Repo.Path, ".ralph", "progress.txt")
-}
-
 // WorkspacesDir returns the path to the workspaces directory.
 func (c *Config) WorkspacesDir() string {
 	return filepath.Join(c.Repo.Path, ".ralph", "workspaces")

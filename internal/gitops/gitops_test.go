@@ -621,11 +621,11 @@ func TestConflictFiles_NoConflicts(t *testing.T) {
 	}
 }
 
-func TestCopyDotRalph_SkipsRalphYaml(t *testing.T) {
+func TestCopyDotRalph_SkipsRalphYamlAndProgressTxt(t *testing.T) {
 	repoDir := t.TempDir()
 	worktreeDir := t.TempDir()
 
-	// Create .ralph directory with ralph.yaml and other files.
+	// Create .ralph directory with ralph.yaml, progress.txt, and other files.
 	ralphDir := filepath.Join(repoDir, ".ralph")
 	if err := os.MkdirAll(ralphDir, 0755); err != nil {
 		t.Fatal(err)
@@ -657,12 +657,13 @@ func TestCopyDotRalph_SkipsRalphYaml(t *testing.T) {
 		t.Fatal("expected ralph.yaml NOT to be copied into worktree")
 	}
 
-	// Other files should still be copied.
+	// progress.txt must NOT be copied (progress is workspace-scoped only).
 	progressPath := filepath.Join(worktreeDir, ".ralph", "progress.txt")
-	if _, err := os.Stat(progressPath); err != nil {
-		t.Fatalf("expected progress.txt to be copied: %v", err)
+	if _, err := os.Stat(progressPath); !os.IsNotExist(err) {
+		t.Fatal("expected progress.txt NOT to be copied into worktree")
 	}
 
+	// Other files should still be copied.
 	skillPath := filepath.Join(worktreeDir, ".ralph", "skills", "test.md")
 	if _, err := os.Stat(skillPath); err != nil {
 		t.Fatalf("expected skills/test.md to be copied: %v", err)
