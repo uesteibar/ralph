@@ -566,6 +566,56 @@ func (h *apiHandler) handleListActivity(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+// handleCCUsage returns a handler that serves Claude Code usage data.
+func handleCCUsage(provider CCUsageProvider) http.HandlerFunc {
+	type usageLine struct {
+		Label         string `json:"label"`
+		Percentage    int    `json:"percentage"`
+		ResetDuration string `json:"reset_duration"`
+	}
+
+	type usageGroup struct {
+		GroupLabel string      `json:"group_label"`
+		Lines      []usageLine `json:"lines"`
+	}
+
+	type ccUsageResponse struct {
+		Available bool         `json:"available"`
+		Groups    []usageGroup `json:"groups,omitempty"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if provider == nil {
+			writeJSON(w, http.StatusOK, ccUsageResponse{Available: false})
+			return
+		}
+
+		data := provider.Current()
+		if data == nil {
+			writeJSON(w, http.StatusOK, ccUsageResponse{Available: false})
+			return
+		}
+
+		groups := make([]usageGroup, len(data))
+		for i, g := range data {
+			lines := make([]usageLine, len(g.Lines))
+			for j, l := range g.Lines {
+				lines[j] = usageLine{
+					Label:         l.Label,
+					Percentage:    l.Percentage,
+					ResetDuration: l.ResetTime,
+				}
+			}
+			groups[i] = usageGroup{
+				GroupLabel: g.GroupLabel,
+				Lines:      lines,
+			}
+		}
+
+		writeJSON(w, http.StatusOK, ccUsageResponse{Available: true, Groups: groups})
+	}
+}
+
 // handleStatus returns orchestrator health.
 func (h *apiHandler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(h.startAt).Round(time.Second).String()

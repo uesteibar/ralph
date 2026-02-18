@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uesteibar/ralph/internal/autoralph/ccusage"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/web"
 )
@@ -22,6 +23,11 @@ type WorkspaceRemover interface {
 // BuildChecker checks whether a build worker is active for a given issue.
 type BuildChecker interface {
 	IsRunning(issueID string) bool
+}
+
+// CCUsageProvider provides current Claude Code usage data.
+type CCUsageProvider interface {
+	Current() []ccusage.UsageGroup
 }
 
 // Config holds server configuration.
@@ -43,6 +49,8 @@ type Config struct {
 	// PRDPathFn computes the PRD file path for a project+workspace. Optional.
 	// When set, the issue detail API returns story and test data from the PRD.
 	PRDPathFn func(projectLocalPath, workspaceName string) string
+	// CCUsageProvider provides Claude Code usage data. Optional.
+	CCUsageProvider CCUsageProvider
 	// LinearURL overrides the Linear API endpoint (for mock servers in E2E tests).
 	LinearURL string
 	// GithubURL overrides the GitHub API endpoint (for mock servers in E2E tests).
@@ -101,6 +109,8 @@ func (s *Server) registerRoutes(cfg Config) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		})
 	}
+
+	s.mux.HandleFunc("GET /api/cc-usage", handleCCUsage(cfg.CCUsageProvider))
 
 	if cfg.Hub != nil {
 		s.mux.HandleFunc("GET /api/ws", cfg.Hub.ServeWS)

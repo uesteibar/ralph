@@ -7,9 +7,19 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/uesteibar/ralph/internal/autoralph/ccusage"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/server"
 )
+
+// mockCCUsageProvider implements server.CCUsageProvider for testing.
+type mockCCUsageProvider struct {
+	data []ccusage.UsageGroup
+}
+
+func (m *mockCCUsageProvider) Current() []ccusage.UsageGroup {
+	return m.data
+}
 
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
@@ -882,5 +892,185 @@ func TestAPI_GetIssue_DefaultLimits(t *testing.T) {
 	activity := result["activity"].([]any)
 	if len(activity) != 50 {
 		t.Fatalf("expected 50 activity entries (default timeline_limit), got %d", len(activity))
+	}
+}
+
+func TestAPI_CCUsage_NilProvider(t *testing.T) {
+	srv := newTestServer(t, server.Config{})
+
+	resp, err := http.Get("http://" + srv.Addr() + "/api/cc-usage")
+	if err != nil {
+		t.Fatalf("GET /api/cc-usage failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["available"] != false {
+		t.Fatalf("expected available=false, got %v", result["available"])
+	}
+	if _, ok := result["groups"]; ok {
+		t.Fatal("expected no groups key when unavailable")
+	}
+}
+
+func TestAPI_CCUsage_ProviderReturnsNil(t *testing.T) {
+	provider := &mockCCUsageProvider{data: nil}
+	srv := newTestServer(t, server.Config{CCUsageProvider: provider})
+
+	resp, err := http.Get("http://" + srv.Addr() + "/api/cc-usage")
+	if err != nil {
+		t.Fatalf("GET /api/cc-usage failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["available"] != false {
+		t.Fatalf("expected available=false, got %v", result["available"])
+	}
+}
+
+func TestAPI_CCUsage_WithData(t *testing.T) {
+	provider := &mockCCUsageProvider{
+		data: []ccusage.UsageGroup{
+			{
+				GroupLabel: "Claude Code Usage Statistics",
+				Lines: []ccusage.UsageLine{
+					{Label: "5-hour", Percentage: 50, ResetTime: "3h 13m"},
+					{Label: "7-day", Percentage: 83, ResetTime: "2d 5h"},
+				},
+			},
+		},
+	}
+	srv := newTestServer(t, server.Config{CCUsageProvider: provider})
+
+	resp, err := http.Get("http://" + srv.Addr() + "/api/cc-usage")
+	if err != nil {
+		t.Fatalf("GET /api/cc-usage failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["available"] != true {
+		t.Fatalf("expected available=true, got %v", result["available"])
+	}
+
+	groups, ok := result["groups"].([]any)
+	if !ok {
+		t.Fatalf("expected groups array, got %T", result["groups"])
+	}
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+
+	group := groups[0].(map[string]any)
+	if group["group_label"] != "Claude Code Usage Statistics" {
+		t.Fatalf("expected group_label 'Claude Code Usage Statistics', got %v", group["group_label"])
+	}
+
+	lines, ok := group["lines"].([]any)
+	if !ok {
+		t.Fatalf("expected lines array, got %T", group["lines"])
+	}
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d", len(lines))
+	}
+
+	line1 := lines[0].(map[string]any)
+	if line1["label"] != "5-hour" {
+		t.Fatalf("expected label '5-hour', got %v", line1["label"])
+	}
+	if int(line1["percentage"].(float64)) != 50 {
+		t.Fatalf("expected percentage 50, got %v", line1["percentage"])
+	}
+	if line1["reset_duration"] != "3h 13m" {
+		t.Fatalf("expected reset_duration '3h 13m', got %v", line1["reset_duration"])
+	}
+
+	line2 := lines[1].(map[string]any)
+	if line2["label"] != "7-day" {
+		t.Fatalf("expected label '7-day', got %v", line2["label"])
+	}
+	if int(line2["percentage"].(float64)) != 83 {
+		t.Fatalf("expected percentage 83, got %v", line2["percentage"])
+	}
+	if line2["reset_duration"] != "2d 5h" {
+		t.Fatalf("expected reset_duration '2d 5h', got %v", line2["reset_duration"])
+	}
+}
+
+func TestAPI_CCUsage_MultipleGroups(t *testing.T) {
+	provider := &mockCCUsageProvider{
+		data: []ccusage.UsageGroup{
+			{
+				GroupLabel: "Claude Code Usage Statistics",
+				Lines: []ccusage.UsageLine{
+					{Label: "5-hour", Percentage: 25, ResetTime: "4h 30m"},
+				},
+			},
+			{
+				GroupLabel: "Codex Usage Limits (Plan: Free)",
+				Lines: []ccusage.UsageLine{
+					{Label: "daily", Percentage: 90, ResetTime: "1h 10m"},
+				},
+			},
+		},
+	}
+	srv := newTestServer(t, server.Config{CCUsageProvider: provider})
+
+	resp, err := http.Get("http://" + srv.Addr() + "/api/cc-usage")
+	if err != nil {
+		t.Fatalf("GET /api/cc-usage failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["available"] != true {
+		t.Fatalf("expected available=true, got %v", result["available"])
+	}
+
+	groups := result["groups"].([]any)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+
+	g1 := groups[0].(map[string]any)
+	if g1["group_label"] != "Claude Code Usage Statistics" {
+		t.Fatalf("expected first group label 'Claude Code Usage Statistics', got %v", g1["group_label"])
+	}
+
+	g2 := groups[1].(map[string]any)
+	if g2["group_label"] != "Codex Usage Limits (Plan: Free)" {
+		t.Fatalf("expected second group label 'Codex Usage Limits (Plan: Free)', got %v", g2["group_label"])
+	}
+}
+
+func TestAPI_CCUsage_ContentType(t *testing.T) {
+	srv := newTestServer(t, server.Config{})
+
+	resp, err := http.Get("http://" + srv.Addr() + "/api/cc-usage")
+	if err != nil {
+		t.Fatalf("GET /api/cc-usage failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	ct := resp.Header.Get("Content-Type")
+	if ct != "application/json" {
+		t.Fatalf("expected Content-Type application/json, got %s", ct)
 	}
 }
