@@ -26,6 +26,16 @@ The following integration tests have `passes: false` in the PRD:
 ---
 {{end}}
 
+{{if .KnowledgePath}}
+## Knowledge Base
+
+A project knowledge base is available at `{{.KnowledgePath}}`. Before starting work:
+
+1. Use Glob and Grep to search for relevant learnings and past fix patterns
+2. Read any relevant files to understand known gotchas
+
+When you fix a non-obvious issue or discover a reusable pattern, write a markdown file to the knowledge base. Use descriptive filenames and add `## Tags: topic1, topic2` at the top.
+{{end}}
 ## Your Task
 
 For EACH failed integration test, you must:

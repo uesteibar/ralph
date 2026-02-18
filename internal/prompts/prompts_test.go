@@ -905,6 +905,212 @@ func TestQAFixData_KnowledgePath_Field(t *testing.T) {
 	}
 }
 
+// --- Knowledge Base section rendering tests ---
+
+func TestRenderLoopIteration_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test Story",
+		Description: "Test",
+	}
+
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "", "/repo/.ralph/knowledge/")
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+
+	checks := []string{
+		"Knowledge Base",
+		"/repo/.ralph/knowledge/",
+		"search",
+		"learnings",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when KnowledgePath is set", want)
+		}
+	}
+}
+
+func TestRenderLoopIteration_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test Story",
+		Description: "Test",
+	}
+
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "", "")
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+
+	if strings.Contains(out, "Knowledge Base") {
+		t.Error("output should not contain Knowledge Base section when KnowledgePath is empty")
+	}
+}
+
+func TestRenderLoopIteration_KnowledgeBase_HasWriteInstructions(t *testing.T) {
+	story := &prd.Story{
+		ID:          "US-001",
+		Title:       "Test Story",
+		Description: "Test",
+	}
+
+	out, err := RenderLoopIteration(story, nil, ".ralph/progress.txt", ".ralph/state/prd.json", "", "", "", "/repo/.ralph/knowledge/")
+	if err != nil {
+		t.Fatalf("RenderLoopIteration failed: %v", err)
+	}
+
+	// loop_iteration has read+write: check for write instruction
+	if !strings.Contains(out, "write") && !strings.Contains(out, "Write") {
+		t.Error("loop_iteration knowledge section should include write instructions")
+	}
+}
+
+func TestRenderChatSystem_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
+	data := ChatSystemData{
+		ProjectName:   "TestProject",
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderChatSystem(data, "")
+	if err != nil {
+		t.Fatalf("RenderChatSystem failed: %v", err)
+	}
+
+	checks := []string{
+		"Knowledge Base",
+		"/repo/.ralph/knowledge/",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when KnowledgePath is set", want)
+		}
+	}
+}
+
+func TestRenderChatSystem_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
+	data := ChatSystemData{
+		ProjectName: "TestProject",
+	}
+
+	out, err := RenderChatSystem(data, "")
+	if err != nil {
+		t.Fatalf("RenderChatSystem failed: %v", err)
+	}
+
+	if strings.Contains(out, "Knowledge Base") {
+		t.Error("output should not contain Knowledge Base section when KnowledgePath is empty")
+	}
+}
+
+func TestRenderQAVerification_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
+	data := QAVerificationData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test"},
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderQAVerification(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAVerification failed: %v", err)
+	}
+
+	checks := []string{
+		"Knowledge Base",
+		"/repo/.ralph/knowledge/",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when KnowledgePath is set", want)
+		}
+	}
+}
+
+func TestRenderQAVerification_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
+	data := QAVerificationData{
+		PRDPath:      ".ralph/state/prd.json",
+		ProgressPath: ".ralph/progress.txt",
+	}
+
+	out, err := RenderQAVerification(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAVerification failed: %v", err)
+	}
+
+	if strings.Contains(out, "Knowledge Base") {
+		t.Error("output should not contain Knowledge Base section when KnowledgePath is empty")
+	}
+}
+
+func TestRenderQAFix_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
+	data := QAFixData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test"},
+		FailedTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
+		},
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderQAFix(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAFix failed: %v", err)
+	}
+
+	checks := []string{
+		"Knowledge Base",
+		"/repo/.ralph/knowledge/",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when KnowledgePath is set", want)
+		}
+	}
+}
+
+func TestRenderQAFix_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
+	data := QAFixData{
+		PRDPath:      ".ralph/state/prd.json",
+		ProgressPath: ".ralph/progress.txt",
+		FailedTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
+		},
+	}
+
+	out, err := RenderQAFix(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAFix failed: %v", err)
+	}
+
+	if strings.Contains(out, "Knowledge Base") {
+		t.Error("output should not contain Knowledge Base section when KnowledgePath is empty")
+	}
+}
+
+func TestRenderQAFix_KnowledgeBase_HasWriteInstructions(t *testing.T) {
+	data := QAFixData{
+		PRDPath:      ".ralph/state/prd.json",
+		ProgressPath: ".ralph/progress.txt",
+		FailedTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
+		},
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderQAFix(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAFix failed: %v", err)
+	}
+
+	// qa_fix has read+write: check for write instruction
+	if !strings.Contains(out, "write") && !strings.Contains(out, "Write") {
+		t.Error("qa_fix knowledge section should include write instructions")
+	}
+}
+
 func TestConfig_PromptsDir(t *testing.T) {
 	// Test readTemplate directly with override
 	dir := t.TempDir()

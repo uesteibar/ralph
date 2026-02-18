@@ -16,6 +16,11 @@ You are an autonomous software engineering agent analyzing a Linear issue to pre
 {{.Body}}
 {{end}}
 {{end}}
+{{if .KnowledgePath}}
+## Knowledge Base
+
+A project knowledge base is available at `{{.KnowledgePath}}`. Before analyzing, use Glob and Grep to search for relevant learnings, architectural patterns, and past decisions.
+{{end}}
 ## Your Task
 
 Analyze this issue and produce ONE of the following response types:

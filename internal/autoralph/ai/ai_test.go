@@ -690,3 +690,203 @@ func TestFixChecksData_KnowledgePath_Field(t *testing.T) {
 		t.Errorf("KnowledgePath = %q, want %q", data.KnowledgePath, "/repo/.ralph/knowledge/")
 	}
 }
+
+// --- Knowledge Base section rendering tests ---
+
+func TestRenderRefineIssue_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
+	data := RefineIssueData{
+		Title:         "Test issue",
+		Description:   "Test description.",
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderRefineIssue(data, "")
+	if err != nil {
+		t.Fatalf("RenderRefineIssue failed: %v", err)
+	}
+
+	checks := []string{
+		"Knowledge Base",
+		"/repo/.ralph/knowledge/",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when KnowledgePath is set", want)
+		}
+	}
+}
+
+func TestRenderRefineIssue_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
+	data := RefineIssueData{
+		Title:       "Test issue",
+		Description: "Test description.",
+	}
+
+	out, err := RenderRefineIssue(data, "")
+	if err != nil {
+		t.Fatalf("RenderRefineIssue failed: %v", err)
+	}
+
+	if strings.Contains(out, "Knowledge Base") {
+		t.Error("output should not contain Knowledge Base section when KnowledgePath is empty")
+	}
+}
+
+func TestRenderGeneratePRD_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
+	data := GeneratePRDData{
+		PlanText:      "Build it",
+		ProjectName:   "test",
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderGeneratePRD(data, "")
+	if err != nil {
+		t.Fatalf("RenderGeneratePRD failed: %v", err)
+	}
+
+	checks := []string{
+		"Knowledge Base",
+		"/repo/.ralph/knowledge/",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when KnowledgePath is set", want)
+		}
+	}
+}
+
+func TestRenderGeneratePRD_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
+	data := GeneratePRDData{
+		PlanText:    "Build it",
+		ProjectName: "test",
+	}
+
+	out, err := RenderGeneratePRD(data, "")
+	if err != nil {
+		t.Fatalf("RenderGeneratePRD failed: %v", err)
+	}
+
+	if strings.Contains(out, "Knowledge Base") {
+		t.Error("output should not contain Knowledge Base section when KnowledgePath is empty")
+	}
+}
+
+func TestRenderAddressFeedback_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
+	data := AddressFeedbackData{
+		Comments: []AddressFeedbackComment{
+			{Path: "main.go", Author: "reviewer", Body: "Fix this."},
+		},
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderAddressFeedback(data, "")
+	if err != nil {
+		t.Fatalf("RenderAddressFeedback failed: %v", err)
+	}
+
+	checks := []string{
+		"Knowledge Base",
+		"/repo/.ralph/knowledge/",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when KnowledgePath is set", want)
+		}
+	}
+}
+
+func TestRenderAddressFeedback_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
+	data := AddressFeedbackData{
+		Comments: []AddressFeedbackComment{
+			{Path: "main.go", Author: "reviewer", Body: "Fix this."},
+		},
+	}
+
+	out, err := RenderAddressFeedback(data, "")
+	if err != nil {
+		t.Fatalf("RenderAddressFeedback failed: %v", err)
+	}
+
+	if strings.Contains(out, "Knowledge Base") {
+		t.Error("output should not contain Knowledge Base section when KnowledgePath is empty")
+	}
+}
+
+func TestRenderAddressFeedback_KnowledgeBase_HasWriteInstructions(t *testing.T) {
+	data := AddressFeedbackData{
+		Comments: []AddressFeedbackComment{
+			{Path: "main.go", Author: "reviewer", Body: "Fix this."},
+		},
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderAddressFeedback(data, "")
+	if err != nil {
+		t.Fatalf("RenderAddressFeedback failed: %v", err)
+	}
+
+	// address_feedback has read+write
+	if !strings.Contains(out, "write") && !strings.Contains(out, "Write") {
+		t.Error("address_feedback knowledge section should include write instructions")
+	}
+}
+
+func TestRenderFixChecks_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
+	data := FixChecksData{
+		FailedChecks: []FailedCheckRun{
+			{Name: "ci", Conclusion: "failure", Log: "error log"},
+		},
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderFixChecks(data, "")
+	if err != nil {
+		t.Fatalf("RenderFixChecks failed: %v", err)
+	}
+
+	checks := []string{
+		"Knowledge Base",
+		"/repo/.ralph/knowledge/",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when KnowledgePath is set", want)
+		}
+	}
+}
+
+func TestRenderFixChecks_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
+	data := FixChecksData{
+		FailedChecks: []FailedCheckRun{
+			{Name: "ci", Conclusion: "failure", Log: "error log"},
+		},
+	}
+
+	out, err := RenderFixChecks(data, "")
+	if err != nil {
+		t.Fatalf("RenderFixChecks failed: %v", err)
+	}
+
+	if strings.Contains(out, "Knowledge Base") {
+		t.Error("output should not contain Knowledge Base section when KnowledgePath is empty")
+	}
+}
+
+func TestRenderFixChecks_KnowledgeBase_HasWriteInstructions(t *testing.T) {
+	data := FixChecksData{
+		FailedChecks: []FailedCheckRun{
+			{Name: "ci", Conclusion: "failure", Log: "error log"},
+		},
+		KnowledgePath: "/repo/.ralph/knowledge/",
+	}
+
+	out, err := RenderFixChecks(data, "")
+	if err != nil {
+		t.Fatalf("RenderFixChecks failed: %v", err)
+	}
+
+	// fix_checks has read+write
+	if !strings.Contains(out, "write") && !strings.Contains(out, "Write") {
+		t.Error("fix_checks knowledge section should include write instructions")
+	}
+}

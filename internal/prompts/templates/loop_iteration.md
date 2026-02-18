@@ -19,6 +19,16 @@ Always read and update the PRD at this absolute path. When marking stories as pa
 {{.ArchitectureOverview}}
 {{end}}
 
+{{if .KnowledgePath}}
+## Knowledge Base
+
+A project knowledge base is available at `{{.KnowledgePath}}`. Before starting work:
+
+1. Use Glob and Grep to search the knowledge base for learnings relevant to this story
+2. Read any relevant files to understand past patterns, gotchas, and solutions
+
+When you discover reusable patterns, encounter non-obvious gotchas, or fix mistakes during implementation, write a markdown file to the knowledge base. Use descriptive filenames (e.g. `testing-gotchas.md`, `api-patterns.md`) and add `## Tags: topic1, topic2` at the top.
+{{end}}
 ## Your Task
 
 Read the PRD at `{{.PRDPath}}` and the progress log at `{{.ProgressPath}}`.
