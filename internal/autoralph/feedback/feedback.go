@@ -405,17 +405,35 @@ func isNothingToCommit(err error) bool {
 }
 
 // buildReplyForComment constructs a reply message for a feedback item.
-// If code was committed, it references the commit SHA. Otherwise it extracts
-// the AI's explanation from its response.
+// It always tries to extract the AI's explanation from its structured output.
+// When code was committed, the commit SHA is included alongside the explanation.
 func buildReplyForComment(aiResponse, path, commitRef string) string {
+	// Extract the AI's explanation for this item.
+	// For general (non-line) feedback, look up "General feedback" section.
+	lookupKey := path
+	if lookupKey == "" {
+		lookupKey = "General feedback"
+	}
+	section := extractSection(aiResponse, lookupKey)
+
 	if commitRef != "" {
+		if section != "" {
+			return fmt.Sprintf("Addressed in %s\n\n%s", commitRef, section)
+		}
 		return fmt.Sprintf("Addressed in %s", commitRef)
 	}
-	// No commit — extract AI's response for this file from the output.
-	if path != "" {
-		if section := extractSection(aiResponse, path); section != "" {
-			return section
+
+	if section != "" {
+		return section
+	}
+
+	// Fallback: return the full AI response (trimmed) so the reviewer
+	// gets something meaningful instead of a canned message.
+	if trimmed := strings.TrimSpace(aiResponse); trimmed != "" {
+		if len(trimmed) > 1000 {
+			trimmed = trimmed[:1000] + "…"
 		}
+		return trimmed
 	}
 	return "Reviewed — no code changes needed."
 }

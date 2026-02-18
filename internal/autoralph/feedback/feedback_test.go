@@ -426,13 +426,17 @@ func TestNewAction_NothingToCommit_SucceedsWithNoCommitRef(t *testing.T) {
 		t.Errorf("expected no push calls, got %d", len(git.pushCalls))
 	}
 
-	// Replies should not reference a commit SHA
+	// Replies should not reference a commit SHA but should relay the AI response
 	if len(replier.calls) != 2 {
 		t.Fatalf("expected 2 reply calls, got %d", len(replier.calls))
 	}
 	for _, call := range replier.calls {
 		if strings.Contains(call.body, "abc1234") {
 			t.Errorf("expected reply NOT to contain commit SHA, got: %s", call.body)
+		}
+		// Should relay the AI's response instead of a canned message
+		if call.body == "Reviewed — no code changes needed." {
+			t.Errorf("expected reply to relay AI response, not canned message, got: %s", call.body)
 		}
 	}
 }
@@ -1509,5 +1513,67 @@ func TestNewAction_IncludesKnowledgePath(t *testing.T) {
 	// The knowledge path is computed from workspace.TreePath(project.LocalPath, issue.WorkspaceName)
 	if !strings.Contains(invoker.lastPrompt, ".ralph/knowledge") {
 		t.Error("expected prompt to contain knowledge path")
+	}
+}
+
+// --- buildReplyForComment tests ---
+
+func TestBuildReplyForComment_CommitRef_WithSection(t *testing.T) {
+	aiResponse := "### main.go\n**Action:** changed\n**Response:** Added error handling for nil pointer"
+	got := buildReplyForComment(aiResponse, "main.go", "abc1234")
+	if !strings.Contains(got, "abc1234") {
+		t.Errorf("expected commit SHA in reply, got: %s", got)
+	}
+	if !strings.Contains(got, "Added error handling") {
+		t.Errorf("expected AI explanation in reply, got: %s", got)
+	}
+}
+
+func TestBuildReplyForComment_CommitRef_NoSection(t *testing.T) {
+	got := buildReplyForComment("unstructured response", "main.go", "abc1234")
+	if got != "Addressed in abc1234" {
+		t.Errorf("expected 'Addressed in abc1234', got: %s", got)
+	}
+}
+
+func TestBuildReplyForComment_NoCommit_GeneralFeedback_ExtractsSection(t *testing.T) {
+	aiResponse := "### General feedback\n**Action:** no_change\n**Response:** The naming convention is already consistent with the project style guide."
+	got := buildReplyForComment(aiResponse, "", "")
+	if !strings.Contains(got, "naming convention is already consistent") {
+		t.Errorf("expected AI explanation for general feedback, got: %s", got)
+	}
+}
+
+func TestBuildReplyForComment_NoCommit_NoSection_FallsBackToFullResponse(t *testing.T) {
+	aiResponse := "I reviewed the feedback and the code is correct as-is because the tests cover this edge case."
+	got := buildReplyForComment(aiResponse, "", "")
+	if !strings.Contains(got, "reviewed the feedback") {
+		t.Errorf("expected full AI response as fallback, got: %s", got)
+	}
+}
+
+func TestBuildReplyForComment_NoCommit_EmptyAIResponse_FallsBackToCanned(t *testing.T) {
+	got := buildReplyForComment("", "", "")
+	if got != "Reviewed — no code changes needed." {
+		t.Errorf("expected canned message for empty AI response, got: %s", got)
+	}
+}
+
+func TestBuildReplyForComment_NoCommit_PathSpecific_ExtractsSection(t *testing.T) {
+	aiResponse := "### main.go\n**Action:** no_change\n**Response:** The function already handles this case on line 42."
+	got := buildReplyForComment(aiResponse, "main.go", "")
+	if !strings.Contains(got, "already handles this case") {
+		t.Errorf("expected AI explanation for file-specific feedback, got: %s", got)
+	}
+}
+
+func TestBuildReplyForComment_LongAIResponse_Truncated(t *testing.T) {
+	longResponse := strings.Repeat("x", 2000)
+	got := buildReplyForComment(longResponse, "", "")
+	if len(got) > 1100 {
+		t.Errorf("expected truncated response, got length %d", len(got))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Error("expected truncation marker at end")
 	}
 }

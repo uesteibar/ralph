@@ -34,7 +34,7 @@ When you fix a non-obvious issue or discover a reusable pattern, write a markdow
 For each review comment:
 
 1. If the feedback requests a code change: make the change in the relevant file, keep it minimal and focused, and run tests to ensure nothing breaks.
-2. If the feedback is a question or the code is already correct: do nothing — the system will handle the reply.
+2. If you believe no code change is needed: you MUST still explain your reasoning in the Output section below. The system will relay your explanation to the reviewer.
 
 ## Workspace Boundary
 
