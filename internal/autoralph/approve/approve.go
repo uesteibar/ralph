@@ -9,6 +9,8 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/autoralph/eventlog"
+	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
 )
 
@@ -19,12 +21,6 @@ var approvalPattern = regexp.MustCompile(`(?i)\bI approve this\b`)
 // ApprovalHint is appended to refinement and iteration comments to tell the
 // user how to approve the plan.
 const ApprovalHint = "\n\n---\n_To approve this plan, reply with **I approve this**. To request changes, reply with your feedback._"
-
-// Invoker invokes an AI model with a prompt and returns the response.
-// Dir sets the working directory for the AI process.
-type Invoker interface {
-	Invoke(ctx context.Context, prompt, dir string) (string, error)
-}
 
 // CommentClient fetches and posts comments on Linear issues.
 type CommentClient interface {
@@ -50,12 +46,13 @@ type CommentReactor interface {
 
 // Config holds the dependencies for the approve transition actions.
 type Config struct {
-	Invoker     Invoker
-	Comments    CommentClient
-	Projects    ProjectGetter
-	GitPuller   GitPuller
-	Reactor     CommentReactor
-	OverrideDir string
+	Invoker      invoker.EventInvoker
+	Comments     CommentClient
+	Projects     ProjectGetter
+	GitPuller    GitPuller
+	Reactor      CommentReactor
+	OnBuildEvent func(issueID, detail string)
+	OverrideDir  string
 }
 
 // HasNewComments returns true if there are comments newer than the issue's
@@ -223,7 +220,8 @@ func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error 
 			return fmt.Errorf("rendering refine prompt: %w", err)
 		}
 
-		response, err := cfg.Invoker.Invoke(context.Background(), prompt, project.LocalPath)
+		handler := eventlog.New(database, issue.ID, nil, cfg.OnBuildEvent)
+		response, err := cfg.Invoker.InvokeWithEvents(context.Background(), prompt, project.LocalPath, handler)
 		if err != nil {
 			return fmt.Errorf("invoking AI: %w", err)
 		}

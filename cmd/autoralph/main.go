@@ -279,6 +279,20 @@ func runServe(args []string) error {
 			pullFn:        gitops.PullFFOnly,
 		}
 
+		// OnBuildEvent callback broadcasts real-time AI events via WebSocket.
+		onBuildEvent := func(issueID, detail string) {
+			if hub == nil {
+				return
+			}
+			msg, err := server.NewWSMessage(server.MsgBuildEvent, map[string]string{
+				"issue_id": issueID,
+				"detail":   detail,
+			})
+			if err == nil {
+				hub.Broadcast(msg)
+			}
+		}
+
 		// QUEUED → REFINING
 		sm.Register(orchestrator.Transition{
 			From: orchestrator.StateQueued,
@@ -289,10 +303,11 @@ func runServe(args []string) error {
 					return err
 				}
 				return refine.NewAction(refine.Config{
-					Invoker:   readOnlyInvoker,
-					Poster:    &linearCommentPoster{client: lc},
-					Projects:  database,
-					GitPuller: puller,
+					Invoker:      readOnlyInvoker,
+					Poster:       &linearCommentPoster{client: lc},
+					Projects:     database,
+					GitPuller:    puller,
+					OnBuildEvent: onBuildEvent,
 				})(issue, database)
 			},
 		})
@@ -338,11 +353,12 @@ func runServe(args []string) error {
 					return err
 				}
 				return approve.NewIterationAction(approve.Config{
-					Invoker:   readOnlyInvoker,
-					Comments:  lc,
-					Projects:  database,
-					GitPuller: puller,
-					Reactor:   lc,
+					Invoker:      readOnlyInvoker,
+					Comments:     lc,
+					Projects:     database,
+					GitPuller:    puller,
+					Reactor:      lc,
+					OnBuildEvent: onBuildEvent,
 				})(issue, database)
 			},
 		})
@@ -366,21 +382,6 @@ func runServe(args []string) error {
 				})(issue, database)
 			},
 		})
-
-		// OnBuildEvent callback for feedback and checks actions to broadcast
-		// real-time events via WebSocket.
-		onBuildEvent := func(issueID, detail string) {
-			if hub == nil {
-				return
-			}
-			msg, err := server.NewWSMessage(server.MsgBuildEvent, map[string]string{
-				"issue_id": issueID,
-				"detail":   detail,
-			})
-			if err == nil {
-				hub.Broadcast(msg)
-			}
-		}
 
 		// ADDRESSING_FEEDBACK → IN_REVIEW
 		if hasGitHub {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
+	"github.com/uesteibar/ralph/internal/events"
 )
 
 func testDB(t *testing.T) *db.DB {
@@ -59,13 +60,21 @@ func (m *mockGitPuller) PullDefaultBase(ctx context.Context, repoPath, ralphConf
 }
 
 type mockInvoker struct {
-	lastPrompt string
-	response   string
-	err        error
+	lastPrompt  string
+	lastHandler events.EventHandler
+	response    string
+	err         error
+	emitEvents  []events.Event
 }
 
-func (m *mockInvoker) Invoke(ctx context.Context, prompt, dir string) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
 	m.lastPrompt = prompt
+	m.lastHandler = handler
+	for _, e := range m.emitEvents {
+		if handler != nil {
+			handler.Handle(e)
+		}
+	}
 	return m.response, m.err
 }
 
@@ -1137,5 +1146,156 @@ func TestApprovalAction_NilReactor_DoesNotPanic(t *testing.T) {
 	}
 	if updated.LastCommentID != "c2" {
 		t.Errorf("expected LastCommentID %q, got %q", "c2", updated.LastCommentID)
+	}
+}
+
+// --- Event streaming tests ---
+
+func TestIterationAction_UsesInvokeWithEvents(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if invoker.lastHandler == nil {
+		t.Fatal("expected InvokeWithEvents to be called with a non-nil event handler")
+	}
+}
+
+func TestIterationAction_EventsStreamedToDB(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{
+		response: "Updated plan",
+		emitEvents: []events.Event{
+			events.ToolUse{Name: "Read", Detail: "main.go"},
+			events.InvocationDone{NumTurns: 5, DurationMS: 2000},
+		},
+	}
+
+	action := NewIterationAction(Config{
+		Invoker:  invoker,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entries, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+
+	buildEventCount := 0
+	for _, e := range entries {
+		if e.EventType == "build_event" {
+			buildEventCount++
+		}
+	}
+	if buildEventCount != 2 {
+		t.Errorf("expected 2 build_event entries, got %d", buildEventCount)
+	}
+}
+
+func TestIterationAction_OnBuildEventCallback(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "Add caching", UserName: "human"},
+		},
+		postID: "c3",
+	}
+	invoker := &mockInvoker{
+		response: "Updated plan",
+		emitEvents: []events.Event{
+			events.ToolUse{Name: "Grep", Detail: "pattern"},
+		},
+	}
+
+	var callbackCalls []struct{ issueID, detail string }
+	onBuildEvent := func(issueID, detail string) {
+		callbackCalls = append(callbackCalls, struct{ issueID, detail string }{issueID, detail})
+	}
+
+	action := NewIterationAction(Config{
+		Invoker:      invoker,
+		Comments:     client,
+		Projects:     d,
+		OnBuildEvent: onBuildEvent,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(callbackCalls) != 1 {
+		t.Fatalf("expected 1 onBuildEvent call, got %d", len(callbackCalls))
+	}
+	if callbackCalls[0].issueID != issue.ID {
+		t.Errorf("expected issueID %q, got %q", issue.ID, callbackCalls[0].issueID)
+	}
+	if !strings.Contains(callbackCalls[0].detail, "Grep") {
+		t.Errorf("expected detail to contain tool name, got %q", callbackCalls[0].detail)
+	}
+}
+
+func TestApprovalAction_Unchanged_NoEventInvoker(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Plan text", UserName: "autoralph"},
+			{ID: "c2", Body: "I approve this", UserName: "human"},
+		},
+	}
+
+	// ApprovalAction does not use the Invoker at all.
+	action := NewApprovalAction(Config{Comments: client})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.PlanText == "" {
+		t.Error("expected plan text to be stored")
 	}
 }

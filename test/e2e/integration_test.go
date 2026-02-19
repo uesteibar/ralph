@@ -25,6 +25,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/poller"
 	"github.com/uesteibar/ralph/internal/autoralph/refine"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
+	"github.com/uesteibar/ralph/internal/events"
 	mockgithub "github.com/uesteibar/ralph/test/e2e/mocks/github"
 	mocklinear "github.com/uesteibar/ralph/test/e2e/mocks/linear"
 )
@@ -35,7 +36,7 @@ type mockInvoker struct {
 	calls    int32
 }
 
-func (m *mockInvoker) Invoke(_ context.Context, _, _ string) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(_ context.Context, _, _ string, _ events.EventHandler) (string, error) {
 	atomic.AddInt32(&m.calls, 1)
 	return m.response, nil
 }
