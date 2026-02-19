@@ -409,6 +409,42 @@ func extractLimitLine(output string) string {
 	return strings.TrimSpace(output)
 }
 
+// modelNames maps known Claude model ID prefixes to human-friendly display names.
+var modelNames = map[string]string{
+	"claude-sonnet-4-5": "Sonnet 4.5",
+	"claude-opus-4-6":   "Opus 4.6",
+	"claude-haiku-4-5":  "Haiku 4.5",
+}
+
+// displayName converts a raw model ID (e.g. "claude-sonnet-4-5-20250514") to a
+// human-friendly name (e.g. "Sonnet 4.5"). Unknown IDs are returned as-is.
+func displayName(rawID string) string {
+	if rawID == "" {
+		return ""
+	}
+	for prefix, name := range modelNames {
+		if strings.HasPrefix(rawID, prefix) {
+			return name
+		}
+	}
+	return rawID
+}
+
+// ModelName resolves the current Claude CLI model name by running
+// "claude config get model". It returns a human-friendly display name
+// (e.g. "Sonnet 4.5") or an empty string if the command fails.
+func ModelName() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "claude", "config", "get", "model")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return displayName(strings.TrimSpace(string(out)))
+}
+
 func buildArgs(opts InvokeOpts) []string {
 	var args []string
 

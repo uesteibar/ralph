@@ -396,6 +396,41 @@ func TestParseUsageLimit_ResetsTimeOnlyWithMinutes(t *testing.T) {
 	}
 }
 
+func TestDisplayName_KnownModels(t *testing.T) {
+	tests := []struct {
+		rawID string
+		want  string
+	}{
+		{"claude-sonnet-4-5-20250514", "Sonnet 4.5"},
+		{"claude-sonnet-4-5-20250929", "Sonnet 4.5"},
+		{"claude-opus-4-6", "Opus 4.6"},
+		{"claude-haiku-4-5-20251001", "Haiku 4.5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.rawID, func(t *testing.T) {
+			got := displayName(tt.rawID)
+			if got != tt.want {
+				t.Errorf("displayName(%q) = %q, want %q", tt.rawID, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDisplayName_UnknownModel(t *testing.T) {
+	raw := "claude-unknown-model-99"
+	got := displayName(raw)
+	if got != raw {
+		t.Errorf("displayName(%q) = %q, want %q (raw passthrough)", raw, got, raw)
+	}
+}
+
+func TestDisplayName_EmptyString(t *testing.T) {
+	got := displayName("")
+	if got != "" {
+		t.Errorf("displayName(%q) = %q, want empty", "", got)
+	}
+}
+
 // TestParseUsageLimit_InAssistantText verifies detection when the rate limit
 // message arrives as assistant event text (the most common real-world scenario).
 // In stream-json mode, the limit message comes through as Claude's text
