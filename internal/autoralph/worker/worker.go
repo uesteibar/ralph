@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/autoralph/eventlog"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/gitops"
@@ -300,12 +301,7 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 		runstate.CleanupPID(wsPath)
 	}()
 
-	handler := &buildEventHandler{
-		db:           d.db,
-		issueID:      issue.ID,
-		upstream:     d.handler,
-		onBuildEvent: d.onBuildEvent,
-	}
+	handler := eventlog.New(d.db, issue.ID, d.handler, d.onBuildEvent)
 
 	// Set repo-local git identity in the worktree so that commits created
 	// by Claude CLI's internal git operations use the correct per-project identity.
@@ -430,56 +426,3 @@ func (d *Dispatcher) handleFailure(issue db.Issue, buildErr error) {
 	}
 }
 
-// buildEventHandler wraps events from the build loop, stores them in the
-// activity log, and forwards them to an optional upstream handler (e.g.
-// WebSocket hub).
-type buildEventHandler struct {
-	db           *db.DB
-	issueID      string
-	upstream     events.EventHandler
-	onBuildEvent func(issueID, detail string)
-}
-
-func (h *buildEventHandler) Handle(e events.Event) {
-	// Store significant events in the activity log
-	detail := formatEventDetail(e)
-	if detail != "" {
-		_ = h.db.LogActivity(h.issueID, "build_event", "", "", detail)
-
-		// Notify caller (e.g. WebSocket broadcast) for real-time streaming.
-		if h.onBuildEvent != nil {
-			h.onBuildEvent(h.issueID, detail)
-		}
-	}
-
-	// Forward to upstream handler (e.g. WebSocket hub)
-	if h.upstream != nil {
-		h.upstream.Handle(e)
-	}
-}
-
-// formatEventDetail converts an event to a human-readable string for the
-// activity log. Returns empty string for events that shouldn't be logged.
-func formatEventDetail(e events.Event) string {
-	switch ev := e.(type) {
-	case events.ToolUse:
-		if ev.Detail != "" {
-			return fmt.Sprintf("→ %s %s", ev.Name, ev.Detail)
-		}
-		return fmt.Sprintf("→ %s", ev.Name)
-	case events.IterationStart:
-		return fmt.Sprintf("Iteration %d/%d started", ev.Iteration, ev.MaxIterations)
-	case events.StoryStarted:
-		return fmt.Sprintf("Story %s: %s", ev.StoryID, ev.Title)
-	case events.QAPhaseStarted:
-		return fmt.Sprintf("QA phase: %s", ev.Phase)
-	case events.LogMessage:
-		return fmt.Sprintf("[%s] %s", ev.Level, ev.Message)
-	case events.AgentText:
-		return ev.Text
-	case events.InvocationDone:
-		return fmt.Sprintf("Invocation done: %d turns in %dms", ev.NumTurns, ev.DurationMS)
-	default:
-		return ""
-	}
-}

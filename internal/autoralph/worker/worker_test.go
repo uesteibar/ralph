@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/autoralph/eventlog"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/shell"
@@ -1033,16 +1034,16 @@ func (r *commitDuringLoopRunner) Run(ctx context.Context, cfg LoopConfig) error 
 
 func TestFormatEventDetail_AgentText_ReturnsTextContent(t *testing.T) {
 	e := events.AgentText{Text: "Analyzing the code structure"}
-	got := formatEventDetail(e)
+	got := eventlog.FormatDetail(e)
 	want := "Analyzing the code structure"
 	if got != want {
-		t.Errorf("formatEventDetail(AgentText) = %q, want %q", got, want)
+		t.Errorf("eventlog.FormatDetail(AgentText) = %q, want %q", got, want)
 	}
 }
 
 func TestFormatEventDetail_AgentText_DoesNotStartWithArrow(t *testing.T) {
 	e := events.AgentText{Text: "Thinking about the next step"}
-	got := formatEventDetail(e)
+	got := eventlog.FormatDetail(e)
 	if strings.HasPrefix(got, "→") {
 		t.Errorf("AgentText detail should not start with →, got %q", got)
 	}
@@ -1064,9 +1065,9 @@ func TestFormatEventDetail_ExistingTypes_Unchanged(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatEventDetail(tt.event)
+			got := eventlog.FormatDetail(tt.event)
 			if got != tt.want {
-				t.Errorf("formatEventDetail(%s) = %q, want %q", tt.name, got, tt.want)
+				t.Errorf("eventlog.FormatDetail(%s) = %q, want %q", tt.name, got, tt.want)
 			}
 		})
 	}

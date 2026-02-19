@@ -7,14 +7,10 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/approve"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/autoralph/eventlog"
+	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/knowledge"
 )
-
-// Invoker invokes an AI model with a prompt and returns the response.
-// Dir sets the working directory for the AI process.
-type Invoker interface {
-	Invoke(ctx context.Context, prompt, dir string) (string, error)
-}
 
 // Poster posts a comment on a Linear issue and returns its ID.
 type Poster interface {
@@ -33,11 +29,12 @@ type GitPuller interface {
 
 // Config holds the dependencies for the refine action.
 type Config struct {
-	Invoker     Invoker
-	Poster      Poster
-	Projects    ProjectGetter
-	GitPuller   GitPuller
-	OverrideDir string
+	Invoker      invoker.EventInvoker
+	Poster       Poster
+	Projects     ProjectGetter
+	GitPuller    GitPuller
+	OnBuildEvent func(issueID, detail string)
+	OverrideDir  string
 }
 
 // NewAction returns an orchestrator ActionFunc that performs AI issue refinement.
@@ -67,7 +64,8 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("rendering refine prompt: %w", err)
 		}
 
-		response, err := cfg.Invoker.Invoke(context.Background(), prompt, project.LocalPath)
+		handler := eventlog.New(database, issue.ID, nil, cfg.OnBuildEvent)
+		response, err := cfg.Invoker.InvokeWithEvents(context.Background(), prompt, project.LocalPath, handler)
 		if err != nil {
 			return fmt.Errorf("invoking AI: %w", err)
 		}

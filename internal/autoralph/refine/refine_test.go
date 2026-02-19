@@ -9,6 +9,7 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/approve"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/events"
 )
 
 func testDB(t *testing.T) *db.DB {
@@ -44,13 +45,21 @@ func createTestIssue(t *testing.T, d *db.DB, state string) db.Issue {
 
 // mockInvoker records the prompt and returns a fixed response.
 type mockInvoker struct {
-	lastPrompt string
-	response   string
-	err        error
+	lastPrompt  string
+	lastHandler events.EventHandler
+	response    string
+	err         error
+	emitEvents  []events.Event // events to emit to the handler during invocation
 }
 
-func (m *mockInvoker) Invoke(ctx context.Context, prompt, dir string) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
 	m.lastPrompt = prompt
+	m.lastHandler = handler
+	for _, e := range m.emitEvents {
+		if handler != nil {
+			handler.Handle(e)
+		}
+	}
 	return m.response, m.err
 }
 
@@ -482,5 +491,108 @@ func TestRefineAction_IncludesKnowledgePath(t *testing.T) {
 	// The knowledge path should be computed from project.LocalPath (/tmp/test)
 	if !strings.Contains(invoker.lastPrompt, ".ralph/knowledge") {
 		t.Error("expected prompt to contain knowledge path")
+	}
+}
+
+func TestRefineAction_UsesInvokeWithEvents(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "queued")
+
+	invoker := &mockInvoker{response: "AI output"}
+	poster := &mockPoster{}
+
+	action := NewAction(Config{
+		Invoker:  invoker,
+		Poster:   poster,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if invoker.lastHandler == nil {
+		t.Fatal("expected InvokeWithEvents to be called with a non-nil event handler")
+	}
+}
+
+func TestRefineAction_EventsStreamedToDB(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "queued")
+
+	invoker := &mockInvoker{
+		response: "AI output",
+		emitEvents: []events.Event{
+			events.ToolUse{Name: "Read", Detail: "main.go"},
+			events.InvocationDone{NumTurns: 3, DurationMS: 1500},
+		},
+	}
+	poster := &mockPoster{}
+
+	action := NewAction(Config{
+		Invoker:  invoker,
+		Poster:   poster,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entries, err := d.ListActivity(issue.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+
+	buildEventCount := 0
+	for _, e := range entries {
+		if e.EventType == "build_event" {
+			buildEventCount++
+		}
+	}
+	if buildEventCount != 2 {
+		t.Errorf("expected 2 build_event entries, got %d", buildEventCount)
+	}
+}
+
+func TestRefineAction_OnBuildEventCallback(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "queued")
+
+	invoker := &mockInvoker{
+		response: "AI output",
+		emitEvents: []events.Event{
+			events.ToolUse{Name: "Read", Detail: "main.go"},
+		},
+	}
+	poster := &mockPoster{}
+
+	var callbackCalls []struct{ issueID, detail string }
+	onBuildEvent := func(issueID, detail string) {
+		callbackCalls = append(callbackCalls, struct{ issueID, detail string }{issueID, detail})
+	}
+
+	action := NewAction(Config{
+		Invoker:      invoker,
+		Poster:       poster,
+		Projects:     d,
+		OnBuildEvent: onBuildEvent,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(callbackCalls) != 1 {
+		t.Fatalf("expected 1 onBuildEvent call, got %d", len(callbackCalls))
+	}
+	if callbackCalls[0].issueID != issue.ID {
+		t.Errorf("expected issueID %q, got %q", issue.ID, callbackCalls[0].issueID)
+	}
+	if !strings.Contains(callbackCalls[0].detail, "Read") {
+		t.Errorf("expected detail to contain tool name, got %q", callbackCalls[0].detail)
 	}
 }
