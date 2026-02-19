@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"os/signal"
 	"syscall"
 	"time"
@@ -45,6 +46,7 @@ Usage:
 Flags:
   --addr         Address to listen on (default: %s)
   --dev          Proxy non-API requests to Vite dev server (localhost:5173)
+  --max-workers  Maximum concurrent build workers (default: 2)
   --linear-url   Override Linear API endpoint (env: AUTORALPH_LINEAR_URL)
   --github-url   Override GitHub API endpoint (env: AUTORALPH_GITHUB_URL)
 `, defaultAddr, defaultAddr)
@@ -84,6 +86,7 @@ func main() {
 func runServe(args []string) error {
 	addr := defaultAddr
 	devMode := false
+	maxWorkers := 2
 	linearURL := os.Getenv("AUTORALPH_LINEAR_URL")
 	githubURL := os.Getenv("AUTORALPH_GITHUB_URL")
 
@@ -99,6 +102,15 @@ func runServe(args []string) error {
 		case "--linear-url":
 			if i+1 < len(args) {
 				linearURL = args[i+1]
+				i++
+			}
+		case "--max-workers":
+			if i+1 < len(args) {
+				n, err := strconv.Atoi(args[i+1])
+				if err != nil || n < 1 {
+					return fmt.Errorf("--max-workers must be a positive integer, got %q", args[i+1])
+				}
+				maxWorkers = n
 				i++
 			}
 		case "--github-url":
@@ -507,7 +519,7 @@ func runServe(args []string) error {
 	// --- 8. Build worker dispatcher ---
 	dispatcher := worker.New(worker.Config{
 		DB:            database,
-		MaxWorkers:    2,
+		MaxWorkers:    maxWorkers,
 		LoopRunner:    &loopRunnerAdapter{},
 		Projects:      database,
 		PR:            prAction,
