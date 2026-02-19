@@ -2,6 +2,11 @@
 
 You are an autonomous software engineering agent writing a pull request description.
 
+{{if .LinearIssueIdentifier}}
+## Linear Issue
+
+[{{.LinearIssueIdentifier}}](https://linear.app/issue/{{.LinearIssueIdentifier}})
+{{end}}
 ## PRD Summary
 
 {{.PRDSummary}}
@@ -32,20 +37,23 @@ Generate a pull request title and body.
 
 ### Body
 
-Use this format:
+Use this format. You may omit any section that does not add value for this specific PR.
 
 ```
-## Summary
-<1-3 sentences describing what this feature does and why it matters>
+## Overall Approach
+<High-level summary of what was done and why, in 2-4 sentences>
 
-## Technical Architecture
-<Explain how the solution is structured, how the key components interact, and where the main changes live in the codebase>
+## Architecture Diagram (ASCII)
+<ASCII diagram showing how the key components relate to each other>
 
-## Key Design Decisions
-<Describe the important choices made during implementation and alternatives that were considered>
+## Flow Chart (ASCII)
+<ASCII flow chart showing the main execution path or data flow>
 
-## Testing
-<How the changes were tested — unit tests, integration tests, manual verification>
+## Technical Implications
+<Notable consequences: performance, security, backward compatibility, migration needs, etc.>
+
+## Other Notes
+<Anything else a reviewer should know: trade-offs, follow-up work, open questions, etc.>
 ```
 
 ## Output Format
@@ -55,26 +63,43 @@ Output the title on the first line, followed by a blank line, followed by the bo
 ```
 feat(auth): add user login flow
 
-## Summary
-Adds user login with email/password authentication and session management,
-enabling users to securely access their accounts.
+## Overall Approach
+Adds user login with email/password authentication and session management.
+The implementation uses JWT tokens for stateless auth and a dedicated
+AuthService to keep the HTTP layer thin.
 
-## Technical Architecture
-The login flow is implemented as a three-layer stack: a React form component
-submits credentials to a new POST /api/auth/login endpoint, which delegates
-to an AuthService that validates credentials against the user store and issues
-JWT tokens. Session state is managed client-side via an AuthContext provider.
+## Architecture Diagram (ASCII)
+┌──────────┐     ┌───────────┐     ┌─────────────┐
+│  React   │────>│  POST     │────>│ AuthService  │
+│  Form    │     │ /api/login│     │ (validate +  │
+└──────────┘     └───────────┘     │  issue JWT)  │
+                                   └─────────────┘
 
-## Key Design Decisions
-- Chose JWT over server-side sessions to keep the API stateless and simplify
-  horizontal scaling. The trade-off is token revocation requires a deny-list.
-- Placed validation logic in a dedicated AuthService rather than the handler
-  to keep the HTTP layer thin and improve testability.
+## Flow Chart (ASCII)
+User submits form
+       │
+       v
+POST /api/auth/login
+       │
+       v
+AuthService.validate(credentials)
+       │
+  ┌────┴────┐
+  │ valid?  │
+  ├─yes─────┤
+  │ issue   │──> 200 + JWT token
+  │ JWT     │
+  ├─no──────┤
+  │ reject  │──> 401 Unauthorized
+  └─────────┘
 
-## Testing
-- Unit tests for AuthService credential validation and JWT generation
-- Integration test for the full login flow end-to-end
-- Manual verification of error states (wrong password, locked account)
+## Technical Implications
+- JWT tokens are stateless, simplifying horizontal scaling but requiring
+  a deny-list for token revocation.
+- The AuthContext provider manages client-side session state.
+
+## Other Notes
+- Follow-up: add refresh token rotation.
 ```
 
 Output ONLY the title and body. No extra explanation.
