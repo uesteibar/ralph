@@ -71,29 +71,29 @@ function IssueRow({ issue, projectName }: { issue: Issue; projectName: string })
         <StateBadge state={issue.state} />
       </td>
       <td style={{ padding: '10px 12px' }}>
-        {issue.state === 'building' && (
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px',
+            fontSize: '12px',
+            fontWeight: 500,
+            color: issue.build_active ? '#065f46' : '#92400e',
+          }}
+        >
           <span
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              fontSize: '12px',
-              fontWeight: 500,
-              color: issue.build_active ? '#065f46' : '#92400e',
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              backgroundColor: issue.build_active ? '#10b981' : '#f59e0b',
+              display: 'inline-block',
             }}
-          >
-            <span
-              style={{
-                width: '6px',
-                height: '6px',
-                borderRadius: '50%',
-                backgroundColor: issue.build_active ? '#10b981' : '#f59e0b',
-                display: 'inline-block',
-              }}
-            />
-            {issue.build_active ? 'Running' : 'Stopped'}
-          </span>
-        )}
+          />
+          {issue.build_active
+            ? `Running${issue.model ? ` - ${issue.model}` : ''}`
+            : 'Idle'}
+        </span>
         {issue.pr_url && (
           <a
             href={issue.pr_url}
