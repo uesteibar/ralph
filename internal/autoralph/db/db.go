@@ -50,6 +50,8 @@ type Issue struct {
 	LastReviewID     string
 	LastCheckSHA     string
 	CheckFixAttempts int
+	InputTokens      int
+	OutputTokens     int
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -99,6 +101,8 @@ CREATE TABLE IF NOT EXISTS issues (
 	error_message TEXT NOT NULL DEFAULT '',
 	last_comment_id TEXT NOT NULL DEFAULT '',
 	last_review_id TEXT NOT NULL DEFAULT '',
+	input_tokens INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL DEFAULT (datetime('now')),
 	updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -153,6 +157,8 @@ func Open(path string) (*DB, error) {
 	conn.Exec(`ALTER TABLE projects ADD COLUMN linear_label TEXT NOT NULL DEFAULT ''`)
 	conn.Exec(`ALTER TABLE issues ADD COLUMN last_check_sha TEXT NOT NULL DEFAULT ''`)
 	conn.Exec(`ALTER TABLE issues ADD COLUMN check_fix_attempts INTEGER NOT NULL DEFAULT 0`)
+	conn.Exec(`ALTER TABLE issues ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0`)
+	conn.Exec(`ALTER TABLE issues ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`)
 
 	return &DB{conn: conn}, nil
 }
