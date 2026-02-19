@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1229,5 +1230,495 @@ func TestAPI_BuildActive_ReturnedForNonBuildingStates(t *testing.T) {
 	json.NewDecoder(detailResp.Body).Decode(&detailResult)
 	if detailResult["build_active"] != true {
 		t.Fatalf("expected build_active true for refining issue detail, got %v", detailResult["build_active"])
+	}
+}
+
+func postJSON(t *testing.T, url string, body any) *http.Response {
+	t.Helper()
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("POST %s failed: %v", url, err)
+	}
+	return resp
+}
+
+func TestAPI_TransitionIssue_FailedToQueued(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID:        p.ID,
+		Title:            "issue",
+		State:            "failed",
+		ErrorMessage:     "timeout",
+		CheckFixAttempts: 3,
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "queued",
+		"reset_fields": []string{"error_message", "check_fix_attempts"},
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result map[string]string
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["status"] != "transitioned" {
+		t.Fatalf("expected status 'transitioned', got %v", result["status"])
+	}
+
+	updated, _ := d.GetIssue(iss.ID)
+	if updated.State != "queued" {
+		t.Fatalf("expected state 'queued', got %v", updated.State)
+	}
+	if updated.ErrorMessage != "" {
+		t.Fatalf("expected error_message cleared, got %v", updated.ErrorMessage)
+	}
+	if updated.CheckFixAttempts != 0 {
+		t.Fatalf("expected check_fix_attempts 0, got %d", updated.CheckFixAttempts)
+	}
+
+	activity, _ := d.ListActivity(iss.ID, 10, 0)
+	if len(activity) < 1 {
+		t.Fatal("expected at least 1 activity entry")
+	}
+	if activity[0].EventType != "state_change" {
+		t.Fatalf("expected event_type 'state_change', got %v", activity[0].EventType)
+	}
+	if activity[0].FromState != "failed" {
+		t.Fatalf("expected from_state 'failed', got %v", activity[0].FromState)
+	}
+	if activity[0].ToState != "queued" {
+		t.Fatalf("expected to_state 'queued', got %v", activity[0].ToState)
+	}
+	if activity[0].Detail != "Manual transition via API" {
+		t.Fatalf("expected detail 'Manual transition via API', got %v", activity[0].Detail)
+	}
+}
+
+func TestAPI_TransitionIssue_PausedToBuilding_RequiresWorkspace(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID:     p.ID,
+		Title:         "issue",
+		State:         "paused",
+		WorkspaceName: "",
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "building",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+
+	var result map[string]string
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["error"] == "" {
+		t.Fatal("expected error message about missing workspace")
+	}
+
+	updated, _ := d.GetIssue(iss.ID)
+	if updated.State != "paused" {
+		t.Fatalf("expected state unchanged 'paused', got %v", updated.State)
+	}
+}
+
+func TestAPI_TransitionIssue_PausedToBuilding_WithWorkspace(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID:     p.ID,
+		Title:         "issue",
+		State:         "paused",
+		WorkspaceName: "ws-1",
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "building",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	updated, _ := d.GetIssue(iss.ID)
+	if updated.State != "building" {
+		t.Fatalf("expected state 'building', got %v", updated.State)
+	}
+}
+
+func TestAPI_TransitionIssue_ToInReview_RequiresPR(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID: p.ID,
+		Title:     "issue",
+		State:     "paused",
+		PRNumber:  0,
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "in_review",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_TransitionIssue_ToAddressingFeedback_RequiresPR(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID: p.ID,
+		Title:     "issue",
+		State:     "failed",
+		PRNumber:  0,
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "addressing_feedback",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_TransitionIssue_ToFixingChecks_RequiresPR(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID: p.ID,
+		Title:     "issue",
+		State:     "failed",
+		PRNumber:  0,
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "fixing_checks",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_TransitionIssue_FromCompleted_Rejected(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID: p.ID,
+		Title:     "issue",
+		State:     "completed",
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "queued",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_TransitionIssue_ToCompleted_Rejected(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID: p.ID,
+		Title:     "issue",
+		State:     "failed",
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "completed",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_TransitionIssue_ToWaitingApproval_Rejected(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID: p.ID,
+		Title:     "issue",
+		State:     "failed",
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "waiting_approval",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_TransitionIssue_InvalidTransition_Rejected(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	// queued can only go to refining per the map
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID: p.ID,
+		Title:     "issue",
+		State:     "queued",
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "building",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_TransitionIssue_MissingTargetState(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID: p.ID,
+		Title:     "issue",
+		State:     "failed",
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_TransitionIssue_NotFound(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/nonexistent/transition"), map[string]any{
+		"target_state": "queued",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_TransitionIssue_ResetFields(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID:        p.ID,
+		Title:            "issue",
+		State:            "failed",
+		ErrorMessage:     "some error",
+		LastReviewID:     "rev-123",
+		LastCheckSHA:     "abc123",
+		CheckFixAttempts: 5,
+	})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+		"target_state": "queued",
+		"reset_fields": []string{"check_fix_attempts", "error_message", "last_review_id", "last_check_sha"},
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	updated, _ := d.GetIssue(iss.ID)
+	if updated.CheckFixAttempts != 0 {
+		t.Fatalf("expected check_fix_attempts 0, got %d", updated.CheckFixAttempts)
+	}
+	if updated.ErrorMessage != "" {
+		t.Fatalf("expected error_message empty, got %v", updated.ErrorMessage)
+	}
+	if updated.LastReviewID != "" {
+		t.Fatalf("expected last_review_id empty, got %v", updated.LastReviewID)
+	}
+	if updated.LastCheckSHA != "" {
+		t.Fatalf("expected last_check_sha empty, got %v", updated.LastCheckSHA)
+	}
+}
+
+func TestAPI_TransitionIssue_AllowedPairs(t *testing.T) {
+	// Test a representative set of valid transitions
+	tests := []struct {
+		name        string
+		fromState   string
+		toState     string
+		prNumber    int
+		workspace   string
+		wantSuccess bool
+	}{
+		{"paused to queued", "paused", "queued", 0, "", true},
+		{"paused to refining", "paused", "refining", 0, "", true},
+		{"paused to approved", "paused", "approved", 0, "", true},
+		{"paused to in_review with PR", "paused", "in_review", 42, "", true},
+		{"failed to queued", "failed", "queued", 0, "", true},
+		{"failed to building with workspace", "failed", "building", 0, "ws-1", true},
+		{"in_review to addressing_feedback", "in_review", "addressing_feedback", 42, "", true},
+		{"in_review to fixing_checks", "in_review", "fixing_checks", 42, "", true},
+		{"in_review to building with ws", "in_review", "building", 42, "ws-1", true},
+		{"in_review to refining", "in_review", "refining", 42, "", true},
+		{"in_review to queued", "in_review", "queued", 42, "", true},
+		{"addressing_feedback to in_review", "addressing_feedback", "in_review", 42, "", true},
+		{"addressing_feedback to building", "addressing_feedback", "building", 42, "ws-1", true},
+		{"building to approved", "building", "approved", 0, "ws-1", true},
+		{"building to refining", "building", "refining", 0, "ws-1", true},
+		{"building to queued", "building", "queued", 0, "ws-1", true},
+		{"fixing_checks to in_review", "fixing_checks", "in_review", 42, "", true},
+		{"fixing_checks to building", "fixing_checks", "building", 42, "ws-1", true},
+		{"refining to queued", "refining", "queued", 0, "", true},
+		{"refining to approved", "refining", "approved", 0, "", true},
+		{"queued to refining", "queued", "refining", 0, "", true},
+		{"approved to queued", "approved", "queued", 0, "", true},
+		{"approved to refining", "approved", "refining", 0, "", true},
+		{"approved to building with ws", "approved", "building", 0, "ws-1", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			srv := newAPIServer(t, d)
+
+			p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+			iss, _ := d.CreateIssue(db.Issue{
+				ProjectID:     p.ID,
+				Title:         "issue",
+				State:         tt.fromState,
+				PRNumber:      tt.prNumber,
+				WorkspaceName: tt.workspace,
+			})
+
+			resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/transition"), map[string]any{
+				"target_state": tt.toState,
+			})
+			defer resp.Body.Close()
+
+			if tt.wantSuccess && resp.StatusCode != http.StatusOK {
+				var errResp map[string]string
+				json.NewDecoder(resp.Body).Decode(&errResp)
+				t.Fatalf("expected 200, got %d: %v", resp.StatusCode, errResp["error"])
+			}
+			if tt.wantSuccess {
+				updated, _ := d.GetIssue(iss.ID)
+				if updated.State != tt.toState {
+					t.Fatalf("expected state %q, got %q", tt.toState, updated.State)
+				}
+			}
+		})
+	}
+}
+
+func TestAPI_TransitionIssue_NotifyWake(t *testing.T) {
+	d := testDB(t)
+	wake := make(chan struct{}, 1)
+	srv, err := server.New("127.0.0.1:0", server.Config{DB: d, Wake: wake})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	go srv.Serve()
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID: p.ID,
+		Title:     "issue",
+		State:     "failed",
+	})
+
+	resp := postJSON(t, "http://"+srv.Addr()+"/api/issues/"+iss.ID+"/transition", map[string]any{
+		"target_state": "queued",
+	})
+	resp.Body.Close()
+
+	select {
+	case <-wake:
+		// OK: wake was notified
+	default:
+		t.Fatal("expected notifyWake to be called")
+	}
+}
+
+func TestAPI_GetTransitions_Returns501(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue", State: "failed"})
+
+	resp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID+"/transitions"))
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d", resp.StatusCode)
+	}
+}
+
+func TestAPI_ResetFields_Returns501(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue", State: "failed"})
+
+	resp := postJSON(t, apiURL(srv, "/api/issues/"+iss.ID+"/reset"), map[string]any{
+		"fields": []string{"error_message"},
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d", resp.StatusCode)
 	}
 }
