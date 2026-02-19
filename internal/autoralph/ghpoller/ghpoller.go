@@ -201,17 +201,8 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 				return
 			}
 
-			if !allCompleted {
-				// Checks still running — update SHA tracking and skip review evaluation.
-				if shaChanged {
-					if err := p.db.UpdateIssue(issue); err != nil {
-						p.logger.Warn("updating last_check_sha", "issue_id", issue.ID, "error", err)
-					}
-				}
-				return
-			}
-
-			// All checks passed — update SHA and continue to review evaluation.
+			// Persist SHA tracking when it changed (covers both
+			// checks-still-running and all-checks-passed cases).
 			if shaChanged {
 				if err := p.db.UpdateIssue(issue); err != nil {
 					p.logger.Warn("updating last_check_sha", "issue_id", issue.ID, "error", err)

@@ -930,7 +930,7 @@ func TestPollProject_ChecksFailedSameSHA_NoRetrigger(t *testing.T) {
 	}
 }
 
-func TestPollProject_ChecksPending_NoTransition(t *testing.T) {
+func TestPollProject_ChecksPending_NoReviews_NoTransition(t *testing.T) {
 	d := testDB(t)
 	proj := testProject(t, d)
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
@@ -957,17 +957,60 @@ func TestPollProject_ChecksPending_NoTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting issue: %v", err)
 	}
-	// State should remain in_review — checks still pending
+	// State should remain in_review — no feedback and checks still pending
 	if updated.State != string(orchestrator.StateInReview) {
 		t.Errorf("expected state %q, got %q", orchestrator.StateInReview, updated.State)
 	}
-	// Reviews should NOT have been fetched since checks are pending
-	if mock.fetchCalls != 0 {
-		t.Errorf("expected 0 review fetch calls, got %d", mock.fetchCalls)
+	// Reviews should still be fetched (pending checks don't block review evaluation)
+	if mock.fetchCalls != 1 {
+		t.Errorf("expected 1 review fetch call, got %d", mock.fetchCalls)
 	}
 }
 
-func TestPollProject_AllChecksPass_ReviewsEvaluated(t *testing.T) {
+func TestPollProject_ChecksPending_WithFeedback_TransitionsToAddressingFeedback(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "pending-sha"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "build", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "test", Status: "in_progress", Conclusion: ""},
+		},
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "reviewer"},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// Pending checks should NOT block feedback detection — human feedback takes priority
+	if updated.State != string(orchestrator.StateAddressingFeedback) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateAddressingFeedback, updated.State)
+	}
+	if updated.LastReviewID != "100" {
+		t.Errorf("expected last_review_id %q, got %q", "100", updated.LastReviewID)
+	}
+	// SHA tracking should still be updated
+	if updated.LastCheckSHA != "pending-sha" {
+		t.Errorf("expected LastCheckSHA %q, got %q", "pending-sha", updated.LastCheckSHA)
+	}
+}
+
+func TestAllChecksPass_ReviewsEvaluated(t *testing.T) {
 	d := testDB(t)
 	proj := testProject(t, d)
 	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
