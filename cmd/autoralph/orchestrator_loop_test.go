@@ -94,23 +94,43 @@ func TestIsAsyncTransition_InReviewToOther_NotAsync(t *testing.T) {
 	}
 }
 
-func TestIsAsyncTransition_BuildingNotAsync(t *testing.T) {
+func TestIsAsyncTransition_ApprovedToBuilding(t *testing.T) {
 	tr := orchestrator.Transition{
 		From: orchestrator.StateApproved,
 		To:   orchestrator.StateBuilding,
 	}
-	if isAsyncTransition(tr) {
-		t.Error("expected approved → building to NOT be async")
+	if !isAsyncTransition(tr) {
+		t.Error("expected approved → building to be async")
 	}
 }
 
-func TestIsAsyncTransition_RefiningNotAsync(t *testing.T) {
+func TestIsAsyncTransition_QueuedToRefining(t *testing.T) {
 	tr := orchestrator.Transition{
 		From: orchestrator.StateQueued,
 		To:   orchestrator.StateRefining,
 	}
+	if !isAsyncTransition(tr) {
+		t.Error("expected queued → refining to be async")
+	}
+}
+
+func TestIsAsyncTransition_RefiningIteration(t *testing.T) {
+	tr := orchestrator.Transition{
+		From: orchestrator.StateRefining,
+		To:   orchestrator.StateRefining,
+	}
+	if !isAsyncTransition(tr) {
+		t.Error("expected refining → refining (iteration) to be async")
+	}
+}
+
+func TestIsAsyncTransition_RefiningToApproved_NotAsync(t *testing.T) {
+	tr := orchestrator.Transition{
+		From: orchestrator.StateRefining,
+		To:   orchestrator.StateApproved,
+	}
 	if isAsyncTransition(tr) {
-		t.Error("expected queued → refining to NOT be async")
+		t.Error("expected refining → approved to NOT be async")
 	}
 }
 

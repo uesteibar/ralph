@@ -656,6 +656,13 @@ func runOrchestratorLoop(
 				continue
 			}
 
+			// Skip issues with an active worker — let the worker finish first.
+			// This prevents races where a sync transition (e.g. REFINING→APPROVED)
+			// could fire while an async one (e.g. REFINING→REFINING) is in-flight.
+			if dispatcher.IsRunning(issue.ID) {
+				continue
+			}
+
 			tr, ok := sm.Evaluate(issue)
 			if !ok {
 				continue
@@ -741,9 +748,17 @@ func runOrchestratorLoop(
 
 // isAsyncTransition returns true for transitions that should be dispatched
 // through the worker instead of running synchronously in the orchestrator loop.
-// This covers feedback, fix-checks, and rebase (IN_REVIEW→IN_REVIEW) transitions.
+// This covers all AI-calling transitions (refine, iterate, build, feedback,
+// fix-checks) plus rebase (IN_REVIEW→IN_REVIEW). Quick non-AI transitions
+// like REFINING→APPROVED (approval detection) remain synchronous.
 func isAsyncTransition(tr orchestrator.Transition) bool {
 	switch tr.From {
+	case orchestrator.StateQueued:
+		return true // QUEUED → REFINING (AI)
+	case orchestrator.StateApproved:
+		return true // APPROVED → BUILDING (AI)
+	case orchestrator.StateRefining:
+		return tr.To == orchestrator.StateRefining // iteration (AI), but NOT approval (quick)
 	case orchestrator.StateAddressingFeedback, orchestrator.StateFixingChecks:
 		return true
 	case orchestrator.StateInReview:
