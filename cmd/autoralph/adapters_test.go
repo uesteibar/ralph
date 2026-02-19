@@ -12,10 +12,12 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/checks"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/autoralph/feedback"
 	"github.com/uesteibar/ralph/internal/autoralph/ghpoller"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
+	"github.com/uesteibar/ralph/internal/autoralph/rebase"
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
@@ -25,6 +27,13 @@ var _ checks.GitOps = (*gitOpsAdapter)(nil)
 
 // Compile-time check: claudeInvoker satisfies invoker.EventInvoker.
 var _ invoker.EventInvoker = (*claudeInvoker)(nil)
+
+// Compile-time checks: branchPullerAdapter satisfies all three BranchPuller interfaces.
+var (
+	_ feedback.BranchPuller = (*branchPullerAdapter)(nil)
+	_ checks.BranchPuller   = (*branchPullerAdapter)(nil)
+	_ rebase.BranchPuller   = (*branchPullerAdapter)(nil)
+)
 
 func initTestRepo(t *testing.T) string {
 	t.Helper()
@@ -489,6 +498,102 @@ func TestEndToEnd_CheckFailure_FixApplied_ChecksPass(t *testing.T) {
 	}
 	if !hasChecksFailedEvent {
 		t.Fatal("expected a checks_failed activity log entry")
+	}
+}
+
+func TestBranchPullerAdapter_PullBranch_DelegatesToPullFFOnly(t *testing.T) {
+	// Create a bare "remote" repo and a clone that acts as the worktree.
+	bare := t.TempDir()
+	for _, args := range [][]string{
+		{"git", "init", "--bare"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = bare
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	clone := t.TempDir()
+	for _, args := range [][]string{
+		{"git", "clone", bare, "."},
+		{"git", "config", "user.name", "Test"},
+		{"git", "config", "user.email", "test@test.com"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = clone
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	// Create a commit and push to establish the branch on the remote.
+	if err := os.WriteFile(clone+"/file.txt", []byte("v1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "add", "-A"},
+		{"git", "commit", "-m", "initial"},
+		{"git", "push", "origin", "main"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = clone
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	// Push a new commit directly to the bare repo from a second clone,
+	// so the first clone is behind.
+	clone2 := t.TempDir()
+	for _, args := range [][]string{
+		{"git", "clone", bare, "."},
+		{"git", "config", "user.name", "Test"},
+		{"git", "config", "user.email", "test@test.com"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = clone2
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	if err := os.WriteFile(clone2+"/file.txt", []byte("v2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "add", "-A"},
+		{"git", "commit", "-m", "second"},
+		{"git", "push", "origin", "main"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = clone2
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	// Now use the adapter to pull — clone should advance to the new commit.
+	adapter := &branchPullerAdapter{}
+	if err := adapter.PullBranch(context.Background(), clone, "main"); err != nil {
+		t.Fatalf("PullBranch failed: %v", err)
+	}
+
+	// Verify the clone has the latest content.
+	content, err := os.ReadFile(clone + "/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "v2" {
+		t.Errorf("expected file content 'v2', got %q", string(content))
+	}
+}
+
+func TestBranchPullerAdapter_PullBranch_ReturnsErrorOnDivergence(t *testing.T) {
+	adapter := &branchPullerAdapter{}
+	// A non-existent directory should cause the underlying git command to fail.
+	err := adapter.PullBranch(context.Background(), "/nonexistent-dir-for-test", "main")
+	if err == nil {
+		t.Fatal("expected error for non-existent directory, got nil")
 	}
 }
 

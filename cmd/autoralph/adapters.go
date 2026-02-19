@@ -12,6 +12,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/complete"
 	"github.com/uesteibar/ralph/internal/autoralph/feedback"
 	"github.com/uesteibar/ralph/internal/autoralph/ghpoller"
+	"github.com/uesteibar/ralph/internal/autoralph/rebase"
 	ghclient "github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
@@ -36,6 +37,7 @@ var (
 	_ checks.PRFetcher             = (*ghclient.Client)(nil)
 	_ checks.PRCommenter           = (*ghclient.Client)(nil)
 	_ checks.ConfigLoader          = (*configLoaderAdapter)(nil)
+	_ checks.BranchPuller          = (*branchPullerAdapter)(nil)
 	_ feedback.ConfigLoader        = (*configLoaderAdapter)(nil)
 	_ feedback.CommentFetcher      = (*ghclient.Client)(nil)
 	_ feedback.ReviewFetcher       = (*ghclient.Client)(nil)
@@ -44,6 +46,8 @@ var (
 	_ feedback.PRCommenter         = (*ghclient.Client)(nil)
 	_ feedback.CommentReactor      = (*ghclient.Client)(nil)
 	_ feedback.IssueCommentReactor = (*ghclient.Client)(nil)
+	_ feedback.BranchPuller        = (*branchPullerAdapter)(nil)
+	_ rebase.BranchPuller          = (*branchPullerAdapter)(nil)
 	_ ghpoller.GitHubClient        = (*ghclient.Client)(nil)
 	_ invoker.EventInvoker         = (*claudeInvoker)(nil)
 )
@@ -345,6 +349,16 @@ func (g *gitOpsAdapter) IsAncestor(ctx context.Context, workDir, ancestor, desce
 func (g *gitOpsAdapter) ForcePushBranch(ctx context.Context, workDir, branch string) error {
 	r := &shell.Runner{Dir: workDir}
 	return gitops.ForcePushBranch(ctx, r, branch)
+}
+
+// branchPullerAdapter creates a shell.Runner with the provided workDir and
+// delegates to gitops.PullFFOnly. It satisfies feedback.BranchPuller,
+// checks.BranchPuller, and rebase.BranchPuller.
+type branchPullerAdapter struct{}
+
+func (b *branchPullerAdapter) PullBranch(ctx context.Context, workDir, branch string) error {
+	r := &shell.Runner{Dir: workDir}
+	return gitops.PullFFOnly(ctx, r, branch)
 }
 
 // rebaseRunnerAdapter invokes ralph rebase as a subprocess to satisfy
