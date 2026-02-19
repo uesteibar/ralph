@@ -19,6 +19,7 @@ type apiHandler struct {
 	buildChecker     BuildChecker
 	prdPathFn        func(string, string) string
 	wake             chan<- struct{}
+	modelName        string
 }
 
 // notifyWake performs a non-blocking send on the wake channel to nudge the
@@ -177,6 +178,7 @@ func (h *apiHandler) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		WorkspaceName string `json:"workspace_name,omitempty"`
 		BranchName    string `json:"branch_name,omitempty"`
 		BuildActive   bool   `json:"build_active"`
+		Model         string `json:"model"`
 		CreatedAt     string `json:"created_at"`
 		UpdatedAt     string `json:"updated_at"`
 	}
@@ -199,6 +201,7 @@ func (h *apiHandler) handleListIssues(w http.ResponseWriter, r *http.Request) {
 			WorkspaceName: iss.WorkspaceName,
 			BranchName:    iss.BranchName,
 			BuildActive:   buildActive,
+			Model:         h.modelName,
 			CreatedAt:     iss.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:     iss.UpdatedAt.Format(time.RFC3339),
 		}
@@ -291,6 +294,7 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		PRURL            string                    `json:"pr_url,omitempty"`
 		ErrorMessage     string                    `json:"error_message,omitempty"`
 		BuildActive      bool                      `json:"build_active"`
+		Model            string                    `json:"model"`
 		Stories          []storyResponse            `json:"stories"`
 		IntegrationTests []integrationTestResponse  `json:"integration_tests"`
 		CurrentStory     string                    `json:"current_story,omitempty"`
@@ -364,6 +368,7 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		PRURL:            issue.PRURL,
 		ErrorMessage:     issue.ErrorMessage,
 		BuildActive:      buildActive,
+		Model:            h.modelName,
 		Stories:          stories,
 		IntegrationTests: integrationTests,
 		CurrentStory:     currentStory,
