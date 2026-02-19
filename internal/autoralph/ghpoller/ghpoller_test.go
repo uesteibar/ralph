@@ -1004,9 +1004,10 @@ func TestPollProject_ChecksPending_WithFeedback_TransitionsToAddressingFeedback(
 	if updated.LastReviewID != "100" {
 		t.Errorf("expected last_review_id %q, got %q", "100", updated.LastReviewID)
 	}
-	// SHA tracking should still be updated
-	if updated.LastCheckSHA != "pending-sha" {
-		t.Errorf("expected LastCheckSHA %q, got %q", "pending-sha", updated.LastCheckSHA)
+	// SHA tracking should NOT be updated while checks are pending — only
+	// recorded once all checks complete, to avoid missing later failures.
+	if updated.LastCheckSHA != "" {
+		t.Errorf("expected LastCheckSHA to remain empty for pending checks, got %q", updated.LastCheckSHA)
 	}
 }
 
@@ -1386,6 +1387,55 @@ func TestPollProject_FailedIssueWithoutPR_Skipped(t *testing.T) {
 	updated, _ := d.GetIssue(issue.ID)
 	if updated.State != string(orchestrator.StateFailed) {
 		t.Errorf("expected state unchanged, got %q", updated.State)
+	}
+}
+
+func TestPollProject_PendingChecksThenFailure_TransitionsToFixingChecks(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "new-sha"},
+		checkRuns: []github.CheckRun{
+			{ID: 1, Name: "build", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "test", Status: "in_progress", Conclusion: ""},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:   proj.ID,
+		GithubOwner: "owner",
+		GithubRepo:  "repo",
+		GitHub:      mock,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+
+	// First poll: checks still pending — no state transition expected.
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue after first poll: %v", err)
+	}
+	if updated.State != string(orchestrator.StateInReview) {
+		t.Fatalf("after first poll: expected state %q, got %q", orchestrator.StateInReview, updated.State)
+	}
+
+	// Second poll: checks now completed and failed — must transition to fixing_checks.
+	mock.checkRuns = []github.CheckRun{
+		{ID: 1, Name: "build", Status: "completed", Conclusion: "success"},
+		{ID: 2, Name: "test", Status: "completed", Conclusion: "failure"},
+	}
+	p.poll(ctx)
+
+	updated, err = d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue after second poll: %v", err)
+	}
+	if updated.State != string(orchestrator.StateFixingChecks) {
+		t.Errorf("after second poll: expected state %q, got %q", orchestrator.StateFixingChecks, updated.State)
 	}
 }
 

@@ -191,8 +191,12 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 		if len(checkRuns) > 0 {
 			allCompleted, hasFailed := evaluateCheckRuns(checkRuns)
 
-			// Update the SHA we've evaluated.
-			issue.LastCheckSHA = headSHA
+			// Only record the SHA once all checks have finished. Saving it
+			// while checks are still running would make shaChanged false on
+			// the next poll, causing us to miss failures that surface later.
+			if allCompleted {
+				issue.LastCheckSHA = headSHA
+			}
 
 			if allCompleted && hasFailed && shaChanged {
 				// Checks failed on a new SHA — transition to fixing_checks.
@@ -201,9 +205,9 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 				return
 			}
 
-			// Persist SHA tracking when it changed (covers both
-			// checks-still-running and all-checks-passed cases).
-			if shaChanged {
+			// Persist SHA tracking when checks completed and SHA changed
+			// (covers the all-checks-passed case).
+			if allCompleted && shaChanged {
 				if err := p.db.UpdateIssue(issue); err != nil {
 					p.logger.Warn("updating last_check_sha", "issue_id", issue.ID, "error", err)
 				}
