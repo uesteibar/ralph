@@ -9,6 +9,7 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
+	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/config"
 	"github.com/uesteibar/ralph/internal/events"
 )
@@ -932,7 +933,7 @@ func TestNewAction_ReactsBeforeAIInvocation(t *testing.T) {
 }
 
 type orderTrackingInvoker struct {
-	inner    EventInvoker
+	inner    invoker.EventInvoker
 	orderLog *[]string
 }
 
