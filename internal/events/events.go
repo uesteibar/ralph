@@ -30,8 +30,10 @@ func (AgentText) eventTag() {}
 
 // InvocationDone is emitted when a Claude invocation completes.
 type InvocationDone struct {
-	NumTurns   int `json:"numTurns"`
-	DurationMS int `json:"durationMs"`
+	NumTurns     int `json:"numTurns"`
+	DurationMS   int `json:"durationMs"`
+	InputTokens  int `json:"inputTokens"`
+	OutputTokens int `json:"outputTokens"`
 }
 
 func (InvocationDone) eventTag() {}

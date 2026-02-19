@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -451,5 +452,89 @@ func TestParseUsageLimit_InAssistantText(t *testing.T) {
 
 	if got.ResetAt.Hour() != 20 {
 		t.Errorf("ResetAt.Hour() = %d, want 20", got.ResetAt.Hour())
+	}
+}
+
+func TestStreamEvent_UnmarshalUsage_Present(t *testing.T) {
+	raw := `{"type":"result","result":"done","num_turns":5,"duration_ms":12000,"usage":{"input_tokens":1200,"output_tokens":800}}`
+	var ev streamEvent
+	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if ev.Type != "result" {
+		t.Errorf("Type = %q, want %q", ev.Type, "result")
+	}
+	if ev.Usage.InputTokens != 1200 {
+		t.Errorf("Usage.InputTokens = %d, want 1200", ev.Usage.InputTokens)
+	}
+	if ev.Usage.OutputTokens != 800 {
+		t.Errorf("Usage.OutputTokens = %d, want 800", ev.Usage.OutputTokens)
+	}
+	if ev.NumTurns != 5 {
+		t.Errorf("NumTurns = %d, want 5", ev.NumTurns)
+	}
+	if ev.DurationMS != 12000 {
+		t.Errorf("DurationMS = %d, want 12000", ev.DurationMS)
+	}
+}
+
+func TestStreamEvent_UnmarshalUsage_Absent(t *testing.T) {
+	raw := `{"type":"result","result":"done","num_turns":3,"duration_ms":5000}`
+	var ev streamEvent
+	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if ev.Usage.InputTokens != 0 {
+		t.Errorf("Usage.InputTokens = %d, want 0", ev.Usage.InputTokens)
+	}
+	if ev.Usage.OutputTokens != 0 {
+		t.Errorf("Usage.OutputTokens = %d, want 0", ev.Usage.OutputTokens)
+	}
+}
+
+func TestStreamEvent_UnmarshalUsage_ZeroValues(t *testing.T) {
+	raw := `{"type":"result","result":"done","num_turns":1,"duration_ms":100,"usage":{"input_tokens":0,"output_tokens":0}}`
+	var ev streamEvent
+	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if ev.Usage.InputTokens != 0 {
+		t.Errorf("Usage.InputTokens = %d, want 0", ev.Usage.InputTokens)
+	}
+	if ev.Usage.OutputTokens != 0 {
+		t.Errorf("Usage.OutputTokens = %d, want 0", ev.Usage.OutputTokens)
+	}
+}
+
+func TestStreamEvent_UnmarshalUsage_PartialFields(t *testing.T) {
+	raw := `{"type":"result","result":"done","num_turns":2,"duration_ms":500,"usage":{"input_tokens":100}}`
+	var ev streamEvent
+	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if ev.Usage.InputTokens != 100 {
+		t.Errorf("Usage.InputTokens = %d, want 100", ev.Usage.InputTokens)
+	}
+	if ev.Usage.OutputTokens != 0 {
+		t.Errorf("Usage.OutputTokens = %d, want 0 (absent field)", ev.Usage.OutputTokens)
+	}
+}
+
+func TestStreamEvent_UnmarshalUsage_AssistantEventNoUsage(t *testing.T) {
+	raw := `{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}`
+	var ev streamEvent
+	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if ev.Usage.InputTokens != 0 {
+		t.Errorf("Usage.InputTokens = %d, want 0", ev.Usage.InputTokens)
+	}
+	if ev.Usage.OutputTokens != 0 {
+		t.Errorf("Usage.OutputTokens = %d, want 0", ev.Usage.OutputTokens)
 	}
 }
