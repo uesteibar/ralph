@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import type { IssueDetail as IssueDetailType, Activity, StoryInfo, IntegrationTestInfo } from '../api'
-import { fetchIssue, resumeIssue, retryIssue, deleteIssue } from '../api'
+import type { IssueDetail as IssueDetailType, Activity, StoryInfo, IntegrationTestInfo, ValidTransitionsResponse } from '../api'
+import { fetchIssue, resumeIssue, retryIssue, deleteIssue, fetchValidTransitions, transitionIssue, resetIssueFields, pauseIssue } from '../api'
 import { useWebSocket } from '../useWebSocket'
 import type { WSMessage } from '../useWebSocket'
 import { StateBadge } from '../components/StateBadge'
@@ -230,10 +230,21 @@ export default function IssueDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionPending, setActionPending] = useState(false)
+  const [transitions, setTransitions] = useState<ValidTransitionsResponse>({ transitions: [], resettable_fields: [] })
   // Accumulate real-time build events from WebSocket to avoid re-fetching the
   // entire issue on every tool use event. Cleared when a full reload happens.
   const [streamEvents, setStreamEvents] = useState<Activity[]>([])
   const streamIdCounter = useRef(0)
+
+  const loadTransitions = useCallback(async () => {
+    if (!id) return
+    try {
+      const data = await fetchValidTransitions(id)
+      setTransitions(data)
+    } catch {
+      // Non-critical: silently ignore transition load failures
+    }
+  }, [id])
 
   const loadIssue = useCallback(async () => {
     if (!id) return
@@ -250,8 +261,8 @@ export default function IssueDetail() {
   }, [id])
 
   useEffect(() => {
-    loadIssue()
-  }, [loadIssue])
+    loadIssue().then(() => loadTransitions())
+  }, [loadIssue, loadTransitions])
 
   const handleWSMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'build_event') {
@@ -281,6 +292,7 @@ export default function IssueDetail() {
     try {
       await resumeIssue(id)
       await loadIssue()
+      await loadTransitions()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Action failed')
     } finally {
@@ -294,6 +306,7 @@ export default function IssueDetail() {
     try {
       await retryIssue(id)
       await loadIssue()
+      await loadTransitions()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Action failed')
     } finally {
@@ -313,6 +326,52 @@ export default function IssueDetail() {
       setActionPending(false)
     }
   }
+
+  const handleTransition = async (targetState: string) => {
+    if (!id || actionPending) return
+    if (!window.confirm(`Transition issue to ${targetState}?`)) return
+    setActionPending(true)
+    try {
+      await transitionIssue(id, targetState)
+      await loadIssue()
+      await loadTransitions()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setActionPending(false)
+    }
+  }
+
+  const handlePause = async () => {
+    if (!id || actionPending) return
+    setActionPending(true)
+    try {
+      await pauseIssue(id)
+      await loadIssue()
+      await loadTransitions()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setActionPending(false)
+    }
+  }
+
+  const handleReset = async (field: string) => {
+    if (!id || actionPending) return
+    setActionPending(true)
+    try {
+      await resetIssueFields(id, [field])
+      await loadIssue()
+      await loadTransitions()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setActionPending(false)
+    }
+  }
+
+  const pausableStates = new Set(['queued', 'refining', 'approved', 'building', 'in_review', 'addressing_feedback'])
+  const terminalStates = new Set(['completed'])
 
   if (loading) {
     return (
@@ -432,8 +491,55 @@ export default function IssueDetail() {
           </div>
         )}
 
-        {/* Action buttons */}
-        <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+        {/* Action error */}
+        {error && (
+          <div
+            style={{
+              padding: '8px 12px',
+              borderRadius: '6px',
+              backgroundColor: '#fef2f2',
+              border: '1px solid #fecaca',
+              color: '#dc2626',
+              fontSize: '13px',
+              marginBottom: '8px',
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {/* Actions area */}
+        <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+          {!terminalStates.has(issue.state) && transitions.transitions.length > 0 && (
+            <>
+              <label style={{ fontSize: '13px', fontWeight: 600, color: '#374151' }}>Move to...</label>
+              <select
+                disabled={actionPending}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #d1d5db',
+                  fontSize: '13px',
+                  cursor: actionPending ? 'not-allowed' : 'pointer',
+                  opacity: actionPending ? 0.6 : 1,
+                }}
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) handleTransition(e.target.value)
+                }}
+              >
+                <option value="">Select state...</option>
+                {transitions.transitions.map(t => (
+                  <option key={t.target_state} value={t.target_state}>{t.target_state}</option>
+                ))}
+              </select>
+            </>
+          )}
+          {pausableStates.has(issue.state) && (
+            <button onClick={handlePause} disabled={actionPending} style={buttonStyle('#6b7280')}>
+              Pause
+            </button>
+          )}
           {issue.state === 'paused' && (
             <button onClick={handleResume} disabled={actionPending} style={buttonStyle('#3b82f6')}>
               Resume
@@ -444,6 +550,11 @@ export default function IssueDetail() {
               Retry
             </button>
           )}
+          {transitions.resettable_fields.map(field => (
+            <button key={field} onClick={() => handleReset(field)} disabled={actionPending} style={buttonStyle('#8b5cf6')}>
+              Reset {field}
+            </button>
+          ))}
           <button onClick={handleDelete} disabled={actionPending} style={buttonStyle('#dc2626')}>
             Delete
           </button>
