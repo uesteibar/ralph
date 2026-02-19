@@ -311,18 +311,24 @@ func reactToFeedback(ctx context.Context, cfg Config, owner, repo string, items 
 }
 
 // replyToFeedback sends replies to each feedback item via the appropriate channel:
-// line comments get review replies, everything else gets a general PR comment.
+// line comments get individual review replies, non-inline items are consolidated
+// into a single PR comment joined by horizontal rule separators.
 func replyToFeedback(ctx context.Context, cfg Config, owner, repo string, prNumber int, items []feedbackItem, aiResponse, replyRef string) error {
+	var nonInlineReplies []string
 	for _, item := range items {
 		replyMsg := buildReplyForComment(aiResponse, item.path, replyRef)
 		if item.isInline() {
 			if _, err := cfg.Replier.PostReviewReply(ctx, owner, repo, prNumber, item.id, replyMsg); err != nil {
 				return fmt.Errorf("replying to comment %d: %w", item.id, err)
 			}
-		} else if cfg.PRCommenter != nil {
-			if _, err := cfg.PRCommenter.PostPRComment(ctx, owner, repo, prNumber, replyMsg); err != nil {
-				return fmt.Errorf("posting PR comment for feedback %d: %w", item.id, err)
-			}
+		} else {
+			nonInlineReplies = append(nonInlineReplies, replyMsg)
+		}
+	}
+	if len(nonInlineReplies) > 0 && cfg.PRCommenter != nil {
+		consolidated := strings.Join(nonInlineReplies, "\n\n---\n\n")
+		if _, err := cfg.PRCommenter.PostPRComment(ctx, owner, repo, prNumber, consolidated); err != nil {
+			return fmt.Errorf("posting consolidated PR comment: %w", err)
 		}
 	}
 	return nil

@@ -1158,9 +1158,88 @@ func TestNewAction_MixedSources_AllIncluded(t *testing.T) {
 		t.Errorf("expected reply to comment 1, got %d", replier.calls[0].commentID)
 	}
 
-	// Review body + issue comment replied via PostPRComment
-	if len(prCommenter.calls) != 2 {
-		t.Fatalf("expected 2 PR comment calls, got %d", len(prCommenter.calls))
+	// Review body + issue comment consolidated into a single PR comment
+	if len(prCommenter.calls) != 1 {
+		t.Fatalf("expected 1 consolidated PR comment call, got %d", len(prCommenter.calls))
+	}
+	// The single comment should contain content from both non-inline sources
+	body := prCommenter.calls[0].body
+	if !strings.Contains(body, "---") {
+		t.Error("expected PR comment to contain '---' separator between non-inline responses")
+	}
+}
+
+func TestNewAction_MultipleNonInline_SingleConsolidatedComment(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, replier, _ := defaultMocks(project)
+	fetcher.comments = nil // no line comments
+
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix naming convention", User: "reviewer1"},
+			{ID: 101, State: "COMMENTED", Body: "Add more tests", User: "reviewer2"},
+		},
+	}
+	cfg.IssueComments = &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 200, Body: "CI is broken", User: "tester"},
+		},
+	}
+	prCommenter := &mockPRCommenter{}
+	cfg.PRCommenter = prCommenter
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No inline replies
+	if len(replier.calls) != 0 {
+		t.Errorf("expected 0 review reply calls, got %d", len(replier.calls))
+	}
+
+	// All three non-inline items consolidated into exactly 1 PR comment
+	if len(prCommenter.calls) != 1 {
+		t.Fatalf("expected 1 consolidated PR comment call, got %d", len(prCommenter.calls))
+	}
+
+	// The single comment should contain separators between responses
+	body := prCommenter.calls[0].body
+	if strings.Count(body, "---") < 2 {
+		t.Errorf("expected at least 2 '---' separators for 3 non-inline items, got body: %s", body)
+	}
+}
+
+func TestNewAction_OnlyInlineComments_NoPRComment(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, replier, _ := defaultMocks(project)
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 2, Path: "utils.go", Body: "Add tests", User: "reviewer"},
+	}
+	prCommenter := &mockPRCommenter{}
+	cfg.PRCommenter = prCommenter
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Inline comments replied individually
+	if len(replier.calls) != 2 {
+		t.Fatalf("expected 2 review reply calls, got %d", len(replier.calls))
+	}
+
+	// No PR comment should be posted when all items are inline
+	if len(prCommenter.calls) != 0 {
+		t.Errorf("expected 0 PR comment calls for inline-only feedback, got %d", len(prCommenter.calls))
 	}
 }
 
@@ -1321,8 +1400,8 @@ func TestNewAction_PRCommentError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "posting PR comment") {
-		t.Errorf("expected 'posting PR comment' in error, got: %s", err.Error())
+	if !strings.Contains(err.Error(), "posting consolidated PR comment") {
+		t.Errorf("expected 'posting consolidated PR comment' in error, got: %s", err.Error())
 	}
 }
 
