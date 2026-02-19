@@ -111,12 +111,14 @@ github:
 linear:
   team_id: team-1
   assignee_id: user-1
-  project_id: proj-1
 `)
 
 	cfg, err := Load(filepath.Join(dir, "projects", "minimal.yaml"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("validation should pass without project_id: %v", err)
 	}
 	if cfg.RalphConfigPath != ".ralph/ralph.yaml" {
 		t.Errorf("RalphConfigPath = %q, want default %q", cfg.RalphConfigPath, ".ralph/ralph.yaml")
@@ -129,6 +131,9 @@ linear:
 	}
 	if cfg.Linear.Label != "" {
 		t.Errorf("Linear.Label = %q, want empty (optional field)", cfg.Linear.Label)
+	}
+	if cfg.Linear.ProjectID != "" {
+		t.Errorf("Linear.ProjectID = %q, want empty (optional field)", cfg.Linear.ProjectID)
 	}
 }
 
@@ -394,7 +399,7 @@ func TestValidate_MissingLinearAssigneeID(t *testing.T) {
 	}
 }
 
-func TestValidate_MissingLinearProjectID(t *testing.T) {
+func TestValidate_WithoutLinearProjectID_NoError(t *testing.T) {
 	cfg := ProjectConfig{
 		Name:               "test",
 		LocalPath:          t.TempDir(),
@@ -403,8 +408,8 @@ func TestValidate_MissingLinearProjectID(t *testing.T) {
 		Linear:             LinearConfig{TeamID: "t", AssigneeID: "a"},
 	}
 	err := Validate(cfg)
-	if err == nil {
-		t.Fatal("expected error for missing linear.project_id")
+	if err != nil {
+		t.Fatalf("unexpected error: %v (project_id is optional)", err)
 	}
 }
 
