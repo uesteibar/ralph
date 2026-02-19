@@ -10,7 +10,9 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/ccusage"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
+	"github.com/uesteibar/ralph/internal/autoralph/eventlog"
 	"github.com/uesteibar/ralph/internal/autoralph/server"
+	"github.com/uesteibar/ralph/internal/events"
 )
 
 // mockCCUsageProvider implements server.CCUsageProvider for testing.
@@ -893,6 +895,57 @@ func TestAPI_GetIssue_DefaultLimits(t *testing.T) {
 	activity := result["activity"].([]any)
 	if len(activity) != 50 {
 		t.Fatalf("expected 50 activity entries (default timeline_limit), got %d", len(activity))
+	}
+}
+
+func TestAPI_ListIssues_IncludesTokenFields(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue", State: "building"})
+	d.IncrementTokens(iss.ID, 1200, 800)
+
+	resp, err := http.Get(apiURL(srv, "/api/issues"))
+	if err != nil {
+		t.Fatalf("GET /api/issues failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result []map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(result))
+	}
+	if int(result[0]["input_tokens"].(float64)) != 1200 {
+		t.Fatalf("expected input_tokens 1200, got %v", result[0]["input_tokens"])
+	}
+	if int(result[0]["output_tokens"].(float64)) != 800 {
+		t.Fatalf("expected output_tokens 800, got %v", result[0]["output_tokens"])
+	}
+}
+
+func TestAPI_GetIssue_IncludesTokenFields(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue", State: "building"})
+	d.IncrementTokens(iss.ID, 500, 300)
+
+	resp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID))
+	if err != nil {
+		t.Fatalf("GET /api/issues/:id failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if int(result["input_tokens"].(float64)) != 500 {
+		t.Fatalf("expected input_tokens 500, got %v", result["input_tokens"])
+	}
+	if int(result["output_tokens"].(float64)) != 300 {
+		t.Fatalf("expected output_tokens 300, got %v", result["output_tokens"])
 	}
 }
 
@@ -2266,5 +2319,117 @@ func TestAPI_ResetFields_StateUnchanged(t *testing.T) {
 	}
 	if updated.CheckFixAttempts != 0 {
 		t.Fatalf("expected check_fix_attempts 0, got %d", updated.CheckFixAttempts)
+	}
+}
+
+// IT-001: End-to-end token tracking: eventlog handler receives InvocationDone
+// with tokens, increments DB, and API returns updated totals.
+func TestIntegration_TokenTracking_CumulativeViaEventlogAndAPI(t *testing.T) {
+	d := testDB(t)
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "token test", State: "building"})
+
+	h := eventlog.New(d, iss.ID, nil, nil)
+
+	// First invocation with tokens
+	h.Handle(events.InvocationDone{NumTurns: 3, DurationMS: 1000, InputTokens: 1200, OutputTokens: 800})
+
+	// Verify DB after first invocation
+	issue, err := d.GetIssue(iss.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if issue.InputTokens != 1200 {
+		t.Fatalf("after first invocation: InputTokens = %d, want 1200", issue.InputTokens)
+	}
+	if issue.OutputTokens != 800 {
+		t.Fatalf("after first invocation: OutputTokens = %d, want 800", issue.OutputTokens)
+	}
+
+	// Second invocation with tokens (cumulative)
+	h.Handle(events.InvocationDone{NumTurns: 2, DurationMS: 500, InputTokens: 500, OutputTokens: 300})
+
+	// Verify DB after second invocation (cumulative)
+	issue, err = d.GetIssue(iss.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if issue.InputTokens != 1700 {
+		t.Fatalf("after second invocation: InputTokens = %d, want 1700", issue.InputTokens)
+	}
+	if issue.OutputTokens != 1100 {
+		t.Fatalf("after second invocation: OutputTokens = %d, want 1100", issue.OutputTokens)
+	}
+
+	// Verify API returns the cumulative totals
+	srv := newAPIServer(t, d)
+	resp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID))
+	if err != nil {
+		t.Fatalf("GET /api/issues/:id failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if int(result["input_tokens"].(float64)) != 1700 {
+		t.Fatalf("API input_tokens = %v, want 1700", result["input_tokens"])
+	}
+	if int(result["output_tokens"].(float64)) != 1100 {
+		t.Fatalf("API output_tokens = %v, want 1100", result["output_tokens"])
+	}
+}
+
+// IT-002: Token tracking gracefully handles zero/absent token data without
+// affecting existing behavior.
+func TestIntegration_TokenTracking_ZeroTokensNoIncrement(t *testing.T) {
+	d := testDB(t)
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "zero token test", State: "building"})
+
+	h := eventlog.New(d, iss.ID, nil, nil)
+
+	// Emit InvocationDone with zero tokens
+	h.Handle(events.InvocationDone{NumTurns: 3, DurationMS: 1000, InputTokens: 0, OutputTokens: 0})
+
+	// Verify DB still has zero tokens (no increment call)
+	issue, err := d.GetIssue(iss.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if issue.InputTokens != 0 {
+		t.Fatalf("InputTokens = %d, want 0 (no increment)", issue.InputTokens)
+	}
+	if issue.OutputTokens != 0 {
+		t.Fatalf("OutputTokens = %d, want 0 (no increment)", issue.OutputTokens)
+	}
+
+	// Verify activity log detail does NOT include token info
+	entries, err := d.ListBuildActivity(iss.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 activity entry, got %d", len(entries))
+	}
+	wantDetail := "Invocation done: 3 turns in 1000ms"
+	if entries[0].Detail != wantDetail {
+		t.Fatalf("detail = %q, want %q (no token info)", entries[0].Detail, wantDetail)
+	}
+
+	// Verify API returns zero tokens
+	srv := newAPIServer(t, d)
+	resp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID))
+	if err != nil {
+		t.Fatalf("GET /api/issues/:id failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if int(result["input_tokens"].(float64)) != 0 {
+		t.Fatalf("API input_tokens = %v, want 0", result["input_tokens"])
+	}
+	if int(result["output_tokens"].(float64)) != 0 {
+		t.Fatalf("API output_tokens = %v, want 0", result["output_tokens"])
 	}
 }

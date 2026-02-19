@@ -179,6 +179,8 @@ func (h *apiHandler) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		BranchName    string `json:"branch_name,omitempty"`
 		BuildActive   bool   `json:"build_active"`
 		Model         string `json:"model"`
+		InputTokens   int    `json:"input_tokens"`
+		OutputTokens  int    `json:"output_tokens"`
 		CreatedAt     string `json:"created_at"`
 		UpdatedAt     string `json:"updated_at"`
 	}
@@ -202,6 +204,8 @@ func (h *apiHandler) handleListIssues(w http.ResponseWriter, r *http.Request) {
 			BranchName:    iss.BranchName,
 			BuildActive:   buildActive,
 			Model:         h.modelName,
+			InputTokens:   iss.InputTokens,
+			OutputTokens:  iss.OutputTokens,
 			CreatedAt:     iss.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:     iss.UpdatedAt.Format(time.RFC3339),
 		}
@@ -295,6 +299,8 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		ErrorMessage     string                    `json:"error_message,omitempty"`
 		BuildActive      bool                      `json:"build_active"`
 		Model            string                    `json:"model"`
+		InputTokens      int                       `json:"input_tokens"`
+		OutputTokens     int                       `json:"output_tokens"`
 		Stories          []storyResponse            `json:"stories"`
 		IntegrationTests []integrationTestResponse  `json:"integration_tests"`
 		CurrentStory     string                    `json:"current_story,omitempty"`
@@ -369,6 +375,8 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		ErrorMessage:     issue.ErrorMessage,
 		BuildActive:      buildActive,
 		Model:            h.modelName,
+		InputTokens:      issue.InputTokens,
+		OutputTokens:     issue.OutputTokens,
 		Stories:          stories,
 		IntegrationTests: integrationTests,
 		CurrentStory:     currentStory,

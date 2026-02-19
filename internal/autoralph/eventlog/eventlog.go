@@ -39,6 +39,10 @@ func (h *Handler) Handle(e events.Event) {
 		}
 	}
 
+	if ev, ok := e.(events.InvocationDone); ok && (ev.InputTokens > 0 || ev.OutputTokens > 0) {
+		_ = h.db.IncrementTokens(h.issueID, ev.InputTokens, ev.OutputTokens)
+	}
+
 	if h.upstream != nil {
 		h.upstream.Handle(e)
 	}
@@ -64,7 +68,11 @@ func FormatDetail(e events.Event) string {
 	case events.AgentText:
 		return ev.Text
 	case events.InvocationDone:
-		return fmt.Sprintf("Invocation done: %d turns in %dms", ev.NumTurns, ev.DurationMS)
+		base := fmt.Sprintf("Invocation done: %d turns in %dms", ev.NumTurns, ev.DurationMS)
+		if ev.InputTokens > 0 || ev.OutputTokens > 0 {
+			return fmt.Sprintf("%s (%d in / %d out tokens)", base, ev.InputTokens, ev.OutputTokens)
+		}
+		return base
 	default:
 		return ""
 	}
