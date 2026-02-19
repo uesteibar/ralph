@@ -505,7 +505,7 @@ func TestBranchPullerAdapter_PullBranch_DelegatesToPullFFOnly(t *testing.T) {
 	// Create a bare "remote" repo and a clone that acts as the worktree.
 	bare := t.TempDir()
 	for _, args := range [][]string{
-		{"git", "init", "--bare"},
+		{"git", "init", "--bare", "-b", "main"},
 	} {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = bare

@@ -439,13 +439,18 @@ func runServe(args []string) error {
 					if err != nil {
 						return err
 					}
+					gitName, gitEmail := registry.gitIdentity(issue.ProjectID)
+					gitOps := &gitOpsAdapter{
+						gitAuthorName:  gitName,
+						gitAuthorEmail: gitEmail,
+					}
 					return checks.NewAction(checks.Config{
 						Invoker:      invoker,
 						CheckRuns:    gc,
 						Logs:         gc,
 						PRs:          gc,
 						Comments:     gc,
-						Git:          &gitOpsAdapter{},
+						Git:          gitOps,
 						Projects:     database,
 						ConfigLoad:   &configLoaderAdapter{},
 						BranchPuller: &branchPullerAdapter{},
