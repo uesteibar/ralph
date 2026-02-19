@@ -1375,6 +1375,51 @@ func TestDispatcher_DispatchAction_FailureLogsActivityAndSetsError(t *testing.T)
 	}
 }
 
+func TestDispatcher_DispatchAction_FailureRecordsCorrectFromState(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "addressing_feedback")
+
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := disp.DispatchAction(ctx, issue, func(ctx context.Context) error {
+		return errors.New("something went wrong")
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	disp.Wait()
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.EventType == "action_failed" {
+			found = true
+			if e.FromState != "addressing_feedback" {
+				t.Errorf("expected FromState %q, got %q", "addressing_feedback", e.FromState)
+			}
+			if e.ToState != "failed" {
+				t.Errorf("expected ToState %q, got %q", "failed", e.ToState)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected action_failed activity entry")
+	}
+}
+
 func TestDispatcher_DispatchAction_ContextCancellation_NoFailure(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)

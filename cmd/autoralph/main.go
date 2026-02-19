@@ -549,7 +549,8 @@ func runServe(args []string) error {
 	go ccPoller.Start(ctx)
 
 	// --- 10. Orchestrator evaluation loop ---
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger)
+	wake := make(chan struct{}, 1)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake)
 
 	// --- 11. Recover BUILDING issues from previous run ---
 	if count, err := dispatcher.RecoverBuilding(ctx); err != nil {
@@ -569,6 +570,7 @@ func runServe(args []string) error {
 		BuildChecker:     dispatcher,
 		PRDPathFn:        workspace.PRDPathForWorkspace,
 		CCUsageProvider:  ccPoller,
+		Wake:             wake,
 	}
 	srv, err := server.New(addr, cfg)
 	if err != nil {
@@ -613,6 +615,7 @@ func runOrchestratorLoop(
 	dispatcher *worker.Dispatcher,
 	hub *server.Hub,
 	logger *slog.Logger,
+	wake <-chan struct{},
 ) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -622,112 +625,114 @@ func runOrchestratorLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			issues, err := database.ListIssues(db.IssueFilter{})
-			if err != nil {
-				logger.Warn("listing issues for orchestrator", "error", err)
+		case <-wake:
+		}
+
+		issues, err := database.ListIssues(db.IssueFilter{})
+		if err != nil {
+			logger.Warn("listing issues for orchestrator", "error", err)
+			continue
+		}
+
+		for _, issue := range issues {
+			if isTerminalState(issue.State) {
 				continue
 			}
 
-			for _, issue := range issues {
-				if isTerminalState(issue.State) {
+			// Skip issues with errors — require explicit "Retry" to clear.
+			if issue.ErrorMessage != "" {
+				continue
+			}
+
+			// Re-dispatch BUILDING issues that aren't actively running.
+			// This handles retries (state set back to building via API)
+			// without requiring a process restart.
+			if issue.State == string(orchestrator.StateBuilding) && !dispatcher.IsRunning(issue.ID) {
+				if err := dispatcher.Dispatch(ctx, issue); err != nil {
+					logger.Warn("re-dispatching building issue", "issue", issue.Identifier, "error", err)
+				} else {
+					logger.Info("re-dispatched building issue", "issue", issue.Identifier)
+				}
+				continue
+			}
+
+			tr, ok := sm.Evaluate(issue)
+			if !ok {
+				continue
+			}
+
+			// Async transitions: dispatch via worker instead of blocking.
+			if isAsyncTransition(tr) {
+				if dispatcher.IsRunning(issue.ID) {
 					continue
 				}
+				dispatchAsync(ctx, tr, issue, database, dispatcher, hub, logger)
+				continue
+			}
 
-				// Skip issues with errors — require explicit "Retry" to clear.
-				if issue.ErrorMessage != "" {
-					continue
-				}
+			logger.Info("executing transition",
+				"issue", issue.Identifier,
+				"from", tr.From,
+				"to", tr.To,
+			)
 
-				// Re-dispatch BUILDING issues that aren't actively running.
-				// This handles retries (state set back to building via API)
-				// without requiring a process restart.
-				if issue.State == string(orchestrator.StateBuilding) && !dispatcher.IsRunning(issue.ID) {
-					if err := dispatcher.Dispatch(ctx, issue); err != nil {
-						logger.Warn("re-dispatching building issue", "issue", issue.Identifier, "error", err)
-					} else {
-						logger.Info("re-dispatched building issue", "issue", issue.Identifier)
-					}
-					continue
-				}
-
-				tr, ok := sm.Evaluate(issue)
-				if !ok {
-					continue
-				}
-
-				// Async transitions: dispatch via worker instead of blocking.
-				if isAsyncTransition(tr) {
-					if dispatcher.IsRunning(issue.ID) {
-						continue
-					}
-					dispatchAsync(ctx, tr, issue, database, dispatcher, hub, logger)
-					continue
-				}
-
-				logger.Info("executing transition",
+			if err := sm.Execute(tr, issue); err != nil {
+				logger.Warn("transition failed",
 					"issue", issue.Identifier,
 					"from", tr.From,
 					"to", tr.To,
+					"error", err,
 				)
 
-				if err := sm.Execute(tr, issue); err != nil {
-					logger.Warn("transition failed",
-						"issue", issue.Identifier,
-						"from", tr.From,
-						"to", tr.To,
-						"error", err,
-					)
+				// Store the error on the issue so the web UI can show it.
+				// Only log activity when the error message changes to avoid flooding.
+				errMsg := err.Error()
+				if issue.ErrorMessage != errMsg {
+					issue.ErrorMessage = errMsg
+					if dbErr := database.UpdateIssue(issue); dbErr != nil {
+						logger.Warn("storing transition error", "issue", issue.Identifier, "error", dbErr)
+					}
+					database.LogActivity(issue.ID, "transition_error", string(tr.From), string(tr.To), errMsg)
 
-					// Store the error on the issue so the web UI can show it.
-					// Only log activity when the error message changes to avoid flooding.
-					errMsg := err.Error()
-					if issue.ErrorMessage != errMsg {
-						issue.ErrorMessage = errMsg
-						if dbErr := database.UpdateIssue(issue); dbErr != nil {
-							logger.Warn("storing transition error", "issue", issue.Identifier, "error", dbErr)
-						}
-						database.LogActivity(issue.ID, "transition_error", string(tr.From), string(tr.To), errMsg)
-
-						if hub != nil {
-							if msg, wErr := server.NewWSMessage(server.MsgActivity, map[string]string{
-								"issue_id":   issue.ID,
-								"event_type": "transition_error",
-								"detail":     errMsg,
-							}); wErr == nil {
-								hub.Broadcast(msg)
-							}
+					if hub != nil {
+						if msg, wErr := server.NewWSMessage(server.MsgActivity, map[string]string{
+							"issue_id":   issue.ID,
+							"event_type": "transition_error",
+							"detail":     errMsg,
+						}); wErr == nil {
+							hub.Broadcast(msg)
 						}
 					}
-					continue
 				}
+				continue
+			}
 
-				// Re-read issue after transition to get updated state.
-				updated, err := database.GetIssue(issue.ID)
-				if err != nil {
-					logger.Warn("re-reading issue after transition", "issue_id", issue.ID, "error", err)
-					continue
+			// Re-read issue after transition to get updated state.
+			updated, err := database.GetIssue(issue.ID)
+			if err != nil {
+				logger.Warn("re-reading issue after transition", "issue_id", issue.ID, "error", err)
+				continue
+			}
+
+			// Clear any previous transition error now that a transition succeeded.
+			if updated.ErrorMessage != "" {
+				updated.ErrorMessage = ""
+				if dbErr := database.UpdateIssue(updated); dbErr != nil {
+					logger.Warn("clearing transition error", "issue", updated.Identifier, "error", dbErr)
 				}
+			}
 
-				// Clear any previous transition error now that a transition succeeded.
-				if updated.ErrorMessage != "" {
-					updated.ErrorMessage = ""
-					if dbErr := database.UpdateIssue(updated); dbErr != nil {
-						logger.Warn("clearing transition error", "issue", updated.Identifier, "error", dbErr)
-					}
+			// Dispatch BUILDING issues to the worker pool.
+			if updated.State == string(orchestrator.StateBuilding) && !dispatcher.IsRunning(updated.ID) {
+				if err := dispatcher.Dispatch(ctx, updated); err != nil {
+					logger.Warn("dispatching build", "issue", updated.Identifier, "error", err)
 				}
+			}
 
-				// Dispatch BUILDING issues to the worker pool.
-				if updated.State == string(orchestrator.StateBuilding) && !dispatcher.IsRunning(updated.ID) {
-					if err := dispatcher.Dispatch(ctx, updated); err != nil {
-						logger.Warn("dispatching build", "issue", updated.Identifier, "error", err)
-					}
-				}
-
-				// Broadcast state change via WebSocket.
-				if hub != nil {
-					if msg, err := server.NewWSMessage(server.MsgIssueStateChanged, updated); err == nil {
-						hub.Broadcast(msg)
-					}
+			// Broadcast state change via WebSocket.
+			if hub != nil {
+				if msg, err := server.NewWSMessage(server.MsgIssueStateChanged, updated); err == nil {
+					hub.Broadcast(msg)
 				}
 			}
 		}

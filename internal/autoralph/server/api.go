@@ -18,6 +18,19 @@ type apiHandler struct {
 	workspaceRemover WorkspaceRemover
 	buildChecker     BuildChecker
 	prdPathFn        func(string, string) string
+	wake             chan<- struct{}
+}
+
+// notifyWake performs a non-blocking send on the wake channel to nudge the
+// orchestrator loop into re-evaluating immediately. Safe to call when wake is nil.
+func (h *apiHandler) notifyWake() {
+	if h.wake == nil {
+		return
+	}
+	select {
+	case h.wake <- struct{}{}:
+	default:
+	}
 }
 
 // storyResponse represents a user story in the API response.
@@ -443,6 +456,7 @@ func (h *apiHandler) handleResumeIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.db.LogActivity(issue.ID, "state_change", "paused", resumeState, "Issue resumed via API")
+	h.notifyWake()
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "resumed", "state": resumeState})
 }
@@ -489,6 +503,7 @@ func (h *apiHandler) handleRetryIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.db.LogActivity(issue.ID, "state_change", "failed", retryState, "Issue retried via API")
+	h.notifyWake()
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "retrying", "state": retryState})
 }

@@ -238,13 +238,14 @@ func (d *Dispatcher) handleActionFailure(issue db.Issue, actionErr error) {
 		return
 	}
 
+	fromState := current.State
 	current.State = "failed"
 	current.ErrorMessage = actionErr.Error()
 	if err := d.db.UpdateIssue(current); err != nil {
 		d.logger.Error("updating issue to failed after action", "issue", issue.ID, "error", err)
 		return
 	}
-	if err := d.db.LogActivity(issue.ID, "action_failed", "", "failed", actionErr.Error()); err != nil {
+	if err := d.db.LogActivity(issue.ID, "action_failed", fromState, "failed", actionErr.Error()); err != nil {
 		d.logger.Error("logging action_failed activity", "issue", issue.ID, "error", err)
 	}
 }

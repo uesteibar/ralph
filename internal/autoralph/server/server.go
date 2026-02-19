@@ -51,6 +51,10 @@ type Config struct {
 	PRDPathFn func(projectLocalPath, workspaceName string) string
 	// CCUsageProvider provides Claude Code usage data. Optional.
 	CCUsageProvider CCUsageProvider
+	// Wake is an optional channel used to notify the orchestrator loop that it
+	// should re-evaluate immediately (e.g. after a retry or resume). A non-blocking
+	// send is performed; if the channel is nil or full the signal is silently dropped.
+	Wake chan<- struct{}
 	// LinearURL overrides the Linear API endpoint (for mock servers in E2E tests).
 	LinearURL string
 	// GithubURL overrides the GitHub API endpoint (for mock servers in E2E tests).
@@ -94,7 +98,7 @@ func (s *Server) Close() error {
 
 func (s *Server) registerRoutes(cfg Config) {
 	if cfg.DB != nil {
-		api := &apiHandler{db: cfg.DB, startAt: time.Now(), workspaceRemover: cfg.WorkspaceRemover, buildChecker: cfg.BuildChecker, prdPathFn: cfg.PRDPathFn}
+		api := &apiHandler{db: cfg.DB, startAt: time.Now(), workspaceRemover: cfg.WorkspaceRemover, buildChecker: cfg.BuildChecker, prdPathFn: cfg.PRDPathFn, wake: cfg.Wake}
 		s.mux.HandleFunc("GET /api/status", api.handleStatus)
 		s.mux.HandleFunc("GET /api/projects", api.handleListProjects)
 		s.mux.HandleFunc("GET /api/issues", api.handleListIssues)
