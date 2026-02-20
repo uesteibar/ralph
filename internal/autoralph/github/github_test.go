@@ -794,6 +794,120 @@ func TestClient_ReactToReviewComment_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestClient_FetchTimeline_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v3/repos/octocat/hello/issues/42/timeline" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		assertAuth(t, r, "Bearer ghp_test123")
+
+		json.NewEncoder(w).Encode([]map[string]any{
+			{
+				"event":              "review_requested",
+				"review_requester":   map[string]any{"id": 100, "login": "owner"},
+				"requested_reviewer": map[string]any{"id": 200, "login": "reviewer1"},
+			},
+			{
+				"event": "commented",
+				"actor": map[string]any{"id": 300, "login": "someone"},
+			},
+			{
+				"event":              "review_request_removed",
+				"review_requester":   map[string]any{"id": 100, "login": "owner"},
+				"requested_reviewer": map[string]any{"id": 200, "login": "reviewer1"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test123", WithBaseURL(srv.URL+"/"))
+	events, err := c.FetchTimeline(context.Background(), "octocat", "hello", 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events (filtered), got %d", len(events))
+	}
+	if events[0].Event != "review_requested" || events[0].RequesterID != 100 || events[0].ReviewerID != 200 {
+		t.Errorf("event 0 mismatch: %+v", events[0])
+	}
+	if events[1].Event != "review_request_removed" || events[1].RequesterID != 100 || events[1].ReviewerID != 200 {
+		t.Errorf("event 1 mismatch: %+v", events[1])
+	}
+}
+
+func TestClient_FetchTimeline_Pagination(t *testing.T) {
+	page := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page++
+		if page == 1 {
+			w.Header().Set("Link", `<`+r.URL.Path+`?page=2>; rel="next"`)
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"event":              "review_requested",
+					"review_requester":   map[string]any{"id": 10, "login": "owner"},
+					"requested_reviewer": map[string]any{"id": 20, "login": "rev1"},
+				},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode([]map[string]any{
+			{
+				"event":              "review_requested",
+				"review_requester":   map[string]any{"id": 10, "login": "owner"},
+				"requested_reviewer": map[string]any{"id": 30, "login": "rev2"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	events, err := c.FetchTimeline(context.Background(), "o", "r", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events across pages, got %d", len(events))
+	}
+	if events[0].ReviewerID != 20 || events[1].ReviewerID != 30 {
+		t.Errorf("unexpected reviewer IDs: %d, %d", events[0].ReviewerID, events[1].ReviewerID)
+	}
+}
+
+func TestClient_FetchTimeline_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]map[string]any{})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	events, err := c.FetchTimeline(context.Background(), "o", "r", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events, got %d", len(events))
+	}
+}
+
+func TestClient_FetchTimeline_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]any{"message": "Bad credentials"})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "bad-token", WithBaseURL(srv.URL+"/"))
+	_, err := c.FetchTimeline(context.Background(), "o", "r", 1)
+	if err == nil {
+		t.Fatal("expected error for HTTP 401")
+	}
+}
+
 func mustNew(t *testing.T, token string, opts ...Option) *Client {
 	t.Helper()
 	c, err := New(token, opts...)
