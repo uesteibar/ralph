@@ -71,6 +71,10 @@ type Config struct {
 	// allows the caller (e.g. main.go) to broadcast real-time updates via
 	// WebSocket without the worker package importing the server package.
 	OnBuildEvent func(issueID, detail string)
+
+	// UsageLimitSetter is called when a UsageLimitWait event is received
+	// from the ralph loop, bridging loop-level detection to global state.
+	UsageLimitSetter eventlog.UsageLimitSetter
 }
 
 // Dispatcher manages build worker goroutines. It limits the number of
@@ -81,10 +85,11 @@ type Dispatcher struct {
 	runner         LoopRunner
 	projects       ProjectGetter
 	pr             PRCreator
-	handler        events.EventHandler
-	onBuildEvent   func(issueID, detail string)
-	logger         *slog.Logger
-	gitIdentityFn func(projectID string) (name, email string)
+	handler          events.EventHandler
+	onBuildEvent     func(issueID, detail string)
+	ulSetter         eventlog.UsageLimitSetter
+	logger           *slog.Logger
+	gitIdentityFn    func(projectID string) (name, email string)
 
 	mu       sync.Mutex
 	active   map[string]context.CancelFunc // issue ID → cancel func
@@ -110,6 +115,7 @@ func New(cfg Config) *Dispatcher {
 		pr:             cfg.PR,
 		handler:        cfg.EventHandler,
 		onBuildEvent:   cfg.OnBuildEvent,
+		ulSetter:       cfg.UsageLimitSetter,
 		logger:         logger,
 		gitIdentityFn:  cfg.GitIdentityFn,
 		active:         make(map[string]context.CancelFunc),
@@ -315,7 +321,7 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 		runstate.CleanupPID(wsPath)
 	}()
 
-	handler := eventlog.New(d.db, issue.ID, d.handler, d.onBuildEvent)
+	handler := eventlog.New(d.db, issue.ID, d.handler, d.onBuildEvent, d.ulSetter)
 
 	// Set repo-local git identity in the worktree so that commits created
 	// by Claude CLI's internal git operations use the correct per-project identity.

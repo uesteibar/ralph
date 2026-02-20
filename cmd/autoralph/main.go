@@ -29,6 +29,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/rebase"
 	"github.com/uesteibar/ralph/internal/autoralph/refine"
 	"github.com/uesteibar/ralph/internal/autoralph/server"
+	"github.com/uesteibar/ralph/internal/autoralph/usagelimit"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
 	"github.com/uesteibar/ralph/internal/gitops"
 	"github.com/uesteibar/ralph/internal/workspace"
@@ -280,12 +281,21 @@ func runServe(args []string) error {
 	// --- 6. Orchestrator with transitions ---
 	sm := orchestrator.New(database)
 
+	// Shared usage limit state so all workers coordinate around rate limits.
+	ulState := usagelimit.NewState(logger)
+
 	if hasLinear {
-		invoker := &claudeInvoker{}
+		invoker := &usagelimitInvoker{
+			inner: &claudeInvoker{},
+			state: ulState,
+		}
 		// readOnlyInvoker blocks write tools so the AI can only read the
 		// codebase during refinement and iteration — no code changes.
-		readOnlyInvoker := &claudeInvoker{
-			DisallowedTools: []string{"Edit", "Write", "Bash", "NotebookEdit"},
+		readOnlyInvoker := &usagelimitInvoker{
+			inner: &claudeInvoker{
+				DisallowedTools: []string{"Edit", "Write", "Bash", "NotebookEdit"},
+			},
+			state: ulState,
 		}
 		cfgLoader := &configLoaderAdapter{}
 		puller := &gitPullerAdapter{
@@ -516,7 +526,7 @@ func runServe(args []string) error {
 				gitAuthorEmail: gitEmail,
 			}
 			return pr.NewAction(pr.Config{
-				Invoker:    &claudeInvoker{},
+				Invoker:    &usagelimitInvoker{inner: &claudeInvoker{}, state: ulState},
 				Git:        gitOps,
 				Diff:       gitOps,
 				PRD:        &prdReaderAdapter{},
@@ -546,13 +556,14 @@ func runServe(args []string) error {
 
 	// --- 8. Build worker dispatcher ---
 	dispatcher := worker.New(worker.Config{
-		DB:            database,
-		MaxWorkers:    maxWorkers,
-		LoopRunner:    &loopRunnerAdapter{},
-		Projects:      database,
-		PR:            prAction,
-		GitIdentityFn: registry.gitIdentity,
-		Logger:        logger,
+		DB:               database,
+		MaxWorkers:       maxWorkers,
+		LoopRunner:       &loopRunnerAdapter{},
+		Projects:         database,
+		PR:               prAction,
+		GitIdentityFn:    registry.gitIdentity,
+		UsageLimitSetter: ulState,
+		Logger:           logger,
 		OnBuildEvent: func(issueID, detail string) {
 			if hub == nil {
 				return
@@ -578,7 +589,7 @@ func runServe(args []string) error {
 
 	// --- 10. Orchestrator evaluation loop ---
 	wake := make(chan struct{}, 1)
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, ulState)
 
 	// --- 11. Recover BUILDING issues from previous run ---
 	if count, err := dispatcher.RecoverBuilding(ctx); err != nil {
@@ -651,6 +662,7 @@ func runOrchestratorLoop(
 	hub *server.Hub,
 	logger *slog.Logger,
 	wake <-chan struct{},
+	ulState *usagelimit.State,
 ) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -679,10 +691,17 @@ func runOrchestratorLoop(
 				continue
 			}
 
+			// Check if usage limit is active -- skip AI-driven dispatches to
+			// avoid wasting worker slots on invocations that will immediately wait.
+			limitActive := ulState != nil && ulState.IsActive()
+
 			// Re-dispatch BUILDING issues that aren't actively running.
 			// This handles retries (state set back to building via API)
 			// without requiring a process restart.
 			if issue.State == string(orchestrator.StateBuilding) && !dispatcher.IsRunning(issue.ID) {
+				if limitActive {
+					continue
+				}
 				if err := dispatcher.Dispatch(ctx, issue); err != nil {
 					logger.Warn("re-dispatching building issue", "issue", issue.Identifier, "error", err)
 				} else {
@@ -705,6 +724,9 @@ func runOrchestratorLoop(
 
 			// Async transitions: dispatch via worker instead of blocking.
 			if isAsyncTransition(tr) {
+				if limitActive {
+					continue
+				}
 				if dispatcher.IsRunning(issue.ID) {
 					continue
 				}

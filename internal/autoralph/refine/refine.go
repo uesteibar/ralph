@@ -67,7 +67,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("rendering refine prompt: %w", err)
 		}
 
-		handler := eventlog.New(database, issue.ID, nil, cfg.OnBuildEvent)
+		handler := eventlog.New(database, issue.ID, nil, cfg.OnBuildEvent, nil)
 		response, err := cfg.Invoker.InvokeWithEvents(context.Background(), prompt, project.LocalPath, maxTurnsRefine, handler)
 		if err != nil {
 			return fmt.Errorf("invoking AI: %w", err)
