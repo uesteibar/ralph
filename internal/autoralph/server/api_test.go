@@ -2329,7 +2329,7 @@ func TestIntegration_TokenTracking_CumulativeViaEventlogAndAPI(t *testing.T) {
 	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
 	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "token test", State: "building"})
 
-	h := eventlog.New(d, iss.ID, nil, nil)
+	h := eventlog.New(d, iss.ID, nil, nil, nil)
 
 	// First invocation with tokens
 	h.Handle(events.InvocationDone{NumTurns: 3, DurationMS: 1000, InputTokens: 1200, OutputTokens: 800})
@@ -2386,7 +2386,7 @@ func TestIntegration_TokenTracking_ZeroTokensNoIncrement(t *testing.T) {
 	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
 	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "zero token test", State: "building"})
 
-	h := eventlog.New(d, iss.ID, nil, nil)
+	h := eventlog.New(d, iss.ID, nil, nil, nil)
 
 	// Emit InvocationDone with zero tokens
 	h.Handle(events.InvocationDone{NumTurns: 3, DurationMS: 1000, InputTokens: 0, OutputTokens: 0})

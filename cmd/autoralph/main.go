@@ -556,13 +556,14 @@ func runServe(args []string) error {
 
 	// --- 8. Build worker dispatcher ---
 	dispatcher := worker.New(worker.Config{
-		DB:            database,
-		MaxWorkers:    maxWorkers,
-		LoopRunner:    &loopRunnerAdapter{},
-		Projects:      database,
-		PR:            prAction,
-		GitIdentityFn: registry.gitIdentity,
-		Logger:        logger,
+		DB:               database,
+		MaxWorkers:       maxWorkers,
+		LoopRunner:       &loopRunnerAdapter{},
+		Projects:         database,
+		PR:               prAction,
+		GitIdentityFn:    registry.gitIdentity,
+		UsageLimitSetter: ulState,
+		Logger:           logger,
 		OnBuildEvent: func(issueID, detail string) {
 			if hub == nil {
 				return

@@ -168,7 +168,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		if err != nil {
 			return fmt.Errorf("rendering fix_checks prompt: %w", err)
 		}
-		handler := eventlog.New(database, issue.ID, cfg.EventHandler, cfg.OnBuildEvent)
+		handler := eventlog.New(database, issue.ID, cfg.EventHandler, cfg.OnBuildEvent, nil)
 		if _, err := cfg.Invoker.InvokeWithEvents(ctx, prompt, treePath, maxTurnsChecks, handler); err != nil {
 			return fmt.Errorf("invoking AI: %w", err)
 		}
