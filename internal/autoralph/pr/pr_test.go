@@ -3,6 +3,7 @@ package pr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -61,13 +62,15 @@ func createTestIssue(t *testing.T, d *db.DB, project db.Project) db.Issue {
 // --- Mocks ---
 
 type mockInvoker struct {
-	lastPrompt string
-	response   string
-	err        error
+	lastPrompt   string
+	lastMaxTurns int
+	response     string
+	err          error
 }
 
-func (m *mockInvoker) Invoke(_ context.Context, prompt, dir string) (string, error) {
+func (m *mockInvoker) Invoke(_ context.Context, prompt, dir string, maxTurns int) (string, error) {
 	m.lastPrompt = prompt
+	m.lastMaxTurns = maxTurns
 	return m.response, m.err
 }
 
@@ -724,6 +727,23 @@ func TestNewAction_PushFailsRebaseSucceeds(t *testing.T) {
 	}
 }
 
+func TestNewAction_PassesMaxTurns(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _, _, _, _ := defaultConfig()
+	cfg.Projects = d
+
+	action := NewAction(cfg)
+	if err := action(issue, d); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastMaxTurns != maxTurnsPR {
+		t.Errorf("expected maxTurns %d, got %d", maxTurnsPR, inv.lastMaxTurns)
+	}
+}
+
 // trackingPusher is a custom pusher that allows per-call behavior.
 type trackingPusher struct {
 	pushFunc func() error
@@ -731,5 +751,128 @@ type trackingPusher struct {
 
 func (m *trackingPusher) PushBranch(_ context.Context, workDir, branch string) error {
 	return m.pushFunc()
+}
+
+// --- capDiffStats tests ---
+
+func TestCapDiffStats_UnderLimit(t *testing.T) {
+	var lines []string
+	for i := 0; i < 20; i++ {
+		lines = append(lines, fmt.Sprintf(" file%d.go | %d +++", i, i+1))
+	}
+	lines = append(lines, " 20 files changed, 100 insertions(+), 50 deletions(-)")
+	stats := strings.Join(lines, "\n")
+
+	result := capDiffStats(stats, 50)
+	if result != stats {
+		t.Error("expected diff stats with 20 entries to be returned unchanged")
+	}
+}
+
+func TestCapDiffStats_ExactlyAtLimit(t *testing.T) {
+	var lines []string
+	for i := 0; i < 50; i++ {
+		lines = append(lines, fmt.Sprintf(" file%d.go | %d +++", i, i+1))
+	}
+	lines = append(lines, " 50 files changed, 300 insertions(+), 100 deletions(-)")
+	stats := strings.Join(lines, "\n")
+
+	result := capDiffStats(stats, 50)
+	if result != stats {
+		t.Error("expected diff stats with exactly 50 entries to be returned unchanged")
+	}
+}
+
+func TestCapDiffStats_OverLimit_CapsAndKeepsSummary(t *testing.T) {
+	var lines []string
+	for i := 0; i < 80; i++ {
+		lines = append(lines, fmt.Sprintf(" file%d.go | %d +++", i, i+1))
+	}
+	summaryLine := " 80 files changed, 500 insertions(+), 200 deletions(-)"
+	lines = append(lines, summaryLine)
+	stats := strings.Join(lines, "\n")
+
+	result := capDiffStats(stats, 50)
+	resultLines := strings.Split(result, "\n")
+
+	// First 50 file entries preserved
+	for i := 0; i < 50; i++ {
+		expected := fmt.Sprintf(" file%d.go | %d +++", i, i+1)
+		if resultLines[i] != expected {
+			t.Errorf("line %d: expected %q, got %q", i, expected, resultLines[i])
+		}
+	}
+
+	// Truncation marker
+	if !strings.Contains(resultLines[50], "... 30 file entries omitted ...") {
+		t.Errorf("expected truncation marker, got %q", resultLines[50])
+	}
+
+	// Summary line preserved at the end
+	lastLine := resultLines[len(resultLines)-1]
+	if lastLine != summaryLine {
+		t.Errorf("expected summary line %q, got %q", summaryLine, lastLine)
+	}
+
+	// Total: 50 entries + 1 marker + 1 summary = 52
+	if len(resultLines) != 52 {
+		t.Errorf("expected 52 lines, got %d", len(resultLines))
+	}
+}
+
+func TestCapDiffStats_EmptyInput(t *testing.T) {
+	result := capDiffStats("", 50)
+	if result != "" {
+		t.Errorf("expected empty result, got %q", result)
+	}
+}
+
+func TestCapDiffStats_SummaryOnly(t *testing.T) {
+	stats := " 1 file changed, 5 insertions(+)"
+	result := capDiffStats(stats, 50)
+	if result != stats {
+		t.Error("expected single-line stats unchanged")
+	}
+}
+
+func TestNewAction_CapsDiffStats(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, diff, _, _, _, _ := defaultConfig()
+	cfg.Projects = d
+
+	// Create diff stats with 80 file entries + summary
+	var lines []string
+	for i := 0; i < 80; i++ {
+		lines = append(lines, fmt.Sprintf(" file%d.go | %d +++", i, i+1))
+	}
+	lines = append(lines, " 80 files changed, 500 insertions(+), 200 deletions(-)")
+	diff.stats = strings.Join(lines, "\n")
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Prompt should contain first 50 entries but not the 51st
+	if !strings.Contains(inv.lastPrompt, "file0.go") {
+		t.Error("expected first file entry in prompt")
+	}
+	if !strings.Contains(inv.lastPrompt, "file49.go") {
+		t.Error("expected 50th file entry in prompt")
+	}
+	if strings.Contains(inv.lastPrompt, "file50.go") {
+		t.Error("expected 51st file entry to be omitted from prompt")
+	}
+	// Summary line should be preserved
+	if !strings.Contains(inv.lastPrompt, "80 files changed") {
+		t.Error("expected summary line in prompt")
+	}
+	// Truncation marker should be present
+	if !strings.Contains(inv.lastPrompt, "file entries omitted") {
+		t.Error("expected diff stats truncation marker in prompt")
+	}
 }
 

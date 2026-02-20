@@ -60,15 +60,17 @@ func (m *mockGitPuller) PullDefaultBase(ctx context.Context, repoPath, ralphConf
 }
 
 type mockInvoker struct {
-	lastPrompt  string
-	lastHandler events.EventHandler
-	response    string
-	err         error
-	emitEvents  []events.Event
+	lastPrompt   string
+	lastMaxTurns int
+	lastHandler  events.EventHandler
+	response     string
+	err          error
+	emitEvents   []events.Event
 }
 
-func (m *mockInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
 	m.lastPrompt = prompt
+	m.lastMaxTurns = maxTurns
 	m.lastHandler = handler
 	for _, e := range m.emitEvents {
 		if handler != nil {
@@ -372,7 +374,7 @@ func TestApprovalAction_FetchError_ReturnsError(t *testing.T) {
 
 // --- Iteration action tests ---
 
-func TestIterationAction_InvokesAIWithFullThread(t *testing.T) {
+func TestIterationAction_IncrementalSendsOnlyNewCommentsByDefault(t *testing.T) {
 	d := testDB(t)
 	issue := createTestIssue(t, d, "refining", "c1")
 
@@ -399,14 +401,17 @@ func TestIterationAction_InvokesAIWithFullThread(t *testing.T) {
 	if invoker.lastPrompt == "" {
 		t.Fatal("expected AI to be invoked")
 	}
-	if !strings.Contains(invoker.lastPrompt, "Add user avatars") {
-		t.Error("expected prompt to contain issue title")
-	}
-	if !strings.Contains(invoker.lastPrompt, "Here is a draft plan") {
-		t.Error("expected prompt to contain existing comments")
-	}
+	// Incremental: only new comments (after c1) are sent.
 	if !strings.Contains(invoker.lastPrompt, "Can you add caching?") {
-		t.Error("expected prompt to contain human feedback")
+		t.Error("expected prompt to contain new comment")
+	}
+	// Old comment c1 should NOT be in the prompt.
+	if strings.Contains(invoker.lastPrompt, "Here is a draft plan") {
+		t.Error("expected incremental prompt to NOT contain old comment")
+	}
+	// Context prefix with title should be present.
+	if !strings.Contains(invoker.lastPrompt, "Continuing refinement of: Add user avatars") {
+		t.Error("expected prompt to contain context prefix")
 	}
 }
 
@@ -1297,5 +1302,259 @@ func TestApprovalAction_Unchanged_NoEventInvoker(t *testing.T) {
 	}
 	if updated.PlanText == "" {
 		t.Error("expected plan text to be stored")
+	}
+}
+
+func TestIterationAction_PassesMaxTurns(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Here is a draft plan", UserName: "autoralph", CreatedAt: "2026-01-01T00:00:00Z"},
+			{ID: "c2", Body: "Can you add caching?", UserName: "alice", CreatedAt: "2026-01-01T01:00:00Z"},
+		},
+		postID: "c3",
+	}
+	inv := &mockInvoker{response: "Updated plan with caching"}
+
+	action := NewIterationAction(Config{
+		Invoker:  inv,
+		Comments: client,
+		Projects: d,
+	})
+
+	if err := action(issue, d); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastMaxTurns != maxTurnsIteration {
+		t.Errorf("expected maxTurns %d, got %d", maxTurnsIteration, inv.lastMaxTurns)
+	}
+}
+
+// --- CachedCommentClient tests ---
+
+func TestCachedCommentClient_DeduplicatesFetches(t *testing.T) {
+	fetchCount := 0
+	inner := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "draft plan", UserName: "autoralph"},
+			{ID: "c2", Body: "feedback", UserName: "human"},
+		},
+	}
+
+	// Wrap inner with a counting layer.
+	counter := &fetchCountingClient{inner: inner, count: &fetchCount}
+	cached := NewCachedCommentClient(counter)
+
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: "c1"}
+
+	// IsApproval and IsIteration both fetch for the same issue.
+	IsApproval(cached)(issue)
+	IsIteration(cached)(issue)
+
+	if fetchCount != 1 {
+		t.Errorf("expected 1 fetch call (cached), got %d", fetchCount)
+	}
+}
+
+func TestCachedCommentClient_DifferentIssues_FetchesTwice(t *testing.T) {
+	fetchCount := 0
+	inner := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "comment", UserName: "user"},
+		},
+	}
+
+	counter := &fetchCountingClient{inner: inner, count: &fetchCount}
+	cached := NewCachedCommentClient(counter)
+
+	IsApproval(cached)(db.Issue{LinearIssueID: "lin-1", LastCommentID: "c1"})
+	IsApproval(cached)(db.Issue{LinearIssueID: "lin-2", LastCommentID: "c1"})
+
+	if fetchCount != 2 {
+		t.Errorf("expected 2 fetch calls (different issues), got %d", fetchCount)
+	}
+}
+
+// fetchCountingClient counts how many times FetchIssueComments is called.
+type fetchCountingClient struct {
+	inner *mockCommentClient
+	count *int
+}
+
+func (f *fetchCountingClient) FetchIssueComments(ctx context.Context, issueID string) ([]linear.Comment, error) {
+	*f.count++
+	return f.inner.FetchIssueComments(ctx, issueID)
+}
+
+func (f *fetchCountingClient) PostComment(ctx context.Context, issueID, body string) (linear.Comment, error) {
+	return f.inner.PostComment(ctx, issueID, body)
+}
+
+func (f *fetchCountingClient) PostReply(ctx context.Context, issueID, parentID, body string) (linear.Comment, error) {
+	return f.inner.PostReply(ctx, issueID, parentID, body)
+}
+
+// --- Incremental iteration tests ---
+
+func TestIterationAction_IncrementalSendsOnlyNewComments(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c5")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Initial comment", UserName: "autoralph", CreatedAt: "2026-01-01T00:00:00Z"},
+			{ID: "c2", Body: "First reply", UserName: "human", CreatedAt: "2026-01-01T01:00:00Z"},
+			{ID: "c3", Body: "AI response", UserName: "autoralph", CreatedAt: "2026-01-01T02:00:00Z"},
+			{ID: "c4", Body: "Second reply", UserName: "human", CreatedAt: "2026-01-01T03:00:00Z"},
+			{ID: "c5", Body: "AI response 2", UserName: "autoralph", CreatedAt: "2026-01-01T04:00:00Z"},
+			{ID: "c6", Body: "New feedback from user", UserName: "human", CreatedAt: "2026-01-01T05:00:00Z"},
+			{ID: "c7", Body: "More feedback", UserName: "human", CreatedAt: "2026-01-01T06:00:00Z"},
+			{ID: "c8", Body: "Final thought", UserName: "human", CreatedAt: "2026-01-01T07:00:00Z"},
+		},
+		postID: "c9",
+	}
+	inv := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  inv,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Prompt should contain only comments after c5 (c6, c7, c8).
+	if !strings.Contains(inv.lastPrompt, "New feedback from user") {
+		t.Error("expected prompt to contain comment c6")
+	}
+	if !strings.Contains(inv.lastPrompt, "More feedback") {
+		t.Error("expected prompt to contain comment c7")
+	}
+	if !strings.Contains(inv.lastPrompt, "Final thought") {
+		t.Error("expected prompt to contain comment c8")
+	}
+
+	// Prompt should NOT contain old comments (c1-c5).
+	if strings.Contains(inv.lastPrompt, "Initial comment") {
+		t.Error("expected prompt to NOT contain comment c1")
+	}
+	if strings.Contains(inv.lastPrompt, "First reply") {
+		t.Error("expected prompt to NOT contain comment c2")
+	}
+	if strings.Contains(inv.lastPrompt, "AI response 2") {
+		t.Error("expected prompt to NOT contain comment c5")
+	}
+}
+
+func TestIterationAction_IncrementalHasContextPrefix(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph", CreatedAt: "2026-01-01T00:00:00Z"},
+			{ID: "c2", Body: "Feedback", UserName: "human", CreatedAt: "2026-01-01T01:00:00Z"},
+		},
+		postID: "c3",
+	}
+	inv := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  inv,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(inv.lastPrompt, "Continuing refinement of: Add user avatars") {
+		t.Errorf("expected context prefix in prompt, got: %s", inv.lastPrompt[:min(200, len(inv.lastPrompt))])
+	}
+}
+
+func TestIterationAction_IncrementalOmitsDescription(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "refining", "c1")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "Draft plan", UserName: "autoralph", CreatedAt: "2026-01-01T00:00:00Z"},
+			{ID: "c2", Body: "Feedback", UserName: "human", CreatedAt: "2026-01-01T01:00:00Z"},
+		},
+		postID: "c3",
+	}
+	inv := &mockInvoker{response: "Updated plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  inv,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Issue description should NOT be in incremental prompt.
+	if strings.Contains(inv.lastPrompt, "Users should be able to upload profile pictures.") {
+		t.Error("expected incremental prompt to NOT contain issue description")
+	}
+}
+
+func TestIterationAction_FirstRefinementSendsAllComments(t *testing.T) {
+	d := testDB(t)
+	// LastCommentID is empty — first refinement.
+	issue := createTestIssue(t, d, "refining", "")
+
+	client := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "First comment", UserName: "human", CreatedAt: "2026-01-01T00:00:00Z"},
+			{ID: "c2", Body: "Second comment", UserName: "human", CreatedAt: "2026-01-01T01:00:00Z"},
+			{ID: "c3", Body: "Third comment", UserName: "human", CreatedAt: "2026-01-01T02:00:00Z"},
+		},
+		postID: "c4",
+	}
+	inv := &mockInvoker{response: "Initial plan"}
+
+	action := NewIterationAction(Config{
+		Invoker:  inv,
+		Comments: client,
+		Projects: d,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// All comments should be in the prompt.
+	if !strings.Contains(inv.lastPrompt, "First comment") {
+		t.Error("expected prompt to contain comment c1")
+	}
+	if !strings.Contains(inv.lastPrompt, "Second comment") {
+		t.Error("expected prompt to contain comment c2")
+	}
+	if !strings.Contains(inv.lastPrompt, "Third comment") {
+		t.Error("expected prompt to contain comment c3")
+	}
+
+	// Full description should be present.
+	if !strings.Contains(inv.lastPrompt, "Users should be able to upload profile pictures.") {
+		t.Error("expected first refinement prompt to contain issue description")
+	}
+
+	// No context prefix for first refinement.
+	if strings.Contains(inv.lastPrompt, "Continuing refinement of") {
+		t.Error("expected first refinement prompt to NOT contain context prefix")
 	}
 }

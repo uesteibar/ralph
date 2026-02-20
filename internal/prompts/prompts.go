@@ -32,33 +32,29 @@ var TemplateNames = []string{
 
 // LoopIterationData holds the context for rendering a loop iteration prompt.
 type LoopIterationData struct {
-	StoryID               string
-	StoryTitle            string
-	StoryDescription      string
-	AcceptanceCriteria    []string
-	QualityChecks         []string
-	ProgressPath          string
-	PRDPath               string
-	FeatureOverview       string
-	ArchitectureOverview  string
-	KnowledgePath         string
+	StoryID            string
+	StoryTitle         string
+	StoryDescription   string
+	AcceptanceCriteria []string
+	QualityChecks      []string
+	ProgressPath       string
+	PRDPath            string
+	KnowledgePath      string
 }
 
 // RenderLoopIteration renders the prompt for a single Ralph loop iteration.
 // If overrideDir is non-empty and contains loop_iteration.md, that file is used
 // instead of the embedded template.
-func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath, prdPath, overrideDir, featureOverview, architectureOverview, knowledgePath string) (string, error) {
+func RenderLoopIteration(story *prd.Story, qualityChecks []string, progressPath, prdPath, overrideDir, knowledgePath string) (string, error) {
 	data := LoopIterationData{
-		StoryID:              story.ID,
-		StoryTitle:           story.Title,
-		StoryDescription:     story.Description,
-		AcceptanceCriteria:   story.AcceptanceCriteria,
-		QualityChecks:        qualityChecks,
-		ProgressPath:         progressPath,
-		PRDPath:              prdPath,
-		FeatureOverview:      featureOverview,
-		ArchitectureOverview: architectureOverview,
-		KnowledgePath:        knowledgePath,
+		StoryID:            story.ID,
+		StoryTitle:         story.Title,
+		StoryDescription:   story.Description,
+		AcceptanceCriteria: story.AcceptanceCriteria,
+		QualityChecks:      qualityChecks,
+		ProgressPath:       progressPath,
+		PRDPath:            prdPath,
+		KnowledgePath:      knowledgePath,
 	}
 	return render("templates/loop_iteration.md", data, overrideDir)
 }

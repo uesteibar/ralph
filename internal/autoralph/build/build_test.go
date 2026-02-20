@@ -57,13 +57,15 @@ func createTestIssue(t *testing.T, d *db.DB, state string) db.Issue {
 // --- Mocks ---
 
 type mockInvoker struct {
-	lastPrompt string
-	response   string
-	err        error
+	lastPrompt   string
+	lastMaxTurns int
+	response     string
+	err          error
 }
 
-func (m *mockInvoker) Invoke(ctx context.Context, prompt, dir string) (string, error) {
+func (m *mockInvoker) Invoke(ctx context.Context, prompt, dir string, maxTurns int) (string, error) {
 	m.lastPrompt = prompt
+	m.lastMaxTurns = maxTurns
 	return m.response, m.err
 }
 
@@ -143,13 +145,15 @@ func validPRD() *prd.PRD {
 
 // writingInvoker simulates Claude writing the PRD to disk during invocation.
 type writingInvoker struct {
-	lastPrompt string
-	prd        *prd.PRD
-	err        error
+	lastPrompt   string
+	lastMaxTurns int
+	prd          *prd.PRD
+	err          error
 }
 
-func (m *writingInvoker) Invoke(ctx context.Context, prompt, dir string) (string, error) {
+func (m *writingInvoker) Invoke(ctx context.Context, prompt, dir string, maxTurns int) (string, error) {
 	m.lastPrompt = prompt
+	m.lastMaxTurns = maxTurns
 	if m.err != nil {
 		return "", m.err
 	}
@@ -530,6 +534,24 @@ func TestBuildAction_IncludesKnowledgePath(t *testing.T) {
 	// The knowledge path should be computed from project.LocalPath (/tmp/test)
 	if !strings.Contains(invoker.lastPrompt, ".ralph/knowledge") {
 		t.Error("expected prompt to contain knowledge path")
+	}
+}
+
+func TestBuildAction_PassesMaxTurns(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "approved")
+
+	cfg := defaultConfig()
+	cfg.Projects = d
+	inv := cfg.Invoker.(*mockInvoker)
+
+	action := NewAction(cfg)
+	if err := action(issue, d); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastMaxTurns != maxTurnsBuild {
+		t.Errorf("expected maxTurns %d, got %d", maxTurnsBuild, inv.lastMaxTurns)
 	}
 }
 

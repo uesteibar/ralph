@@ -18,6 +18,9 @@ import (
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
+// maxTurnsChecks limits the number of agentic turns for fixing checks.
+const maxTurnsChecks = 30
+
 // CheckRunFetcher fetches check runs for a given ref.
 type CheckRunFetcher interface {
 	FetchCheckRuns(ctx context.Context, owner, repo, ref string) ([]github.CheckRun, error)
@@ -166,7 +169,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("rendering fix_checks prompt: %w", err)
 		}
 		handler := eventlog.New(database, issue.ID, cfg.EventHandler, cfg.OnBuildEvent)
-		if _, err := cfg.Invoker.InvokeWithEvents(ctx, prompt, treePath, handler); err != nil {
+		if _, err := cfg.Invoker.InvokeWithEvents(ctx, prompt, treePath, maxTurnsChecks, handler); err != nil {
 			return fmt.Errorf("invoking AI: %w", err)
 		}
 
@@ -229,13 +232,26 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	}
 }
 
-// truncateLog keeps only the last maxLines lines of a log string.
+// truncateLog keeps the first headLines and last tailLines of a log string,
+// inserting a truncation marker between them when the log exceeds maxLines.
+// Head preserves early error context; tail preserves recent state.
 func truncateLog(log string, maxLines int) string {
+	const headLines = 30
+	tailLines := maxLines - headLines // 170 for maxLines=200
+
 	lines := strings.Split(log, "\n")
 	if len(lines) <= maxLines {
 		return log
 	}
-	return strings.Join(lines[len(lines)-maxLines:], "\n")
+
+	truncated := len(lines) - headLines - tailLines
+	marker := fmt.Sprintf("[... %d lines truncated ...]", truncated)
+
+	result := make([]string, 0, headLines+1+tailLines)
+	result = append(result, lines[:headLines]...)
+	result = append(result, marker)
+	result = append(result, lines[len(lines)-tailLines:]...)
+	return strings.Join(result, "\n")
 }
 
 // isNothingToCommit returns true when a git commit error indicates there was

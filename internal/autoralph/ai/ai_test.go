@@ -906,3 +906,69 @@ func TestRenderFixChecks_KnowledgeBase_HasWriteInstructions(t *testing.T) {
 		t.Error("fix_checks knowledge section should include write instructions")
 	}
 }
+
+// --- ContextPrefix tests ---
+
+func TestRenderRefineIssue_WithContextPrefix_RendersPrefix(t *testing.T) {
+	data := RefineIssueData{
+		Title:         "Add user avatars",
+		ContextPrefix: "Continuing refinement of: Add user avatars",
+		Comments: []RefineIssueComment{
+			{Author: "human", CreatedAt: "2026-01-15T10:00:00Z", Body: "Can you add caching?"},
+		},
+	}
+
+	out, err := RenderRefineIssue(data, "")
+	if err != nil {
+		t.Fatalf("RenderRefineIssue failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Continuing refinement of: Add user avatars") {
+		t.Error("output should contain context prefix")
+	}
+}
+
+func TestRenderRefineIssue_WithContextPrefix_OmitsIssueSection(t *testing.T) {
+	data := RefineIssueData{
+		Title:         "Add user avatars",
+		ContextPrefix: "Continuing refinement of: Add user avatars",
+		Comments: []RefineIssueComment{
+			{Author: "human", CreatedAt: "2026-01-15T10:00:00Z", Body: "Feedback"},
+		},
+	}
+
+	out, err := RenderRefineIssue(data, "")
+	if err != nil {
+		t.Fatalf("RenderRefineIssue failed: %v", err)
+	}
+
+	// The ## Issue section with **Title:** and **Description:** should be absent.
+	if strings.Contains(out, "**Title:**") {
+		t.Error("output should not contain Title label when ContextPrefix is set")
+	}
+	if strings.Contains(out, "**Description:**") {
+		t.Error("output should not contain Description label when ContextPrefix is set")
+	}
+}
+
+func TestRenderRefineIssue_WithoutContextPrefix_RendersIssueSection(t *testing.T) {
+	data := RefineIssueData{
+		Title:       "Add user avatars",
+		Description: "Users should be able to upload profile pictures.",
+	}
+
+	out, err := RenderRefineIssue(data, "")
+	if err != nil {
+		t.Fatalf("RenderRefineIssue failed: %v", err)
+	}
+
+	if !strings.Contains(out, "**Title:**") {
+		t.Error("output should contain Title label when no ContextPrefix")
+	}
+	if !strings.Contains(out, "**Description:**") {
+		t.Error("output should contain Description label when no ContextPrefix")
+	}
+	if strings.Contains(out, "Continuing refinement of") {
+		t.Error("output should not contain context prefix when not set")
+	}
+}

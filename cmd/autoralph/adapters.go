@@ -60,20 +60,22 @@ type claudeInvoker struct {
 	DisallowedTools []string
 }
 
-func (c *claudeInvoker) Invoke(ctx context.Context, prompt, dir string) (string, error) {
+func (c *claudeInvoker) Invoke(ctx context.Context, prompt, dir string, maxTurns int) (string, error) {
 	return claude.Invoke(ctx, claude.InvokeOpts{
 		Prompt:          prompt,
 		Dir:             dir,
 		Print:           true,
+		MaxTurns:        maxTurns,
 		DisallowedTools: c.DisallowedTools,
 	})
 }
 
-func (c *claudeInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+func (c *claudeInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
 	return claude.Invoke(ctx, claude.InvokeOpts{
 		Prompt:          prompt,
 		Dir:             dir,
 		Print:           true,
+		MaxTurns:        maxTurns,
 		DisallowedTools: c.DisallowedTools,
 		EventHandler:    handler,
 	})

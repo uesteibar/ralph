@@ -325,16 +325,33 @@ func runServe(args []string) error {
 			},
 		})
 
+		// commentCaches holds one CachedCommentClient per project so that
+		// IsApproval and IsIteration share a single FetchIssueComments call
+		// when evaluated sequentially for the same issue.
+		commentCaches := map[string]*approve.CachedCommentClient{}
+		cachedComments := func(projectID string) (*approve.CachedCommentClient, error) {
+			if cc, ok := commentCaches[projectID]; ok {
+				return cc, nil
+			}
+			lc, err := registry.mustLinear(projectID)
+			if err != nil {
+				return nil, err
+			}
+			cc := approve.NewCachedCommentClient(lc)
+			commentCaches[projectID] = cc
+			return cc, nil
+		}
+
 		// REFINING → APPROVED (approval check — must be registered BEFORE iteration)
 		sm.Register(orchestrator.Transition{
 			From: orchestrator.StateRefining,
 			To:   orchestrator.StateApproved,
 			Condition: func(issue db.Issue) bool {
-				lc, err := registry.mustLinear(issue.ProjectID)
+				cc, err := cachedComments(issue.ProjectID)
 				if err != nil {
 					return false
 				}
-				return approve.IsApproval(lc)(issue)
+				return approve.IsApproval(cc)(issue)
 			},
 			Action: func(issue db.Issue, database *db.DB) error {
 				lc, err := registry.mustLinear(issue.ProjectID)
@@ -354,11 +371,11 @@ func runServe(args []string) error {
 			From: orchestrator.StateRefining,
 			To:   orchestrator.StateRefining,
 			Condition: func(issue db.Issue) bool {
-				lc, err := registry.mustLinear(issue.ProjectID)
+				cc, err := cachedComments(issue.ProjectID)
 				if err != nil {
 					return false
 				}
-				return approve.IsIteration(lc)(issue)
+				return approve.IsIteration(cc)(issue)
 			},
 			Action: func(issue db.Issue, database *db.DB) error {
 				lc, err := registry.mustLinear(issue.ProjectID)

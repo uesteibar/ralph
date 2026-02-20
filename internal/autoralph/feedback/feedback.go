@@ -19,6 +19,9 @@ import (
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
+// maxTurnsFeedback limits the number of agentic turns for addressing feedback.
+const maxTurnsFeedback = 30
+
 // CommentFetcher fetches line-specific review comments from a GitHub PR.
 type CommentFetcher interface {
 	FetchPRComments(ctx context.Context, owner, repo string, prNumber int) ([]github.Comment, error)
@@ -188,7 +191,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		}
 
 		handler := eventlog.New(database, issue.ID, cfg.EventHandler, cfg.OnBuildEvent)
-		aiResponse, err := cfg.Invoker.InvokeWithEvents(ctx, prompt, treePath, handler)
+		aiResponse, err := cfg.Invoker.InvokeWithEvents(ctx, prompt, treePath, maxTurnsFeedback, handler)
 		if err != nil {
 			return fmt.Errorf("invoking AI: %w", err)
 		}

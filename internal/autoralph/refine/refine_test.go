@@ -45,15 +45,17 @@ func createTestIssue(t *testing.T, d *db.DB, state string) db.Issue {
 
 // mockInvoker records the prompt and returns a fixed response.
 type mockInvoker struct {
-	lastPrompt  string
-	lastHandler events.EventHandler
-	response    string
-	err         error
-	emitEvents  []events.Event // events to emit to the handler during invocation
+	lastPrompt   string
+	lastMaxTurns int
+	lastHandler  events.EventHandler
+	response     string
+	err          error
+	emitEvents   []events.Event // events to emit to the handler during invocation
 }
 
-func (m *mockInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
 	m.lastPrompt = prompt
+	m.lastMaxTurns = maxTurns
 	m.lastHandler = handler
 	for _, e := range m.emitEvents {
 		if handler != nil {
@@ -594,5 +596,27 @@ func TestRefineAction_OnBuildEventCallback(t *testing.T) {
 	}
 	if !strings.Contains(callbackCalls[0].detail, "Read") {
 		t.Errorf("expected detail to contain tool name, got %q", callbackCalls[0].detail)
+	}
+}
+
+func TestRefineAction_PassesMaxTurns(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "queued")
+
+	inv := &mockInvoker{response: "Here are my clarifying questions..."}
+	poster := &mockPoster{}
+
+	action := NewAction(Config{
+		Invoker:  inv,
+		Poster:   poster,
+		Projects: d,
+	})
+
+	if err := action(issue, d); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastMaxTurns != maxTurnsRefine {
+		t.Errorf("expected maxTurns %d, got %d", maxTurnsRefine, inv.lastMaxTurns)
 	}
 }

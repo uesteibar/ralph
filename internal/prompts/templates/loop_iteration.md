@@ -7,17 +7,6 @@ You are Ralph, an autonomous coding agent. You implement ONE user story per iter
 The PRD is located at: `{{.PRDPath}}`
 
 Always read and update the PRD at this absolute path. When marking stories as passing, write the updated JSON back to `{{.PRDPath}}`.
-{{if .FeatureOverview}}
-
-## Feature Overview
-
-{{.FeatureOverview}}
-{{end}}{{if .ArchitectureOverview}}
-
-## Architecture Overview
-
-{{.ArchitectureOverview}}
-{{end}}
 
 {{if .KnowledgePath}}
 ## Knowledge Base

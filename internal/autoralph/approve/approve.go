@@ -14,6 +14,9 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
 )
 
+// maxTurnsIteration limits the number of agentic turns for refinement iterations.
+const maxTurnsIteration = 15
+
 // approvalPattern matches "I approve this" (case-insensitive) anywhere in the comment.
 // This explicit phrase works even when the user and autoralph share the same Linear account.
 var approvalPattern = regexp.MustCompile(`(?i)\bI approve this\b`)
@@ -53,6 +56,39 @@ type Config struct {
 	Reactor      CommentReactor
 	OnBuildEvent func(issueID, detail string)
 	OverrideDir  string
+}
+
+// CachedCommentClient wraps a CommentClient and caches the most recent
+// FetchIssueComments result per issue ID. This allows IsApproval and
+// IsIteration to share a single API call when evaluated sequentially
+// for the same issue.
+type CachedCommentClient struct {
+	inner     CommentClient
+	lastID    string
+	lastCs    []linear.Comment
+	lastErr   error
+}
+
+// NewCachedCommentClient creates a CachedCommentClient wrapping the given client.
+func NewCachedCommentClient(inner CommentClient) *CachedCommentClient {
+	return &CachedCommentClient{inner: inner}
+}
+
+func (c *CachedCommentClient) FetchIssueComments(ctx context.Context, issueID string) ([]linear.Comment, error) {
+	if issueID == c.lastID {
+		return c.lastCs, c.lastErr
+	}
+	c.lastID = issueID
+	c.lastCs, c.lastErr = c.inner.FetchIssueComments(ctx, issueID)
+	return c.lastCs, c.lastErr
+}
+
+func (c *CachedCommentClient) PostComment(ctx context.Context, issueID, body string) (linear.Comment, error) {
+	return c.inner.PostComment(ctx, issueID, body)
+}
+
+func (c *CachedCommentClient) PostReply(ctx context.Context, issueID, parentID, body string) (linear.Comment, error) {
+	return c.inner.PostReply(ctx, issueID, parentID, body)
 }
 
 // HasNewComments returns true if there are comments newer than the issue's
@@ -163,9 +199,12 @@ func NewApprovalAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	}
 }
 
-// NewIterationAction returns an ActionFunc that invokes AI with the full
-// comment thread and posts the response. When the user's comment is a threaded
-// reply, the response is posted in the same thread.
+// NewIterationAction returns an ActionFunc that invokes AI with the comment
+// thread and posts the response. When LastCommentID is set (incremental),
+// only new comments are sent with a brief context prefix. When LastCommentID
+// is empty (first refinement), the full description and all comments are sent.
+// When the user's comment is a threaded reply, the response is posted in the
+// same thread.
 func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	return func(issue db.Issue, database *db.DB) error {
 		project, err := cfg.Projects.GetProject(issue.ProjectID)
@@ -202,8 +241,19 @@ func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error 
 		}
 		_ = database.LogActivity(issue.ID, "reply_received", "", "", fmt.Sprintf("Reply from %s — invoking AI", replyAuthor))
 
+		// Determine whether this is an incremental iteration (LastCommentID set)
+		// or the first refinement (no LastCommentID). Incremental iterations
+		// only send new comments to reduce token usage.
+		incremental := issue.LastCommentID != ""
+		var promptComments []linear.Comment
+		if incremental {
+			promptComments = newComments
+		} else {
+			promptComments = cs
+		}
+
 		var aiComments []ai.RefineIssueComment
-		for _, c := range cs {
+		for _, c := range promptComments {
 			aiComments = append(aiComments, ai.RefineIssueComment{
 				Author:    c.UserName,
 				CreatedAt: c.CreatedAt,
@@ -211,17 +261,23 @@ func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error 
 			})
 		}
 
-		prompt, err := ai.RenderRefineIssue(ai.RefineIssueData{
-			Title:       issue.Title,
-			Description: issue.Description,
-			Comments:    aiComments,
-		}, cfg.OverrideDir)
+		data := ai.RefineIssueData{
+			Title:    issue.Title,
+			Comments: aiComments,
+		}
+		if incremental {
+			data.ContextPrefix = fmt.Sprintf("Continuing refinement of: %s", issue.Title)
+		} else {
+			data.Description = issue.Description
+		}
+
+		prompt, err := ai.RenderRefineIssue(data, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering refine prompt: %w", err)
 		}
 
 		handler := eventlog.New(database, issue.ID, nil, cfg.OnBuildEvent)
-		response, err := cfg.Invoker.InvokeWithEvents(context.Background(), prompt, project.LocalPath, handler)
+		response, err := cfg.Invoker.InvokeWithEvents(context.Background(), prompt, project.LocalPath, maxTurnsIteration, handler)
 		if err != nil {
 			return fmt.Errorf("invoking AI: %w", err)
 		}

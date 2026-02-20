@@ -41,6 +41,9 @@ type RefineIssueData struct {
 	Description   string
 	Comments      []RefineIssueComment
 	KnowledgePath string
+	// ContextPrefix is set for incremental iterations (e.g. "Continuing refinement of: <title>").
+	// When set, the full description is omitted and only new comments are included.
+	ContextPrefix string
 }
 
 // GeneratePRDData holds the context for rendering the generate_prd prompt.

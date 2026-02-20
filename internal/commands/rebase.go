@@ -111,7 +111,7 @@ func resolveConflicts(ctx context.Context, r *shell.Runner, wc workspace.WorkCon
 	_, err = claude.Invoke(ctx, claude.InvokeOpts{
 		Prompt:   prompt,
 		Print:    true,
-		MaxTurns: 30,
+		MaxTurns: 20,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Claude session ended with error: %v\n", err)

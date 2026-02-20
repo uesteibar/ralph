@@ -10,14 +10,16 @@ import (
 
 // mockEventInvoker implements EventInvoker for testing.
 type mockEventInvoker struct {
-	capturedHandler events.EventHandler
-	capturedPrompt  string
-	capturedDir     string
+	capturedHandler  events.EventHandler
+	capturedPrompt   string
+	capturedDir      string
+	capturedMaxTurns int
 }
 
-func (m *mockEventInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+func (m *mockEventInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
 	m.capturedPrompt = prompt
 	m.capturedDir = dir
+	m.capturedMaxTurns = maxTurns
 	m.capturedHandler = handler
 	return "mock response", nil
 }
@@ -42,7 +44,7 @@ func TestEventInvoker_PassesHandlerThrough(t *testing.T) {
 	mock := &mockEventInvoker{}
 	handler := &mockHandler{}
 
-	result, err := mock.InvokeWithEvents(context.Background(), "test prompt", "/work/dir", handler)
+	result, err := mock.InvokeWithEvents(context.Background(), "test prompt", "/work/dir", 10, handler)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -55,6 +57,9 @@ func TestEventInvoker_PassesHandlerThrough(t *testing.T) {
 	if mock.capturedDir != "/work/dir" {
 		t.Errorf("expected dir '/work/dir', got %q", mock.capturedDir)
 	}
+	if mock.capturedMaxTurns != 10 {
+		t.Errorf("expected maxTurns 10, got %d", mock.capturedMaxTurns)
+	}
 	if mock.capturedHandler != handler {
 		t.Error("expected handler to be passed through")
 	}
@@ -63,7 +68,7 @@ func TestEventInvoker_PassesHandlerThrough(t *testing.T) {
 func TestEventInvoker_NilHandlerAccepted(t *testing.T) {
 	mock := &mockEventInvoker{}
 
-	_, err := mock.InvokeWithEvents(context.Background(), "prompt", "/dir", nil)
+	_, err := mock.InvokeWithEvents(context.Background(), "prompt", "/dir", 5, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

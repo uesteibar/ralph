@@ -10,10 +10,14 @@ import (
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
+// maxTurnsPR limits the number of agentic turns for PR description generation.
+const maxTurnsPR = 10
+
 // Invoker invokes an AI model with a prompt and returns the response.
 // Dir sets the working directory for the AI process.
+// MaxTurns limits the number of agentic turns; 0 means unlimited.
 type Invoker interface {
-	Invoke(ctx context.Context, prompt, dir string) (string, error)
+	Invoke(ctx context.Context, prompt, dir string, maxTurns int) (string, error)
 }
 
 // GitPusher pushes a branch to the remote from a working directory.
@@ -133,6 +137,8 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		diffStats, err := cfg.Diff.DiffStats(ctx, treePath, "origin/"+defaultBase)
 		if err != nil {
 			diffStats = "(diff stats unavailable)"
+		} else {
+			diffStats = capDiffStats(diffStats, 50)
 		}
 
 		prdPath := workspace.PRDPathForWorkspace(project.LocalPath, issue.WorkspaceName)
@@ -159,7 +165,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("rendering PR prompt: %w", err)
 		}
 
-		aiOutput, err := cfg.Invoker.Invoke(ctx, prompt, treePath)
+		aiOutput, err := cfg.Invoker.Invoke(ctx, prompt, treePath, maxTurnsPR)
 		if err != nil {
 			return fmt.Errorf("invoking AI for PR description: %w", err)
 		}
@@ -230,6 +236,30 @@ func parsePROutput(output string) (string, string) {
 		body = strings.TrimSpace(parts[1])
 	}
 	return title, body
+}
+
+// capDiffStats caps the diff stats output to maxEntries file entries plus the
+// final summary line. If there are more entries, a marker is inserted.
+func capDiffStats(stats string, maxEntries int) string {
+	if stats == "" {
+		return stats
+	}
+	lines := strings.Split(stats, "\n")
+	// The last line is the summary (e.g. " 80 files changed, ...").
+	// Everything before it is a file entry.
+	if len(lines) <= maxEntries+1 {
+		return stats
+	}
+
+	summary := lines[len(lines)-1]
+	omitted := len(lines) - 1 - maxEntries
+	marker := fmt.Sprintf("[... %d file entries omitted ...]", omitted)
+
+	result := make([]string, 0, maxEntries+2)
+	result = append(result, lines[:maxEntries]...)
+	result = append(result, marker)
+	result = append(result, summary)
+	return strings.Join(result, "\n")
 }
 
 // pushWithRebase attempts to push the branch. If push fails and a Rebaser is

@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,16 +71,18 @@ func createTestIssue(t *testing.T, d *db.DB, project db.Project, attempts int) d
 // --- Mocks ---
 
 type mockInvoker struct {
-	lastPrompt  string
-	lastDir     string
-	lastHandler events.EventHandler
-	response    string
-	err         error
+	lastPrompt   string
+	lastDir      string
+	lastMaxTurns int
+	lastHandler  events.EventHandler
+	response     string
+	err          error
 }
 
-func (m *mockInvoker) InvokeWithEvents(_ context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(_ context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
 	m.lastPrompt = prompt
 	m.lastDir = dir
+	m.lastMaxTurns = maxTurns
 	m.lastHandler = handler
 	return m.response, m.err
 }
@@ -442,10 +445,10 @@ func TestNewAction_TruncatesLogs(t *testing.T) {
 	issue := createTestIssue(t, d, project, 0)
 	cfg, inv, _, logFetcher, _, _, _ := defaultMocks(project)
 
-	// Create a log with more than 200 lines
+	// Create a log with more than 200 lines, with identifiable early and late content
 	var lines []string
 	for i := 0; i < 300; i++ {
-		lines = append(lines, "log line")
+		lines = append(lines, fmt.Sprintf("log-line-%d", i))
 	}
 	logFetcher.logs = map[int64][]byte{
 		2: []byte(strings.Join(lines, "\n")),
@@ -458,10 +461,27 @@ func TestNewAction_TruncatesLogs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// The prompt should not contain all 300 lines — it should be truncated to 200
-	lineCount := strings.Count(inv.lastPrompt, "log line")
-	if lineCount > 200 {
-		t.Errorf("expected at most 200 'log line' occurrences, got %d", lineCount)
+	// Early lines (first 30) should be present
+	if !strings.Contains(inv.lastPrompt, "log-line-0") {
+		t.Error("expected early log line (line 0) in prompt")
+	}
+	if !strings.Contains(inv.lastPrompt, "log-line-29") {
+		t.Error("expected last early log line (line 29) in prompt")
+	}
+
+	// Middle lines should be truncated
+	if strings.Contains(inv.lastPrompt, "log-line-50") {
+		t.Error("expected middle log line (line 50) to be truncated")
+	}
+
+	// Late lines (last 170) should be present
+	if !strings.Contains(inv.lastPrompt, "log-line-299") {
+		t.Error("expected last log line (line 299) in prompt")
+	}
+
+	// Truncation marker should be present
+	if !strings.Contains(inv.lastPrompt, "truncated") {
+		t.Error("expected truncation marker in prompt")
 	}
 }
 
@@ -616,22 +636,84 @@ func TestNewAction_LoopExhaustion_PostCommentError_StillPauses(t *testing.T) {
 
 func TestTruncateLog_UnderLimit(t *testing.T) {
 	log := "line1\nline2\nline3"
-	result := truncateLog(log, 500)
+	result := truncateLog(log, 200)
 	if result != log {
 		t.Errorf("expected unchanged log, got %q", result)
 	}
 }
 
-func TestTruncateLog_OverLimit(t *testing.T) {
+func TestTruncateLog_ExactlyAtLimit(t *testing.T) {
 	var lines []string
-	for i := 0; i < 600; i++ {
-		lines = append(lines, "line")
+	for i := 0; i < 200; i++ {
+		lines = append(lines, fmt.Sprintf("line-%d", i))
 	}
 	log := strings.Join(lines, "\n")
-	result := truncateLog(log, 500)
+	result := truncateLog(log, 200)
+	if result != log {
+		t.Error("expected 200-line log returned unchanged")
+	}
+}
+
+func TestTruncateLog_OverLimit_KeepsFirstAndLast(t *testing.T) {
+	var lines []string
+	for i := 0; i < 500; i++ {
+		lines = append(lines, fmt.Sprintf("line-%d", i))
+	}
+	log := strings.Join(lines, "\n")
+	result := truncateLog(log, 200)
+
 	resultLines := strings.Split(result, "\n")
-	if len(resultLines) != 500 {
-		t.Errorf("expected 500 lines, got %d", len(resultLines))
+
+	// First 30 lines preserved
+	for i := 0; i < 30; i++ {
+		expected := fmt.Sprintf("line-%d", i)
+		if resultLines[i] != expected {
+			t.Errorf("line %d: expected %q, got %q", i, expected, resultLines[i])
+		}
+	}
+
+	// Truncation marker present at line 30
+	if !strings.Contains(resultLines[30], "... 300 lines truncated ...") {
+		t.Errorf("expected truncation marker, got %q", resultLines[30])
+	}
+
+	// Last 170 lines preserved (lines 330-499)
+	for i := 0; i < 170; i++ {
+		expected := fmt.Sprintf("line-%d", 330+i)
+		actual := resultLines[31+i]
+		if actual != expected {
+			t.Errorf("tail line %d: expected %q, got %q", i, expected, actual)
+		}
+	}
+
+	// Total: 30 head + 1 marker + 170 tail = 201
+	if len(resultLines) != 201 {
+		t.Errorf("expected 201 lines total, got %d", len(resultLines))
+	}
+}
+
+func TestTruncateLog_PreservesEarlyErrors(t *testing.T) {
+	var lines []string
+	for i := 0; i < 500; i++ {
+		if i == 5 {
+			lines = append(lines, "EARLY_ERROR_SENTINEL")
+		} else if i == 490 {
+			lines = append(lines, "RECENT_STATE_SENTINEL")
+		} else {
+			lines = append(lines, fmt.Sprintf("line-%d", i))
+		}
+	}
+	log := strings.Join(lines, "\n")
+	result := truncateLog(log, 200)
+
+	if !strings.Contains(result, "EARLY_ERROR_SENTINEL") {
+		t.Error("expected early error sentinel in first 30 lines")
+	}
+	if !strings.Contains(result, "RECENT_STATE_SENTINEL") {
+		t.Error("expected recent state sentinel in last 170 lines")
+	}
+	if !strings.Contains(result, "... ") && !strings.Contains(result, "truncated") {
+		t.Error("expected truncation marker")
 	}
 }
 
@@ -941,9 +1023,25 @@ type orderTrackingInvoker struct {
 	orderLog *[]string
 }
 
-func (o *orderTrackingInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+func (o *orderTrackingInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
 	*o.orderLog = append(*o.orderLog, "invoke")
-	return o.inner.InvokeWithEvents(ctx, prompt, dir, handler)
+	return o.inner.InvokeWithEvents(ctx, prompt, dir, maxTurns, handler)
+}
+
+func TestNewAction_PassesMaxTurns(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, inv, _, _, _, _, _ := defaultMocks(project)
+
+	action := NewAction(cfg)
+	if err := action(issue, d); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastMaxTurns != maxTurnsChecks {
+		t.Errorf("expected maxTurns %d, got %d", maxTurnsChecks, inv.lastMaxTurns)
+	}
 }
 
 // Suppress unused import warning for ai package

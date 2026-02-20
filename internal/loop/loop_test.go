@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1786,5 +1787,317 @@ func TestRun_EmitsWarningLogOnGitCheckFailure(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected warning LogMessage about git status check failure")
+	}
+}
+
+func TestRun_StoryInvocationUsesMaxTurns50(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var capturedMaxTurns int
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		capturedMaxTurns = opts.maxTurns
+		testPRD.UserStories[0].Passes = true
+		prd.Write(prdPath, testPRD)
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	if capturedMaxTurns != 50 {
+		t.Errorf("expected maxTurns=50 for story invocation, got %d", capturedMaxTurns)
+	}
+}
+
+func TestRun_QAVerificationUsesMaxTurns30(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+		IntegrationTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var capturedMaxTurns int
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		if opts.isQAVerification {
+			capturedMaxTurns = opts.maxTurns
+			testPRD.IntegrationTests[0].Passes = true
+			prd.Write(prdPath, testPRD)
+		}
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	if capturedMaxTurns != 30 {
+		t.Errorf("expected maxTurns=30 for QA verification, got %d", capturedMaxTurns)
+	}
+}
+
+func TestRun_QAFixUsesMaxTurns30(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+		IntegrationTests: []prd.IntegrationTest{
+			{ID: "IT-001", Description: "Test 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var capturedMaxTurns int
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		if opts.isQAFix {
+			capturedMaxTurns = opts.maxTurns
+			testPRD.IntegrationTests[0].Passes = true
+			prd.Write(prdPath, testPRD)
+		}
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	if capturedMaxTurns != 30 {
+		t.Errorf("expected maxTurns=30 for QA fix, got %d", capturedMaxTurns)
+	}
+}
+
+func TestRun_WritesProgressViewFile(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	// Write a progress file with 10 entries
+	writeProgressWithEntries(t, progressPath, 10)
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	var capturedPrompt string
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		capturedPrompt = opts.prompt
+		testPRD.UserStories[0].Passes = true
+		prd.Write(prdPath, testPRD)
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Verify .progress-view file was created
+	viewPath := filepath.Join(dir, ".progress-view")
+	if _, err := os.Stat(viewPath); os.IsNotExist(err) {
+		t.Error("expected .progress-view file to be created")
+	}
+
+	// Verify the prompt references the view file path, not the original
+	if !contains(capturedPrompt, ".progress-view") {
+		t.Error("expected prompt to reference .progress-view path")
+	}
+
+	// Verify the original progress file remains unmodified (still has 10 entries)
+	originalContent, err := os.ReadFile(progressPath)
+	if err != nil {
+		t.Fatalf("reading original progress file: %v", err)
+	}
+	// Count ## entries (excluding ## Codebase Patterns header)
+	entryCount := 0
+	for _, line := range strings.Split(string(originalContent), "\n") {
+		if strings.HasPrefix(line, "## 2026") {
+			entryCount++
+		}
+	}
+	if entryCount != 10 {
+		t.Errorf("expected original file to have 10 entries, got %d", entryCount)
+	}
+}
+
+func TestRun_ProgressViewContainsCappedEntries(t *testing.T) {
+	defer mockGitClean()()
+
+	dir := t.TempDir()
+	prdPath := filepath.Join(dir, "prd.json")
+	progressPath := filepath.Join(dir, "progress.txt")
+
+	writeProgressWithEntries(t, progressPath, 10)
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		BranchName:  "test/branch",
+		Description: "Test project",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: false},
+		},
+	}
+
+	if err := prd.Write(prdPath, testPRD); err != nil {
+		t.Fatalf("writing test PRD: %v", err)
+	}
+
+	origInvokeFn := invokeClaudeFn
+	defer func() { invokeClaudeFn = origInvokeFn }()
+
+	invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) {
+		testPRD.UserStories[0].Passes = true
+		prd.Write(prdPath, testPRD)
+		return "", nil
+	}
+
+	err := Run(context.Background(), Config{
+		MaxIterations: 5,
+		WorkDir:       dir,
+		PRDPath:       prdPath,
+		ProgressPath:  progressPath,
+		QualityChecks: []string{"go test ./..."},
+	})
+
+	if err != nil {
+		t.Errorf("Run returned error: %v", err)
+	}
+
+	// Read the view file and verify it has only the last 5 entries
+	viewPath := filepath.Join(dir, ".progress-view")
+	viewContent, err := os.ReadFile(viewPath)
+	if err != nil {
+		t.Fatalf("reading view file: %v", err)
+	}
+
+	viewStr := string(viewContent)
+
+	// Should contain last 5 entries (S6-S10)
+	for i := 6; i <= 10; i++ {
+		marker := fmt.Sprintf("## 2026-02-20 - S%d\n", i)
+		if !strings.Contains(viewStr, marker) {
+			t.Errorf("expected view to contain %q", marker)
+		}
+	}
+
+	// Should NOT contain first 5 entries (S1-S5)
+	for i := 1; i <= 5; i++ {
+		marker := fmt.Sprintf("## 2026-02-20 - S%d\n", i)
+		if strings.Contains(viewStr, marker) {
+			t.Errorf("expected view to NOT contain %q", marker)
+		}
+	}
+}
+
+func writeProgressWithEntries(t *testing.T, path string, n int) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("# Ralph Progress Log\nStarted: 2026-02-20T15:33:09+01:00\n---\n\n")
+	b.WriteString("## Codebase Patterns\n\n- Pattern one\n\n---\n\n")
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, "## 2026-02-20 - S%d\n", i)
+		fmt.Fprintf(&b, "- Implemented story S%d\n", i)
+		b.WriteString("---\n\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
+		t.Fatalf("writing progress file: %v", err)
 	}
 }

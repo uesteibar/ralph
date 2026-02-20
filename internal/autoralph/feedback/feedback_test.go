@@ -67,14 +67,16 @@ func createTestIssue(t *testing.T, d *db.DB, project db.Project) db.Issue {
 // --- Mocks ---
 
 type mockInvoker struct {
-	lastPrompt  string
-	lastHandler events.EventHandler
-	response    string
-	err         error
+	lastPrompt   string
+	lastMaxTurns int
+	lastHandler  events.EventHandler
+	response     string
+	err          error
 }
 
-func (m *mockInvoker) InvokeWithEvents(_ context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(_ context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
 	m.lastPrompt = prompt
+	m.lastMaxTurns = maxTurns
 	m.lastHandler = handler
 	return m.response, m.err
 }
@@ -953,9 +955,9 @@ type orderTrackingInvoker struct {
 	orderLog *[]string
 }
 
-func (o *orderTrackingInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, handler events.EventHandler) (string, error) {
+func (o *orderTrackingInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
 	*o.orderLog = append(*o.orderLog, "invoke")
-	return o.inner.InvokeWithEvents(ctx, prompt, dir, handler)
+	return o.inner.InvokeWithEvents(ctx, prompt, dir, maxTurns, handler)
 }
 
 type orderTrackingReactor struct {
@@ -1771,6 +1773,22 @@ func TestBuildReplyForComment_NoCommit_PathSpecific_ExtractsSection(t *testing.T
 	got := buildReplyForComment(aiResponse, "main.go", "")
 	if !strings.Contains(got, "already handles this case") {
 		t.Errorf("expected AI explanation for file-specific feedback, got: %s", got)
+	}
+}
+
+func TestNewAction_PassesMaxTurns(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, _ := defaultMocks(project)
+
+	action := NewAction(cfg)
+	if err := action(issue, d); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastMaxTurns != maxTurnsFeedback {
+		t.Errorf("expected maxTurns %d, got %d", maxTurnsFeedback, inv.lastMaxTurns)
 	}
 }
 

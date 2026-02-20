@@ -13,12 +13,18 @@ import (
 	"github.com/uesteibar/ralph/internal/claude"
 	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/prd"
+	"github.com/uesteibar/ralph/internal/progress"
 	"github.com/uesteibar/ralph/internal/prompts"
 )
 
 const (
 	DefaultMaxIterations = 20
 	iterationDelay       = 2 * time.Second
+
+	// MaxTurns limits for Claude invocations.
+	storyMaxTurns    = 50
+	qaVerifyMaxTurns = 30
+	qaFixMaxTurns    = 30
 )
 
 // invokeOpts holds parameters for Claude invocation (used for testability).
@@ -26,6 +32,7 @@ type invokeOpts struct {
 	prompt           string
 	dir              string
 	verbose          bool
+	maxTurns         int
 	eventHandler     events.EventHandler
 	isQAVerification bool
 	isQAFix          bool
@@ -38,6 +45,7 @@ var invokeClaudeFn = func(ctx context.Context, opts invokeOpts) (string, error) 
 		Dir:          opts.dir,
 		Print:        true,
 		Verbose:      opts.verbose,
+		MaxTurns:     opts.maxTurns,
 		EventHandler: opts.eventHandler,
 	})
 }
@@ -243,7 +251,8 @@ func Run(ctx context.Context, cfg Config) error {
 			Title:   story.Title,
 		})
 
-		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, cfg.ProgressPath, cfg.PRDPath, cfg.PromptsDir, prd.RawJSONToString(currentPRD.FeatureOverview), prd.RawJSONToString(currentPRD.ArchitectureOverview), cfg.KnowledgePath)
+		viewPath := writeProgressView(cfg.ProgressPath)
+		prompt, err := prompts.RenderLoopIteration(story, cfg.QualityChecks, viewPath, cfg.PRDPath, cfg.PromptsDir, cfg.KnowledgePath)
 		if err != nil {
 			return fmt.Errorf("rendering prompt for %s: %w", story.ID, err)
 		}
@@ -252,6 +261,7 @@ func Run(ctx context.Context, cfg Config) error {
 			prompt:       prompt,
 			dir:          cfg.WorkDir,
 			verbose:      cfg.Verbose,
+			maxTurns:     storyMaxTurns,
 			eventHandler: cfg.EventHandler,
 		})
 		if err != nil {
@@ -314,9 +324,10 @@ func Run(ctx context.Context, cfg Config) error {
 
 // runQAVerification invokes the QA verification agent with the qa_verification.md prompt.
 func runQAVerification(ctx context.Context, cfg Config) error {
+	viewPath := writeProgressView(cfg.ProgressPath)
 	prompt, err := prompts.RenderQAVerification(prompts.QAVerificationData{
 		PRDPath:       cfg.PRDPath,
-		ProgressPath:  cfg.ProgressPath,
+		ProgressPath:  viewPath,
 		QualityChecks: cfg.QualityChecks,
 		KnowledgePath: cfg.KnowledgePath,
 	}, cfg.PromptsDir)
@@ -328,6 +339,7 @@ func runQAVerification(ctx context.Context, cfg Config) error {
 		prompt:           prompt,
 		dir:              cfg.WorkDir,
 		verbose:          cfg.Verbose,
+		maxTurns:         qaVerifyMaxTurns,
 		eventHandler:     cfg.EventHandler,
 		isQAVerification: true,
 	})
@@ -336,9 +348,10 @@ func runQAVerification(ctx context.Context, cfg Config) error {
 
 // runQAFix invokes the QA fix agent with the qa_fix.md prompt to resolve failing integration tests.
 func runQAFix(ctx context.Context, cfg Config, failedTests []prd.IntegrationTest) error {
+	viewPath := writeProgressView(cfg.ProgressPath)
 	prompt, err := prompts.RenderQAFix(prompts.QAFixData{
 		PRDPath:       cfg.PRDPath,
-		ProgressPath:  cfg.ProgressPath,
+		ProgressPath:  viewPath,
 		QualityChecks: cfg.QualityChecks,
 		FailedTests:   failedTests,
 		KnowledgePath: cfg.KnowledgePath,
@@ -351,6 +364,7 @@ func runQAFix(ctx context.Context, cfg Config, failedTests []prd.IntegrationTest
 		prompt:       prompt,
 		dir:          cfg.WorkDir,
 		verbose:      cfg.Verbose,
+		maxTurns:     qaFixMaxTurns,
 		eventHandler: cfg.EventHandler,
 		isQAFix:      true,
 	})
@@ -365,4 +379,33 @@ func ensureProgressFile(path string) {
 			time.Now().Format(time.RFC3339))
 		os.WriteFile(path, []byte(header), 0644)
 	}
+}
+
+// progressViewPath returns the path for the capped progress view file,
+// placed alongside the original progress file.
+func progressViewPath(progressPath string) string {
+	dir := filepath.Dir(progressPath)
+	return filepath.Join(dir, ".progress-view")
+}
+
+// writeProgressView reads the original progress file, caps it, and writes
+// the capped version to a view file. Returns the view file path. If the
+// progress path is empty or reading fails, returns the original path.
+func writeProgressView(progressPath string) string {
+	if progressPath == "" {
+		return ""
+	}
+
+	content, err := os.ReadFile(progressPath)
+	if err != nil {
+		return progressPath
+	}
+
+	capped := progress.CapProgressEntries(string(content), progress.DefaultMaxEntries)
+	viewPath := progressViewPath(progressPath)
+	if err := os.WriteFile(viewPath, []byte(capped), 0644); err != nil {
+		return progressPath
+	}
+
+	return viewPath
 }

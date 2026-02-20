@@ -10,6 +10,7 @@ import (
 	"github.com/uesteibar/ralph/internal/claude"
 	"github.com/uesteibar/ralph/internal/knowledge"
 	"github.com/uesteibar/ralph/internal/prd"
+	"github.com/uesteibar/ralph/internal/progress"
 	"github.com/uesteibar/ralph/internal/prompts"
 	"github.com/uesteibar/ralph/internal/shell"
 )
@@ -48,10 +49,10 @@ func Chat(args []string) error {
 		data.Config = string(configYAML)
 	}
 
-	// Read progress log from workspace (or repo root for base)
-	progress, err := os.ReadFile(wc.ProgressPath)
+	// Read progress log from workspace (or repo root for base), capped to recent entries
+	progressContent, err := os.ReadFile(wc.ProgressPath)
 	if err == nil {
-		data.Progress = string(progress)
+		data.Progress = progress.CapProgressEntries(string(progressContent), progress.DefaultMaxEntries)
 	}
 
 	// Read recent git commits from workspace workDir

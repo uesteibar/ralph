@@ -15,10 +15,14 @@ import (
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
+// maxTurnsBuild limits the number of agentic turns for PRD generation.
+const maxTurnsBuild = 25
+
 // Invoker invokes an AI model with a prompt and returns the response.
 // Dir sets the working directory for the AI process.
+// MaxTurns limits the number of agentic turns; 0 means unlimited.
 type Invoker interface {
-	Invoke(ctx context.Context, prompt, dir string) (string, error)
+	Invoke(ctx context.Context, prompt, dir string, maxTurns int) (string, error)
 }
 
 // WorkspaceCreator creates a Ralph workspace. Wraps workspace.CreateWorkspace
@@ -132,7 +136,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 				return fmt.Errorf("rendering PRD prompt: %w", err)
 			}
 
-			if _, err := cfg.Invoker.Invoke(context.Background(), prompt, project.LocalPath); err != nil {
+			if _, err := cfg.Invoker.Invoke(context.Background(), prompt, project.LocalPath, maxTurnsBuild); err != nil {
 				return fmt.Errorf("invoking AI for PRD generation: %w", err)
 			}
 		}
