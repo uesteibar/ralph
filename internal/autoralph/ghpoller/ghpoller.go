@@ -33,12 +33,18 @@ type PRFetcher interface {
 	FetchPR(ctx context.Context, owner, repo string, prNumber int) (github.PR, error)
 }
 
+// TimelineFetcher fetches PR timeline events from GitHub.
+type TimelineFetcher interface {
+	FetchTimeline(ctx context.Context, owner, repo string, prNumber int) ([]github.TimelineEvent, error)
+}
+
 // GitHubClient combines all GitHub interaction interfaces needed by the poller.
 type GitHubClient interface {
 	ReviewFetcher
 	MergeChecker
 	CheckRunFetcher
 	PRFetcher
+	TimelineFetcher
 }
 
 // ProjectInfo holds the data the GitHub poller needs for each project.
@@ -220,6 +226,18 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 		return
 	}
 
+	// Compute delegated trusted reviewers from timeline when TrustedUserID is set.
+	var delegated map[int64]bool
+	if proj.TrustedUserID != 0 {
+		events, err := proj.GitHub.FetchTimeline(ctx, proj.GithubOwner, proj.GithubRepo, issue.PRNumber)
+		if err != nil {
+			p.logger.Warn("fetching PR timeline", "issue_id", issue.ID, "pr", issue.PRNumber, "error", err)
+			// Fall back to direct user ID check only (empty delegated map).
+		} else {
+			delegated = trustedReviewerIDs(events, proj.TrustedUserID)
+		}
+	}
+
 	// Fetch reviews and check for new ones.
 	reviews, err := proj.GitHub.FetchPRReviews(ctx, proj.GithubOwner, proj.GithubRepo, issue.PRNumber)
 	if err != nil {
@@ -242,7 +260,7 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 			if isBot(r.User) {
 				continue
 			}
-			if r.UserID != proj.TrustedUserID && (r.State == "CHANGES_REQUESTED" || r.State == "COMMENTED") {
+			if !isTrustedReviewer(r.UserID, proj.TrustedUserID, delegated) && (r.State == "CHANGES_REQUESTED" || r.State == "COMMENTED") {
 				p.db.LogActivity(issue.ID, "untrusted_feedback_skipped", issue.State, issue.State,
 					fmt.Sprintf("Skipped feedback from untrusted user %s (ID %d) on PR #%d", r.User, r.UserID, issue.PRNumber))
 			}
@@ -250,7 +268,7 @@ func (p *Poller) checkIssue(ctx context.Context, proj ProjectInfo, issue db.Issu
 	}
 
 	// Check if any new review has actionable feedback (changes requested or comments).
-	if hasFeedback(newReviews, proj.TrustedUserID) {
+	if hasFeedback(newReviews, proj.TrustedUserID, delegated) {
 		p.transitionIssue(issue, string(orchestrator.StateAddressingFeedback), "changes_requested",
 			fmt.Sprintf("Feedback received on PR #%d", issue.PRNumber))
 		return
@@ -317,19 +335,50 @@ func reviewsAfter(reviews []github.Review, lastSeenID string) []github.Review {
 	return after
 }
 
+// trustedReviewerIDs computes the net set of reviewer IDs that the trusted user
+// has explicitly requested reviews from. review_requested adds a reviewer,
+// review_request_removed removes them. Only events where RequesterID matches
+// trustedUserID are considered.
+func trustedReviewerIDs(events []github.TimelineEvent, trustedUserID int64) map[int64]bool {
+	trusted := make(map[int64]bool)
+	for _, ev := range events {
+		if ev.RequesterID != trustedUserID {
+			continue
+		}
+		switch ev.Event {
+		case "review_requested":
+			trusted[ev.ReviewerID] = true
+		case "review_request_removed":
+			delete(trusted, ev.ReviewerID)
+		}
+	}
+	return trusted
+}
+
+// isTrustedReviewer returns true if the reviewer should be trusted given
+// the current trust configuration. When trustedUserID is 0, all non-bot
+// reviewers are trusted (backward compatible).
+func isTrustedReviewer(userID, trustedUserID int64, delegated map[int64]bool) bool {
+	if trustedUserID == 0 {
+		return true
+	}
+	return userID == trustedUserID || delegated[userID]
+}
+
 // hasFeedback returns true if any review has actionable feedback — either
 // an explicit "CHANGES_REQUESTED" or a "COMMENTED" review (which means the
 // reviewer left inline comments without formally requesting changes).
 // Bot reviews (e.g. from autoralph itself replying to comments) are ignored
 // so they don't trigger a new feedback cycle.
-// When trustedUserID is non-zero, only reviews from that user ID are considered.
+// When trustedUserID is non-zero, only reviews from that user ID or from
+// delegated trusted reviewers are considered.
 // When trustedUserID is 0, all non-bot reviews are trusted (backward compatible).
-func hasFeedback(reviews []github.Review, trustedUserID int64) bool {
+func hasFeedback(reviews []github.Review, trustedUserID int64, delegated map[int64]bool) bool {
 	for _, r := range reviews {
 		if isBot(r.User) {
 			continue
 		}
-		if trustedUserID != 0 && r.UserID != trustedUserID {
+		if !isTrustedReviewer(r.UserID, trustedUserID, delegated) {
 			continue
 		}
 		if r.State == "CHANGES_REQUESTED" || r.State == "COMMENTED" {

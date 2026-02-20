@@ -360,6 +360,9 @@ func (m *mockGitHubClient) FetchCheckRuns(_ context.Context, _, _, _ string) ([]
 func (m *mockGitHubClient) FetchPR(_ context.Context, _, _ string, _ int) (github.PR, error) {
 	return m.pr, nil
 }
+func (m *mockGitHubClient) FetchTimeline(_ context.Context, _, _ string, _ int) ([]github.TimelineEvent, error) {
+	return nil, nil
+}
 func (m *mockGitHubClient) FetchCheckRunLog(_ context.Context, _, _ string, id int64) ([]byte, error) {
 	if m.logs != nil {
 		return m.logs[id], nil
