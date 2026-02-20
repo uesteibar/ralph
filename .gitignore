@@ -14,4 +14,10 @@ docs/book/
 !.claude/commands/
 .mcp.json
 
+.cursor/*
+!.cursor/skills/
+!.cursor/commands/
+!.cursor/rules
+!.cursor/subagents
+
 node_modules/

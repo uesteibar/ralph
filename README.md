@@ -189,6 +189,8 @@ ralph overview               # See progress across all workspaces
 - **git** (for worktree operations)
 - **bash** or **zsh** (for shell integration)
 
+For **development** (contributing to this repo), you also need: **Node.js 22+** (web dashboard, E2E tests), **just** (task runner), **mdbook** (docs), and **shellcheck** (installer scripts). See [Development](#development) for using [mise](https://mise.jdx.dev/) to install all tools.
+
 ---
 
 ## Installation
@@ -210,7 +212,8 @@ Or clone and build:
 ```bash
 git clone https://github.com/uesteibar/ralph.git
 cd ralph
-just install    # requires https://github.com/casey/just
+mise install    # Install Go, just, etc. (see Development)
+just install   # Install ralph to $GOPATH/bin
 ```
 
 ### AutoRalph
@@ -224,6 +227,7 @@ Or build from source:
 ```bash
 git clone https://github.com/uesteibar/ralph.git
 cd ralph
+mise install      # Install Go, Node, just (see Development)
 just web-build    # Build the React dashboard
 just autoralph    # Build the Go binary
 ```
@@ -1046,6 +1050,31 @@ test/e2e/                      E2E tests + mock servers + playground
 ---
 
 ## Development
+
+### Tool dependencies
+
+| Tool | Version | Used for |
+|------|---------|----------|
+| Go | 1.25.6 | ralph, autoralph binaries |
+| Node.js | 22 | Web dashboard (React/Vite), E2E (Playwright), `install-autoralph` |
+| just | 1.46+ | Task runner (build, test, vet, etc.) |
+| mdbook | 0.5+ | Documentation (`just docs-build`, `just docs-serve`) |
+| shellcheck | 0.11+ | Linting installer scripts (`just shellcheck`) |
+
+### Using mise
+
+[mise](https://mise.jdx.dev/) manages tool versions automatically. The project includes a `mise.toml` that pins the required versions:
+
+```bash
+mise install     # Install all tools (run once)
+# or
+mise trust      # If prompted about trusted configs
+mise install
+```
+
+With mise, tools are activated when you `cd` into the repo. You can also run commands explicitly: `mise exec -- just build`.
+
+### Tasks
 
 Requires [just](https://github.com/casey/just) for task running.
 

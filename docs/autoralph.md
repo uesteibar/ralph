@@ -121,6 +121,8 @@ QUEUED -------> REFINING -------> APPROVED -------> BUILDING -------> IN_REVIEW
 - **A Linear account** with an API key
 - **A GitHub account** with a personal access token or a GitHub App
 
+To build from source, use [mise](https://mise.jdx.dev/) to install Go, Node, and just: run `mise install` in the repo root (see `mise.toml`).
+
 ---
 
 ## Installation
@@ -139,8 +141,9 @@ verifies the SHA256 checksum, and installs to `/usr/local/bin/`.
 ```bash
 git clone https://github.com/uesteibar/ralph.git
 cd ralph
-just web-build    # Build the React dashboard
-just autoralph    # Build the Go binary
+mise install       # Install Go, Node, just
+just web-build     # Build the React dashboard
+just autoralph     # Build the Go binary
 ```
 
 ### Verify
@@ -677,6 +680,10 @@ test/e2e/
 ---
 
 ## Development
+
+### Tool dependencies
+
+Use [mise](https://mise.jdx.dev/) to install the required tools: run `mise install` in the repo root. See `mise.toml` for pinned versions (Go, Node, just, mdbook, shellcheck).
 
 ### Build targets
 
