@@ -3,6 +3,7 @@ package pr
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
@@ -97,6 +98,91 @@ func (e *ConflictError) Error() string {
 	return fmt.Sprintf("merge conflicts in %d files: %s", len(e.Files), strings.Join(e.Files, ", "))
 }
 
+// GitHubPREditor updates an existing pull request's title and body.
+type GitHubPREditor interface {
+	EditPullRequest(ctx context.Context, owner, repo string, prNumber int, title, body string) error
+}
+
+// DescriptionInput holds the inputs needed to generate a PR description.
+type DescriptionInput struct {
+	TreePath    string
+	DefaultBase string
+	PRDPath     string
+	Identifier  string
+	OverrideDir string
+}
+
+// GenerateDescription generates a PR title and body by reading diff stats,
+// reading the PRD, rendering an AI prompt, invoking AI, and parsing output.
+func GenerateDescription(ctx context.Context, inv Invoker, diff DiffStatter, prd PRDReader, cfg ConfigLoader, input DescriptionInput) (title, body string, err error) {
+	diffStats, diffErr := diff.DiffStats(ctx, input.TreePath, "origin/"+input.DefaultBase)
+	if diffErr != nil {
+		diffStats = "(diff stats unavailable)"
+	} else {
+		diffStats = capDiffStats(diffStats, 50)
+	}
+
+	prdInfo, err := prd.ReadPRD(input.PRDPath)
+	if err != nil {
+		return "", "", fmt.Errorf("reading PRD: %w", err)
+	}
+
+	var stories []ai.PRDescriptionStory
+	for _, s := range prdInfo.Stories {
+		stories = append(stories, ai.PRDescriptionStory{
+			ID:    s.ID,
+			Title: s.Title,
+		})
+	}
+
+	prompt, err := ai.RenderPRDescription(ai.PRDescriptionData{
+		PRDSummary:            prdInfo.Description,
+		Stories:               stories,
+		DiffStats:             diffStats,
+		LinearIssueIdentifier: input.Identifier,
+	}, input.OverrideDir)
+	if err != nil {
+		return "", "", fmt.Errorf("rendering PR prompt: %w", err)
+	}
+
+	aiOutput, err := inv.Invoke(ctx, prompt, input.TreePath, maxTurnsPR)
+	if err != nil {
+		return "", "", fmt.Errorf("invoking AI for PR description: %w", err)
+	}
+
+	title, body = parsePROutput(aiOutput)
+	return title, body, nil
+}
+
+// UpdateDescription generates a new PR description and updates the existing PR.
+// It is non-fatal by design: errors are logged as warnings and not returned.
+func UpdateDescription(ctx context.Context, inv Invoker, diff DiffStatter, prd PRDReader, cfgLoad ConfigLoader, editor GitHubPREditor, issue db.Issue, project db.Project) {
+	treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
+
+	defaultBase, err := cfgLoad.DefaultBase(project.LocalPath, project.RalphConfigPath)
+	if err != nil {
+		slog.Warn("update PR description: loading default base", "issue", issue.Identifier, "error", err)
+		return
+	}
+
+	prdPath := workspace.PRDPathForWorkspace(project.LocalPath, issue.WorkspaceName)
+
+	title, body, err := GenerateDescription(ctx, inv, diff, prd, cfgLoad, DescriptionInput{
+		TreePath:    treePath,
+		DefaultBase: defaultBase,
+		PRDPath:     prdPath,
+		Identifier:  issue.Identifier,
+	})
+	if err != nil {
+		slog.Warn("update PR description: generating description", "issue", issue.Identifier, "error", err)
+		return
+	}
+
+	if err := editor.EditPullRequest(ctx, project.GithubOwner, project.GithubRepo, issue.PRNumber, title, body); err != nil {
+		slog.Warn("update PR description: editing pull request", "issue", issue.Identifier, "pr", issue.PRNumber, "error", err)
+	}
+}
+
 // Config holds the dependencies for the PR creation action.
 type Config struct {
 	Invoker     Invoker
@@ -134,43 +220,18 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return err
 		}
 
-		diffStats, err := cfg.Diff.DiffStats(ctx, treePath, "origin/"+defaultBase)
-		if err != nil {
-			diffStats = "(diff stats unavailable)"
-		} else {
-			diffStats = capDiffStats(diffStats, 50)
-		}
-
 		prdPath := workspace.PRDPathForWorkspace(project.LocalPath, issue.WorkspaceName)
-		prdInfo, err := cfg.PRD.ReadPRD(prdPath)
+
+		title, body, err := GenerateDescription(ctx, cfg.Invoker, cfg.Diff, cfg.PRD, cfg.ConfigLoad, DescriptionInput{
+			TreePath:    treePath,
+			DefaultBase: defaultBase,
+			PRDPath:     prdPath,
+			Identifier:  issue.Identifier,
+			OverrideDir: cfg.OverrideDir,
+		})
 		if err != nil {
-			return fmt.Errorf("reading PRD: %w", err)
+			return err
 		}
-
-		var stories []ai.PRDescriptionStory
-		for _, s := range prdInfo.Stories {
-			stories = append(stories, ai.PRDescriptionStory{
-				ID:    s.ID,
-				Title: s.Title,
-			})
-		}
-
-		prompt, err := ai.RenderPRDescription(ai.PRDescriptionData{
-			PRDSummary:            prdInfo.Description,
-			Stories:               stories,
-			DiffStats:             diffStats,
-			LinearIssueIdentifier: issue.Identifier,
-		}, cfg.OverrideDir)
-		if err != nil {
-			return fmt.Errorf("rendering PR prompt: %w", err)
-		}
-
-		aiOutput, err := cfg.Invoker.Invoke(ctx, prompt, treePath, maxTurnsPR)
-		if err != nil {
-			return fmt.Errorf("invoking AI for PR description: %w", err)
-		}
-
-		title, body := parsePROutput(aiOutput)
 
 		// Idempotent: check for existing open PR before creating
 		existingPR, err := cfg.GitHub.FindOpenPR(ctx,
