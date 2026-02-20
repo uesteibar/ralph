@@ -57,6 +57,11 @@ type IssueCommentReactor interface {
 	ReactToIssueComment(ctx context.Context, owner, repo string, commentID int64, reaction string) error
 }
 
+// PRUpdater updates the PR description after changes are pushed.
+type PRUpdater interface {
+	UpdateDescription(ctx context.Context, issue db.Issue, project db.Project)
+}
+
 // BranchPuller pulls the latest remote branch state into the local worktree.
 type BranchPuller interface {
 	PullBranch(ctx context.Context, workDir, branch string) error
@@ -93,6 +98,7 @@ type Config struct {
 	ConfigLoad    ConfigLoader
 	Reactor       CommentReactor       // for line comment reactions
 	IssueReactor  IssueCommentReactor  // optional: for issue comment reactions
+	PRUpdater     PRUpdater            // optional: updates PR description after commit+push
 	EventHandler  events.EventHandler
 	OnBuildEvent  func(issueID, detail string)
 	OverrideDir   string
@@ -241,6 +247,11 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 				return fmt.Errorf("pushing changes: %w", err)
 			}
 			committed = true
+		}
+
+		// Update PR description after successful commit+push.
+		if committed && cfg.PRUpdater != nil {
+			cfg.PRUpdater.UpdateDescription(ctx, issue, project)
 		}
 
 		// Build reply reference from commit SHA.

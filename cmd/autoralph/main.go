@@ -441,10 +441,17 @@ func runServe(args []string) error {
 						Projects:      database,
 						ConfigLoad:    &configLoaderAdapter{},
 						Reactor:       gc,
-						IssueReactor:  gc,
-						BranchPuller:  &branchPullerAdapter{},
-						OnBuildEvent:  onBuildEvent,
-						TrustedUser:   registry.githubUsername(issue.ProjectID),
+						IssueReactor: gc,
+						PRUpdater: &prUpdaterAdapter{
+							invoker: &claudeInvoker{},
+							diff:    gitOps,
+							prd:     &prdReaderAdapter{},
+							cfgLoad: &configLoaderAdapter{},
+							editor:  &ghPREditorAdapter{client: gc},
+						},
+						BranchPuller: &branchPullerAdapter{},
+						OnBuildEvent: onBuildEvent,
+						TrustedUser:  registry.githubUsername(issue.ProjectID),
 					})(issue, database)
 				},
 			})
@@ -472,6 +479,13 @@ func runServe(args []string) error {
 						Git:          gitOps,
 						Projects:     database,
 						ConfigLoad:   &configLoaderAdapter{},
+						PRUpdater: &prUpdaterAdapter{
+							invoker: &claudeInvoker{},
+							diff:    gitOps,
+							prd:     &prdReaderAdapter{},
+							cfgLoad: &configLoaderAdapter{},
+							editor:  &ghPREditorAdapter{client: gc},
+						},
 						BranchPuller: &branchPullerAdapter{},
 						OnBuildEvent: onBuildEvent,
 					})(issue, database)

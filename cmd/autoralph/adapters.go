@@ -10,6 +10,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/build"
 	"github.com/uesteibar/ralph/internal/autoralph/checks"
 	"github.com/uesteibar/ralph/internal/autoralph/complete"
+	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/feedback"
 	"github.com/uesteibar/ralph/internal/autoralph/ghpoller"
 	"github.com/uesteibar/ralph/internal/autoralph/rebase"
@@ -47,6 +48,9 @@ var (
 	_ feedback.CommentReactor      = (*ghclient.Client)(nil)
 	_ feedback.IssueCommentReactor = (*ghclient.Client)(nil)
 	_ feedback.BranchPuller        = (*branchPullerAdapter)(nil)
+	_ feedback.PRUpdater           = (*prUpdaterAdapter)(nil)
+	_ checks.PRUpdater             = (*prUpdaterAdapter)(nil)
+	_ pr.GitHubPREditor            = (*ghPREditorAdapter)(nil)
 	_ rebase.BranchPuller          = (*branchPullerAdapter)(nil)
 	_ ghpoller.GitHubClient        = (*ghclient.Client)(nil)
 	_ invoker.EventInvoker         = (*claudeInvoker)(nil)
@@ -361,6 +365,30 @@ type branchPullerAdapter struct{}
 func (b *branchPullerAdapter) PullBranch(ctx context.Context, workDir, branch string) error {
 	r := &shell.Runner{Dir: workDir}
 	return gitops.PullFFOnly(ctx, r, branch)
+}
+
+// ghPREditorAdapter wraps ghclient.Client.EditPullRequest (which returns PR, error)
+// to satisfy pr.GitHubPREditor (which returns only error).
+type ghPREditorAdapter struct {
+	client *ghclient.Client
+}
+
+func (g *ghPREditorAdapter) EditPullRequest(ctx context.Context, owner, repo string, prNumber int, title, body string) error {
+	_, err := g.client.EditPullRequest(ctx, owner, repo, prNumber, title, body)
+	return err
+}
+
+// prUpdaterAdapter wraps pr.UpdateDescription to satisfy feedback.PRUpdater.
+type prUpdaterAdapter struct {
+	invoker pr.Invoker
+	diff    pr.DiffStatter
+	prd     pr.PRDReader
+	cfgLoad pr.ConfigLoader
+	editor  pr.GitHubPREditor
+}
+
+func (p *prUpdaterAdapter) UpdateDescription(ctx context.Context, issue db.Issue, project db.Project) {
+	pr.UpdateDescription(ctx, p.invoker, p.diff, p.prd, p.cfgLoad, p.editor, issue, project)
 }
 
 // rebaseRunnerAdapter invokes ralph rebase as a subprocess to satisfy
