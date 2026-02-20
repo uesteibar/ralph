@@ -75,7 +75,11 @@ type streamEvent struct {
 	Result     string `json:"result,omitempty"`
 	DurationMS int    `json:"duration_ms,omitempty"`
 	NumTurns   int    `json:"num_turns,omitempty"`
-	Message    struct {
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	Message struct {
 		Content []struct {
 			Type  string         `json:"type"`
 			Text  string         `json:"text,omitempty"`
@@ -137,6 +141,8 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 
 	var numTurns int
 	var durationMS int
+	var inputTokens int
+	var outputTokens int
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -168,13 +174,17 @@ func runWithStreamJSON(ctx context.Context, opts InvokeOpts) (string, error) {
 			result = ev.Result
 			numTurns = ev.NumTurns
 			durationMS = ev.DurationMS
+			inputTokens = ev.Usage.InputTokens
+			outputTokens = ev.Usage.OutputTokens
 		}
 	}
 
 	if numTurns > 0 {
 		emitEvent(opts.EventHandler, events.InvocationDone{
-			NumTurns:   numTurns,
-			DurationMS: durationMS,
+			NumTurns:     numTurns,
+			DurationMS:   durationMS,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
 		})
 	}
 

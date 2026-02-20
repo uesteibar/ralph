@@ -1115,6 +1115,302 @@ func TestTxGetIssue_CheckTrackingColumns(t *testing.T) {
 	}
 }
 
+// --- Token Tracking Columns ---
+
+func TestCreateIssue_TokenColumns_DefaultValues(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, err := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "No token fields set",
+		State:     "queued",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.InputTokens != 0 {
+		t.Errorf("expected InputTokens 0, got %d", got.InputTokens)
+	}
+	if got.OutputTokens != 0 {
+		t.Errorf("expected OutputTokens 0, got %d", got.OutputTokens)
+	}
+}
+
+func TestCreateIssue_TokenColumns_SetValues(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, err := d.CreateIssue(Issue{
+		ProjectID:    p.ID,
+		Title:        "With token fields",
+		State:        "building",
+		InputTokens:  1200,
+		OutputTokens: 800,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.InputTokens != 1200 {
+		t.Errorf("expected InputTokens 1200, got %d", got.InputTokens)
+	}
+	if got.OutputTokens != 800 {
+		t.Errorf("expected OutputTokens 800, got %d", got.OutputTokens)
+	}
+}
+
+func TestUpdateIssue_TokenColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Update token fields",
+		State:     "building",
+	})
+	issue.InputTokens = 5000
+	issue.OutputTokens = 3000
+
+	if err := d.UpdateIssue(issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.InputTokens != 5000 {
+		t.Errorf("expected InputTokens 5000, got %d", got.InputTokens)
+	}
+	if got.OutputTokens != 3000 {
+		t.Errorf("expected OutputTokens 3000, got %d", got.OutputTokens)
+	}
+}
+
+func TestListIssues_TokenColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:    p.ID,
+		Title:        "Token issue",
+		State:        "building",
+		InputTokens:  1500,
+		OutputTokens: 900,
+	})
+
+	issues, err := d.ListIssues(IssueFilter{ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(issues))
+	}
+	if issues[0].InputTokens != 1500 {
+		t.Errorf("expected InputTokens 1500, got %d", issues[0].InputTokens)
+	}
+	if issues[0].OutputTokens != 900 {
+		t.Errorf("expected OutputTokens 900, got %d", issues[0].OutputTokens)
+	}
+}
+
+func TestGetIssueByLinearID_TokenColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:     p.ID,
+		LinearIssueID: "lin-token-1",
+		Title:         "Token by linear ID",
+		State:         "building",
+		InputTokens:   2000,
+		OutputTokens:  1000,
+	})
+
+	got, err := d.GetIssueByLinearID("lin-token-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.InputTokens != 2000 {
+		t.Errorf("expected InputTokens 2000, got %d", got.InputTokens)
+	}
+	if got.OutputTokens != 1000 {
+		t.Errorf("expected OutputTokens 1000, got %d", got.OutputTokens)
+	}
+}
+
+func TestGetIssueByLinearIDAndProject_TokenColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:     p.ID,
+		LinearIssueID: "lin-token-2",
+		Title:         "Token by linear ID and project",
+		State:         "building",
+		InputTokens:   3000,
+		OutputTokens:  1500,
+	})
+
+	got, err := d.GetIssueByLinearIDAndProject("lin-token-2", p.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.InputTokens != 3000 {
+		t.Errorf("expected InputTokens 3000, got %d", got.InputTokens)
+	}
+	if got.OutputTokens != 1500 {
+		t.Errorf("expected OutputTokens 1500, got %d", got.OutputTokens)
+	}
+}
+
+func TestTxUpdateIssue_TokenColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Tx token fields",
+		State:     "building",
+	})
+
+	err := d.Tx(func(tx *Tx) error {
+		issue.InputTokens = 4000
+		issue.OutputTokens = 2000
+		return tx.UpdateIssue(issue)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.InputTokens != 4000 {
+		t.Errorf("expected InputTokens 4000, got %d", got.InputTokens)
+	}
+	if got.OutputTokens != 2000 {
+		t.Errorf("expected OutputTokens 2000, got %d", got.OutputTokens)
+	}
+}
+
+func TestTxGetIssue_TokenColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID:    p.ID,
+		Title:        "Tx get token fields",
+		State:        "building",
+		InputTokens:  6000,
+		OutputTokens: 4000,
+	})
+
+	err := d.Tx(func(tx *Tx) error {
+		got, err := tx.GetIssue(issue.ID)
+		if err != nil {
+			return err
+		}
+		if got.InputTokens != 6000 {
+			t.Errorf("expected InputTokens 6000, got %d", got.InputTokens)
+		}
+		if got.OutputTokens != 4000 {
+			t.Errorf("expected OutputTokens 4000, got %d", got.OutputTokens)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestIncrementTokens_Success(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Increment tokens",
+		State:     "building",
+	})
+
+	if err := d.IncrementTokens(issue.ID, 1200, 800); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.InputTokens != 1200 {
+		t.Errorf("expected InputTokens 1200, got %d", got.InputTokens)
+	}
+	if got.OutputTokens != 800 {
+		t.Errorf("expected OutputTokens 800, got %d", got.OutputTokens)
+	}
+}
+
+func TestIncrementTokens_Cumulative(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Cumulative tokens",
+		State:     "building",
+	})
+
+	d.IncrementTokens(issue.ID, 1200, 800)
+	d.IncrementTokens(issue.ID, 500, 300)
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.InputTokens != 1700 {
+		t.Errorf("expected InputTokens 1700, got %d", got.InputTokens)
+	}
+	if got.OutputTokens != 1100 {
+		t.Errorf("expected OutputTokens 1100, got %d", got.OutputTokens)
+	}
+}
+
+func TestIncrementTokens_NotFound(t *testing.T) {
+	d := testDB(t)
+
+	err := d.IncrementTokens("nonexistent", 100, 50)
+	if err == nil {
+		t.Error("expected error for nonexistent issue")
+	}
+}
+
+func TestOpen_MigratesTokenColumns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var inputTokens, outputTokens int
+	err = d.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('issues') WHERE name='input_tokens'`).Scan(&inputTokens)
+	if err != nil {
+		t.Fatalf("querying column info: %v", err)
+	}
+	if inputTokens != 1 {
+		t.Errorf("expected input_tokens column to exist")
+	}
+
+	err = d.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('issues') WHERE name='output_tokens'`).Scan(&outputTokens)
+	if err != nil {
+		t.Fatalf("querying column info: %v", err)
+	}
+	if outputTokens != 1 {
+		t.Errorf("expected output_tokens column to exist")
+	}
+	d.Close()
+}
+
 func TestOpen_MigratesCheckTrackingColumns(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")

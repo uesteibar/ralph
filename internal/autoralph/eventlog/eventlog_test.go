@@ -72,6 +72,32 @@ func TestFormatDetail_InvocationDone(t *testing.T) {
 	}
 }
 
+func TestFormatDetail_InvocationDone_WithTokens(t *testing.T) {
+	got := eventlog.FormatDetail(events.InvocationDone{
+		NumTurns:     5,
+		DurationMS:   2345,
+		InputTokens:  1200,
+		OutputTokens: 800,
+	})
+	want := "Invocation done: 5 turns in 2345ms (1200 in / 800 out tokens)"
+	if got != want {
+		t.Errorf("FormatDetail(InvocationDone with tokens) = %q, want %q", got, want)
+	}
+}
+
+func TestFormatDetail_InvocationDone_ZeroTokens(t *testing.T) {
+	got := eventlog.FormatDetail(events.InvocationDone{
+		NumTurns:     3,
+		DurationMS:   1000,
+		InputTokens:  0,
+		OutputTokens: 0,
+	})
+	want := "Invocation done: 3 turns in 1000ms"
+	if got != want {
+		t.Errorf("FormatDetail(InvocationDone zero tokens) = %q, want %q", got, want)
+	}
+}
+
 func TestFormatDetail_UnknownEvent_ReturnsEmpty(t *testing.T) {
 	got := eventlog.FormatDetail(events.PRDRefresh{})
 	if got != "" {
@@ -204,6 +230,71 @@ func TestHandler_Handle_NilUpstreamAndCallback(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Errorf("got %d activity entries, want 1", len(entries))
+	}
+}
+
+func TestHandler_Handle_IncrementsTokensOnNonZero(t *testing.T) {
+	d := setupTestDB(t)
+
+	h := eventlog.New(d, "issue-1", nil, nil)
+	h.Handle(events.InvocationDone{
+		NumTurns:     5,
+		DurationMS:   2345,
+		InputTokens:  1200,
+		OutputTokens: 800,
+	})
+
+	issue, err := d.GetIssue("issue-1")
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if issue.InputTokens != 1200 {
+		t.Errorf("InputTokens = %d, want 1200", issue.InputTokens)
+	}
+	if issue.OutputTokens != 800 {
+		t.Errorf("OutputTokens = %d, want 800", issue.OutputTokens)
+	}
+}
+
+func TestHandler_Handle_SkipsIncrementOnZeroTokens(t *testing.T) {
+	d := setupTestDB(t)
+
+	h := eventlog.New(d, "issue-1", nil, nil)
+	h.Handle(events.InvocationDone{
+		NumTurns:     3,
+		DurationMS:   1000,
+		InputTokens:  0,
+		OutputTokens: 0,
+	})
+
+	issue, err := d.GetIssue("issue-1")
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if issue.InputTokens != 0 {
+		t.Errorf("InputTokens = %d, want 0 (no increment)", issue.InputTokens)
+	}
+	if issue.OutputTokens != 0 {
+		t.Errorf("OutputTokens = %d, want 0 (no increment)", issue.OutputTokens)
+	}
+}
+
+func TestHandler_Handle_CumulativeTokenIncrement(t *testing.T) {
+	d := setupTestDB(t)
+
+	h := eventlog.New(d, "issue-1", nil, nil)
+	h.Handle(events.InvocationDone{NumTurns: 1, DurationMS: 100, InputTokens: 500, OutputTokens: 300})
+	h.Handle(events.InvocationDone{NumTurns: 2, DurationMS: 200, InputTokens: 700, OutputTokens: 400})
+
+	issue, err := d.GetIssue("issue-1")
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if issue.InputTokens != 1200 {
+		t.Errorf("InputTokens = %d, want 1200 (cumulative)", issue.InputTokens)
+	}
+	if issue.OutputTokens != 700 {
+		t.Errorf("OutputTokens = %d, want 700 (cumulative)", issue.OutputTokens)
 	}
 }
 

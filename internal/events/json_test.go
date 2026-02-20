@@ -35,11 +35,14 @@ func TestMarshalUnmarshal_RoundTrip(t *testing.T) {
 		},
 		{
 			name:  "InvocationDone",
-			event: InvocationDone{NumTurns: 5, DurationMS: 12000},
+			event: InvocationDone{NumTurns: 5, DurationMS: 12000, InputTokens: 1200, OutputTokens: 800},
 			check: func(t *testing.T, got Event) {
 				e := got.(InvocationDone)
 				if e.NumTurns != 5 || e.DurationMS != 12000 {
 					t.Errorf("InvocationDone mismatch: %+v", e)
+				}
+				if e.InputTokens != 1200 || e.OutputTokens != 800 {
+					t.Errorf("InvocationDone token mismatch: input=%d output=%d", e.InputTokens, e.OutputTokens)
 				}
 			},
 		},
