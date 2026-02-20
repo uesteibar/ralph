@@ -417,6 +417,11 @@ func (h *apiHandler) handlePauseIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	h.db.LogActivity(issue.ID, "state_change", previousState, "paused", "Issue paused via API")
 
+	// Cancel any running worker/action for this issue so the agent stops.
+	if h.buildChecker != nil {
+		h.buildChecker.Cancel(issue.ID)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "paused", "previous_state": previousState})
 }
 

@@ -1183,11 +1183,23 @@ func TestAPI_GetIssue_EmptyModelName(t *testing.T) {
 
 // mockBuildChecker implements server.BuildChecker for testing.
 type mockBuildChecker struct {
-	running map[string]bool
+	running   map[string]bool
+	cancelled map[string]bool
 }
 
 func (m *mockBuildChecker) IsRunning(issueID string) bool {
 	return m.running[issueID]
+}
+
+func (m *mockBuildChecker) Cancel(issueID string) bool {
+	if !m.running[issueID] {
+		return false
+	}
+	if m.cancelled == nil {
+		m.cancelled = make(map[string]bool)
+	}
+	m.cancelled[issueID] = true
+	return true
 }
 
 func TestAPI_BuildActive_ReturnedForNonBuildingStates(t *testing.T) {
@@ -1230,6 +1242,62 @@ func TestAPI_BuildActive_ReturnedForNonBuildingStates(t *testing.T) {
 	json.NewDecoder(detailResp.Body).Decode(&detailResult)
 	if detailResult["build_active"] != true {
 		t.Fatalf("expected build_active true for refining issue detail, got %v", detailResult["build_active"])
+	}
+}
+
+func TestAPI_PauseIssue_CancelsRunningWorker(t *testing.T) {
+	d := testDB(t)
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "building issue", State: "building"})
+
+	checker := &mockBuildChecker{running: map[string]bool{iss.ID: true}}
+	srv, err := server.New("127.0.0.1:0", server.Config{DB: d, BuildChecker: checker})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	go srv.Serve()
+
+	resp, err := http.Post(apiURL(srv, "/api/issues/"+iss.ID+"/pause"), "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST pause failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// Verify the worker was cancelled
+	if !checker.cancelled[iss.ID] {
+		t.Error("expected Cancel to be called for the paused issue")
+	}
+
+	// Verify state changed to paused
+	updated, err := d.GetIssue(iss.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != "paused" {
+		t.Errorf("expected state %q, got %q", "paused", updated.State)
+	}
+}
+
+func TestAPI_PauseIssue_FromNonPausableState_Returns409(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "done issue", State: "completed"})
+
+	resp, err := http.Post(apiURL(srv, "/api/issues/"+iss.ID+"/pause"), "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST pause failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
 	}
 }
 

@@ -20,9 +20,11 @@ type WorkspaceRemover interface {
 	RemoveWorkspace(ctx context.Context, repoPath, name string) error
 }
 
-// BuildChecker checks whether a build worker is active for a given issue.
+// BuildChecker checks whether a build worker is active for a given issue
+// and can cancel running workers.
 type BuildChecker interface {
 	IsRunning(issueID string) bool
+	Cancel(issueID string) bool
 }
 
 // CCUsageProvider provides current Claude Code usage data.

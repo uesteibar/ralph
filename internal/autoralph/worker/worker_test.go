@@ -1606,6 +1606,105 @@ func (r *stateChangingRunner) Run(ctx context.Context, cfg LoopConfig) error {
 	return errors.New("build failed after external merge")
 }
 
+func TestDispatcher_Cancel_StopsRunningWorker(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "building")
+
+	runner := &mockLoopRunner{blockCtx: true}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := disp.Dispatch(ctx, issue)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if !disp.IsRunning(issue.ID) {
+		t.Fatal("expected issue to be running before cancel")
+	}
+
+	// Cancel should return true for a running issue
+	if !disp.Cancel(issue.ID) {
+		t.Error("expected Cancel to return true for running issue")
+	}
+
+	disp.Wait()
+
+	// After cancellation, the worker should have stopped
+	if disp.IsRunning(issue.ID) {
+		t.Error("expected issue to not be running after cancel")
+	}
+}
+
+func TestDispatcher_Cancel_ReturnsFalseForNonRunningIssue(t *testing.T) {
+	d := testDB(t)
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	if disp.Cancel("non-existent-id") {
+		t.Error("expected Cancel to return false for non-running issue")
+	}
+}
+
+func TestDispatcher_Cancel_StopsRunningAction(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "addressing_feedback")
+
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := disp.DispatchAction(ctx, issue, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if !disp.Cancel(issue.ID) {
+		t.Error("expected Cancel to return true for running action")
+	}
+
+	disp.Wait()
+
+	if disp.IsRunning(issue.ID) {
+		t.Error("expected issue to not be running after cancel")
+	}
+
+	// Should NOT transition to failed on cancellation
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State == "failed" {
+		t.Error("expected issue NOT to transition to failed on cancellation")
+	}
+}
+
 func TestDispatcher_Dispatch_PassesKnowledgePath(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)

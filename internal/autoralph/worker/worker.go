@@ -159,6 +159,19 @@ func (d *Dispatcher) IsRunning(issueID string) bool {
 	return ok
 }
 
+// Cancel cancels the running worker for the given issue ID. It returns true
+// if a running worker was found and cancelled, false otherwise.
+func (d *Dispatcher) Cancel(issueID string) bool {
+	d.mu.Lock()
+	cancel, ok := d.active[issueID]
+	d.mu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
+}
+
 // ActiveCount returns the number of currently active build workers.
 func (d *Dispatcher) ActiveCount() int {
 	d.mu.Lock()
