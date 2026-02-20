@@ -194,6 +194,66 @@ func TestMock_FetchPRComments_Success(t *testing.T) {
 	}
 }
 
+func TestMock_EditPR_Success(t *testing.T) {
+	mock := New()
+	mock.AddPR("owner", "repo", PR{Number: 10, Title: "Old title", Body: "Old body", State: "open", Head: "feat", Base: "main"})
+	srv := mock.Server(t)
+
+	client := mustNew(t, "test-token", gh.WithBaseURL(srv.URL+"/"))
+	pr, err := client.EditPullRequest(context.Background(), "owner", "repo", 10, "New title", "New body")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pr.Number != 10 {
+		t.Errorf("expected PR #10, got #%d", pr.Number)
+	}
+	if pr.Title != "New title" {
+		t.Errorf("expected title 'New title', got %q", pr.Title)
+	}
+
+	// Verify tracking
+	if len(mock.EditedPRs) != 1 {
+		t.Fatalf("expected 1 edited PR, got %d", len(mock.EditedPRs))
+	}
+	ep := mock.EditedPRs[0]
+	if ep.Owner != "owner" {
+		t.Errorf("expected owner 'owner', got %q", ep.Owner)
+	}
+	if ep.Repo != "repo" {
+		t.Errorf("expected repo 'repo', got %q", ep.Repo)
+	}
+	if ep.PRNumber != 10 {
+		t.Errorf("expected PR number 10, got %d", ep.PRNumber)
+	}
+	if ep.Title != "New title" {
+		t.Errorf("expected title 'New title', got %q", ep.Title)
+	}
+	if ep.Body != "New body" {
+		t.Errorf("expected body 'New body', got %q", ep.Body)
+	}
+
+	// Verify the mock's internal PR was updated
+	stored := mock.GetPR("owner", "repo", 10)
+	if stored.Title != "New title" {
+		t.Errorf("expected stored title 'New title', got %q", stored.Title)
+	}
+	if stored.Body != "New body" {
+		t.Errorf("expected stored body 'New body', got %q", stored.Body)
+	}
+}
+
+func TestMock_EditPR_NotFound(t *testing.T) {
+	mock := New()
+	srv := mock.Server(t)
+
+	client := mustNew(t, "test-token", gh.WithBaseURL(srv.URL+"/"))
+	_, err := client.EditPullRequest(context.Background(), "owner", "repo", 999, "title", "body")
+	if err == nil {
+		t.Fatal("expected error for non-existent PR")
+	}
+}
+
 func TestMock_GetPR(t *testing.T) {
 	mock := New()
 	mock.AddPR("owner", "repo", PR{Number: 99, Title: "My PR", State: "open"})

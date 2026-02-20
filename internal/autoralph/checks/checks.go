@@ -58,6 +58,11 @@ type BranchPuller interface {
 	PullBranch(ctx context.Context, workDir, branch string) error
 }
 
+// PRUpdater updates the PR description after changes are pushed.
+type PRUpdater interface {
+	UpdateDescription(ctx context.Context, issue db.Issue, project db.Project)
+}
+
 // ConfigLoader loads a Ralph config from a file path.
 type ConfigLoader interface {
 	Load(path string) (*config.Config, error)
@@ -74,6 +79,7 @@ type Config struct {
 	BranchPuller BranchPuller
 	Projects     ProjectGetter
 	ConfigLoad   ConfigLoader
+	PRUpdater    PRUpdater // optional: updates PR description after commit+push
 	EventHandler events.EventHandler
 	OnBuildEvent func(issueID, detail string)
 	OverrideDir  string
@@ -218,6 +224,11 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 				return fmt.Errorf("logging activity: %w", err)
 			}
 			return nil
+		}
+
+		// Update PR description after successful commit+push (non-fatal).
+		if committed && cfg.PRUpdater != nil {
+			cfg.PRUpdater.UpdateDescription(ctx, issue, project)
 		}
 
 		detail := fmt.Sprintf("Fixed checks: %s", strings.Join(checkNames, ", "))

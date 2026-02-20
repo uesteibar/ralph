@@ -75,6 +75,15 @@ type PostedReply struct {
 	Body      string
 }
 
+// EditedPR records a PR edit request received by the mock.
+type EditedPR struct {
+	Owner    string
+	Repo     string
+	PRNumber int
+	Title    string
+	Body     string
+}
+
 // Mock is an in-memory mock of the GitHub REST API, compatible with go-github client.
 // Routes are served under /api/v3/ prefix to match go-github's WithEnterpriseURLs.
 type Mock struct {
@@ -88,6 +97,7 @@ type Mock struct {
 
 	// Tracking for verification
 	CreatedPRs     []CreatedPR
+	EditedPRs      []EditedPR
 	PostedComments []PostedComment
 	PostedReplies  []PostedReply
 }
@@ -207,6 +217,8 @@ func (m *Mock) handleRepos(w http.ResponseWriter, r *http.Request) {
 		m.handleListComments(w, r, owner, repo, rest)
 	case strings.HasPrefix(rest, "pulls/") && strings.Contains(rest, "/comments") && r.Method == http.MethodPost:
 		m.handleCreateReply(w, r, owner, repo, rest)
+	case strings.HasPrefix(rest, "pulls/") && !strings.Contains(rest[len("pulls/"):], "/") && r.Method == http.MethodPatch:
+		m.handleEditPR(w, r, owner, repo, rest)
 	case strings.HasPrefix(rest, "pulls/") && !strings.Contains(rest[len("pulls/"):], "/") && r.Method == http.MethodGet:
 		m.handleGetPR(w, r, owner, repo, rest)
 	case strings.HasPrefix(rest, "issues/") && strings.Contains(rest, "/comments") && r.Method == http.MethodPost:
@@ -411,6 +423,44 @@ func (m *Mock) handleGetPR(w http.ResponseWriter, _ *http.Request, owner, repo, 
 	for _, pr := range m.prs[key] {
 		if pr.Number == prNum {
 			json.NewEncoder(w).Encode(prToJSON(pr))
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNotFound)
+}
+
+func (m *Mock) handleEditPR(w http.ResponseWriter, r *http.Request, owner, repo, rest string) {
+	prNum := extractPRNumber(rest)
+
+	var body struct {
+		Title *string `json:"title"`
+		Body  *string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := owner + "/" + repo
+	for i, pr := range m.prs[key] {
+		if pr.Number == prNum {
+			if body.Title != nil {
+				m.prs[key][i].Title = *body.Title
+			}
+			if body.Body != nil {
+				m.prs[key][i].Body = *body.Body
+			}
+			m.EditedPRs = append(m.EditedPRs, EditedPR{
+				Owner:    owner,
+				Repo:     repo,
+				PRNumber: prNum,
+				Title:    m.prs[key][i].Title,
+				Body:     m.prs[key][i].Body,
+			})
+			json.NewEncoder(w).Encode(prToJSON(m.prs[key][i]))
 			return
 		}
 	}

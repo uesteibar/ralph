@@ -908,6 +908,97 @@ func TestClient_FetchTimeline_HTTPError(t *testing.T) {
 	}
 }
 
+func TestClient_EditPullRequest_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v3/repos/octocat/hello/pulls/42" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		assertAuth(t, r, "Bearer ghp_test123")
+
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["title"] != "Updated title" {
+			t.Errorf("unexpected title: %v", body["title"])
+		}
+		if body["body"] != "Updated body" {
+			t.Errorf("unexpected body: %v", body["body"])
+		}
+		// Ensure base is not sent (nil pointer fields should be omitted).
+		if _, ok := body["base"]; ok {
+			t.Errorf("expected base to be absent, but it was present: %v", body["base"])
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"number":   42,
+			"html_url": "https://github.com/octocat/hello/pull/42",
+			"title":    "Updated title",
+			"state":    "open",
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test123", WithBaseURL(srv.URL+"/"))
+	pr, err := c.EditPullRequest(context.Background(), "octocat", "hello", 42, "Updated title", "Updated body")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pr.Number != 42 {
+		t.Errorf("expected PR number 42, got %d", pr.Number)
+	}
+	if pr.Title != "Updated title" {
+		t.Errorf("unexpected title: %s", pr.Title)
+	}
+}
+
+func TestClient_EditPullRequest_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"))
+	_, err := c.EditPullRequest(context.Background(), "o", "r", 999, "t", "b")
+	if err == nil {
+		t.Fatal("expected error for HTTP 404")
+	}
+}
+
+func TestClient_EditPullRequest_ServerError_RetriesAndSucceeds(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"message": "server error"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"number":   7,
+			"html_url": "https://github.com/o/r/pull/7",
+			"title":    "Retried",
+			"state":    "open",
+		})
+	}))
+	defer srv.Close()
+
+	c := mustNew(t, "ghp_test", WithBaseURL(srv.URL+"/"), WithRetryBackoff(time.Millisecond, time.Millisecond))
+	pr, err := c.EditPullRequest(context.Background(), "o", "r", 7, "Retried", "body")
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if pr.Title != "Retried" {
+		t.Errorf("unexpected title: %s", pr.Title)
+	}
+	if calls != 3 {
+		t.Errorf("expected 3 calls, got %d", calls)
+	}
+}
+
 func mustNew(t *testing.T, token string, opts ...Option) *Client {
 	t.Helper()
 	c, err := New(token, opts...)
