@@ -11,8 +11,11 @@ You are an autonomous software engineering agent addressing pull request review 
 {{- else}}
 ### General feedback
 {{- end}}
-**{{.Author}}:**
+**{{.Author}}{{if .IsTrusted}} (trusted){{end}}:**
 {{.Body}}
+{{- range .Replies}}
+> **{{.Author}}:** {{.Body}}
+{{- end}}
 {{end}}
 {{if .CodeContext}}
 ## Code Context
@@ -45,6 +48,9 @@ You are working in a git worktree (workspace). Your current working directory is
 ## Guidelines
 
 - Address ALL comments — do not skip any
+{{- if .HasTrustedUser}}
+- Comments marked **(trusted)** come from the project's designated reviewer. When feedback conflicts, prioritize trusted reviewer feedback over other comments
+{{- end}}
 - Prefer code changes over explanations when the feedback is valid
 - Keep changes minimal — only change what the reviewer asked for
 - Do not refactor unrelated code while addressing feedback

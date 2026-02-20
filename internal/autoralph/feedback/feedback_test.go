@@ -3,6 +3,7 @@ package feedback
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -528,7 +529,7 @@ func TestNewAction_ProjectNotFound(t *testing.T) {
 	}
 }
 
-func TestNewAction_SkipsReplyComments(t *testing.T) {
+func TestNewAction_GroupsReplyThreads(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
 	issue := createTestIssue(t, d, project)
@@ -546,12 +547,18 @@ func TestNewAction_SkipsReplyComments(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if strings.Contains(inv.lastPrompt, "Addressed in abc123") {
-		t.Error("expected reply comments to be excluded from AI prompt")
+	// Reply body should appear in the prompt as context under the parent.
+	if !strings.Contains(inv.lastPrompt, "Addressed in abc123") {
+		t.Error("expected reply body to be included in AI prompt as context")
+	}
+	// Parent body should also be present.
+	if !strings.Contains(inv.lastPrompt, "Fix this") {
+		t.Error("expected parent comment body in prompt")
 	}
 
+	// Only top-level comments get replies (not the reply comment itself).
 	if len(replier.calls) != 2 {
-		t.Fatalf("expected 2 reply calls (skipping reply comment), got %d", len(replier.calls))
+		t.Fatalf("expected 2 reply calls (to top-level comments only), got %d", len(replier.calls))
 	}
 	if replier.calls[0].commentID != 1 {
 		t.Errorf("expected first reply to comment 1, got %d", replier.calls[0].commentID)
@@ -1800,5 +1807,560 @@ func TestBuildReplyForComment_LongAIResponse_Truncated(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Error("expected truncation marker at end")
+	}
+}
+
+// --- groupThreads tests ---
+
+func TestGroupThreads_NoComments(t *testing.T) {
+	result := groupThreads(nil)
+	if len(result) != 0 {
+		t.Errorf("expected 0 items, got %d", len(result))
+	}
+}
+
+func TestGroupThreads_TopLevelOnly(t *testing.T) {
+	comments := []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 2, Path: "utils.go", Body: "Add tests", User: "other"},
+	}
+	result := groupThreads(comments)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(result))
+	}
+	if result[0].id != 1 || result[1].id != 2 {
+		t.Errorf("unexpected IDs: %d, %d", result[0].id, result[1].id)
+	}
+	if len(result[0].replies) != 0 {
+		t.Errorf("expected 0 replies for first item, got %d", len(result[0].replies))
+	}
+	if len(result[1].replies) != 0 {
+		t.Errorf("expected 0 replies for second item, got %d", len(result[1].replies))
+	}
+}
+
+func TestGroupThreads_RepliesAttachedToParent(t *testing.T) {
+	comments := []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 2, Path: "main.go", Body: "I agree with above", User: "dev", InReplyTo: 1},
+		{ID: 3, Path: "main.go", Body: "Done, fixed it", User: "author", InReplyTo: 1},
+		{ID: 4, Path: "utils.go", Body: "Add tests", User: "reviewer"},
+	}
+	result := groupThreads(comments)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 top-level items, got %d", len(result))
+	}
+
+	// First item should have 2 replies.
+	if len(result[0].replies) != 2 {
+		t.Fatalf("expected 2 replies for comment 1, got %d", len(result[0].replies))
+	}
+	if result[0].replies[0].author != "dev" || result[0].replies[0].body != "I agree with above" {
+		t.Errorf("unexpected first reply: %+v", result[0].replies[0])
+	}
+	if result[0].replies[1].author != "author" || result[0].replies[1].body != "Done, fixed it" {
+		t.Errorf("unexpected second reply: %+v", result[0].replies[1])
+	}
+
+	// Second item should have no replies.
+	if len(result[1].replies) != 0 {
+		t.Errorf("expected 0 replies for comment 4, got %d", len(result[1].replies))
+	}
+}
+
+func TestGroupThreads_OrphanReplyIgnored(t *testing.T) {
+	comments := []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 5, Path: "main.go", Body: "orphan reply", User: "someone", InReplyTo: 999},
+	}
+	result := groupThreads(comments)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 top-level item, got %d", len(result))
+	}
+	if len(result[0].replies) != 0 {
+		t.Errorf("expected 0 replies (orphan discarded), got %d", len(result[0].replies))
+	}
+}
+
+// --- Integration test: reply threads in AI prompt ---
+
+func TestNewAction_ReplyThreadsInPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
+
+	reactor := &mockCommentReactor{}
+	cfg.Reactor = reactor
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix the null check", User: "reviewer"},
+		{ID: 2, Path: "main.go", Body: "I think this is related to issue #42", User: "other-dev", InReplyTo: 1},
+		{ID: 3, Path: "main.go", Body: "Yes, same root cause", User: "reviewer", InReplyTo: 1},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Parent comment body should be in prompt.
+	if !strings.Contains(inv.lastPrompt, "Fix the null check") {
+		t.Error("expected parent comment body in prompt")
+	}
+	// Both reply bodies should appear in prompt.
+	if !strings.Contains(inv.lastPrompt, "I think this is related to issue #42") {
+		t.Error("expected first reply body in prompt")
+	}
+	if !strings.Contains(inv.lastPrompt, "Yes, same root cause") {
+		t.Error("expected second reply body in prompt")
+	}
+
+	// Only 1 reply call (to parent comment ID 1, not to reply IDs 2,3).
+	if len(replier.calls) != 1 {
+		t.Fatalf("expected 1 reply call (parent only), got %d", len(replier.calls))
+	}
+	if replier.calls[0].commentID != 1 {
+		t.Errorf("expected reply to comment 1, got %d", replier.calls[0].commentID)
+	}
+
+	// Only 1 reaction call (to parent comment ID 1).
+	if len(reactor.calls) != 1 {
+		t.Fatalf("expected 1 reaction call, got %d", len(reactor.calls))
+	}
+	if reactor.calls[0].commentID != 1 {
+		t.Errorf("expected reaction on comment 1, got %d", reactor.calls[0].commentID)
+	}
+}
+
+// --- annotateTrust unit tests ---
+
+func TestAnnotateTrust_MarksMatchingAuthor(t *testing.T) {
+	items := []feedbackItem{
+		{author: "trusted-reviewer", body: "fix this"},
+		{author: "other-dev", body: "looks good"},
+	}
+	annotateTrust(items, "trusted-reviewer")
+	if !items[0].isTrusted {
+		t.Error("expected trusted-reviewer to be marked trusted")
+	}
+	if items[1].isTrusted {
+		t.Error("expected other-dev NOT to be marked trusted")
+	}
+}
+
+func TestAnnotateTrust_CaseInsensitive(t *testing.T) {
+	items := []feedbackItem{
+		{author: "Trusted-Reviewer", body: "fix this"},
+	}
+	annotateTrust(items, "trusted-reviewer")
+	if !items[0].isTrusted {
+		t.Error("expected case-insensitive match to be trusted")
+	}
+}
+
+func TestAnnotateTrust_EmptyTrustedUser_NoAnnotation(t *testing.T) {
+	items := []feedbackItem{
+		{author: "reviewer", body: "fix this"},
+	}
+	annotateTrust(items, "")
+	if items[0].isTrusted {
+		t.Error("expected no trust annotation when TrustedUser is empty")
+	}
+}
+
+func TestAnnotateTrust_NoMatchingAuthor(t *testing.T) {
+	items := []feedbackItem{
+		{author: "other-dev", body: "fix this"},
+	}
+	annotateTrust(items, "trusted-reviewer")
+	if items[0].isTrusted {
+		t.Error("expected non-matching author NOT to be trusted")
+	}
+}
+
+// --- Integration test: trusted annotation in AI prompt (IT-002) ---
+
+func TestNewAction_TrustedUserAnnotation_InPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	cfg.TrustedUser = "trusted-reviewer"
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix the null check", User: "trusted-reviewer"},
+		{ID: 2, Path: "utils.go", Body: "Add tests", User: "other-dev"},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Trusted reviewer should have "(trusted)" marker in prompt.
+	if !strings.Contains(inv.lastPrompt, "(trusted)") {
+		t.Error("expected prompt to contain '(trusted)' for trusted reviewer")
+	}
+
+	// The trusted marker should appear next to the trusted reviewer's name.
+	if !strings.Contains(inv.lastPrompt, "trusted-reviewer") {
+		t.Error("expected prompt to contain trusted reviewer name")
+	}
+
+	// The untrusted reviewer should NOT have "(trusted)" next to their name.
+	// Check that "other-dev" and "(trusted)" do NOT appear together.
+	otherDevIdx := strings.Index(inv.lastPrompt, "other-dev")
+	if otherDevIdx < 0 {
+		t.Fatal("expected prompt to contain 'other-dev'")
+	}
+	// Look at the text around other-dev's entry — it should not have "(trusted)".
+	otherDevSection := inv.lastPrompt[otherDevIdx : otherDevIdx+50]
+	if strings.Contains(otherDevSection, "(trusted)") {
+		t.Error("expected '(trusted)' NOT to appear next to 'other-dev'")
+	}
+
+	// Prompt should contain guidance about prioritizing trusted feedback.
+	if !strings.Contains(inv.lastPrompt, "prioritize trusted") {
+		t.Error("expected prompt to contain trusted prioritization guidance")
+	}
+}
+
+// --- Integration test: no trust annotation when TrustedUser is empty (IT-005) ---
+
+func TestNewAction_NoTrustAnnotation_WhenTrustedUserEmpty(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	cfg.TrustedUser = "" // empty — no trust annotation
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer-a"},
+		{ID: 2, Path: "utils.go", Body: "Add tests", User: "reviewer-b"},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No "(trusted)" should appear in the prompt.
+	if strings.Contains(inv.lastPrompt, "(trusted)") {
+		t.Error("expected NO '(trusted)' annotations when TrustedUser is empty")
+	}
+
+	// All comments should still be present.
+	if !strings.Contains(inv.lastPrompt, "Fix this") {
+		t.Error("expected first comment body in prompt")
+	}
+	if !strings.Contains(inv.lastPrompt, "Add tests") {
+		t.Error("expected second comment body in prompt")
+	}
+
+	// Should NOT contain trusted prioritization guidance.
+	if strings.Contains(inv.lastPrompt, "prioritize trusted") {
+		t.Error("expected NO trusted prioritization guidance when TrustedUser is empty")
+	}
+}
+
+// --- extractCommitSummary unit tests ---
+
+func TestExtractCommitSummary_SingleChange(t *testing.T) {
+	aiResponse := "### main.go\n**Action:** changed\n**Response:** Added error handling for nil pointer"
+	title, body := extractCommitSummary(aiResponse)
+	if title != "Added error handling for nil pointer" {
+		t.Errorf("expected title from single change, got: %q", title)
+	}
+	if body != "" {
+		t.Errorf("expected empty body for single change, got: %q", body)
+	}
+}
+
+func TestExtractCommitSummary_MultipleChanges(t *testing.T) {
+	aiResponse := `### main.go
+**Action:** changed
+**Response:** Fix null check in auth handler
+
+### utils.go
+**Action:** changed
+**Response:** Update error message format
+
+### config.go
+**Action:** no_change
+**Response:** The config is correct as-is`
+
+	title, body := extractCommitSummary(aiResponse)
+	// Title should combine the changed items.
+	if !strings.Contains(title, "Fix null check") {
+		t.Errorf("expected title to contain first change, got: %q", title)
+	}
+	// Body should list individual changes.
+	if !strings.Contains(body, "main.go") {
+		t.Errorf("expected body to contain file path, got: %q", body)
+	}
+	if !strings.Contains(body, "utils.go") {
+		t.Errorf("expected body to contain second file path, got: %q", body)
+	}
+	// no_change items should NOT appear in commit message.
+	if strings.Contains(body, "config.go") {
+		t.Errorf("expected body NOT to contain no_change file, got: %q", body)
+	}
+}
+
+func TestExtractCommitSummary_TitleTruncatedTo72Chars(t *testing.T) {
+	aiResponse := `### main.go
+**Action:** changed
+**Response:** Added comprehensive error handling for all edge cases in the authentication handler module
+
+### utils.go
+**Action:** changed
+**Response:** Updated the error message formatting to include contextual debugging information`
+
+	title, _ := extractCommitSummary(aiResponse)
+	if len(title) > 72 {
+		t.Errorf("expected title <= 72 chars, got %d: %q", len(title), title)
+	}
+}
+
+func TestExtractCommitSummary_BodyTruncatedTo500Chars(t *testing.T) {
+	// Build a response with many changed sections to exceed 500 char body.
+	var sections []string
+	for i := 0; i < 20; i++ {
+		sections = append(sections, fmt.Sprintf("### file%d.go\n**Action:** changed\n**Response:** Made a significant change to file number %d with a long description that adds up", i, i))
+	}
+	aiResponse := strings.Join(sections, "\n\n")
+	_, body := extractCommitSummary(aiResponse)
+	if len(body) > 550 {
+		t.Errorf("expected body <= ~500 chars, got %d", len(body))
+	}
+}
+
+func TestExtractCommitSummary_UnstructuredResponse_Fallback(t *testing.T) {
+	aiResponse := "I reviewed the code and everything looks fine."
+	title, body := extractCommitSummary(aiResponse)
+	if title != defaultCommitMessage {
+		t.Errorf("expected fallback %q, got: %q", defaultCommitMessage, title)
+	}
+	if body != "" {
+		t.Errorf("expected empty body for fallback, got: %q", body)
+	}
+}
+
+func TestExtractCommitSummary_EmptyResponse_Fallback(t *testing.T) {
+	title, body := extractCommitSummary("")
+	if title != defaultCommitMessage {
+		t.Errorf("expected fallback %q, got: %q", defaultCommitMessage, title)
+	}
+	if body != "" {
+		t.Errorf("expected empty body for fallback, got: %q", body)
+	}
+}
+
+func TestExtractCommitSummary_OnlyNoChangeActions_Fallback(t *testing.T) {
+	aiResponse := `### main.go
+**Action:** no_change
+**Response:** The code is correct as-is`
+
+	title, body := extractCommitSummary(aiResponse)
+	if title != defaultCommitMessage {
+		t.Errorf("expected fallback %q when only no_change, got: %q", defaultCommitMessage, title)
+	}
+	if body != "" {
+		t.Errorf("expected empty body for fallback, got: %q", body)
+	}
+}
+
+func TestExtractCommitSummary_GeneralFeedback_Included(t *testing.T) {
+	aiResponse := `### General feedback
+**Action:** changed
+**Response:** Updated naming convention across the module`
+
+	title, _ := extractCommitSummary(aiResponse)
+	if !strings.Contains(title, "Updated naming convention") {
+		t.Errorf("expected general feedback change in title, got: %q", title)
+	}
+}
+
+func TestNewAction_NoReplies_BackwardCompatible(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 2, Path: "utils.go", Body: "Add tests", User: "reviewer"},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Both parent comments in prompt.
+	if !strings.Contains(inv.lastPrompt, "Fix this") {
+		t.Error("expected first comment body in prompt")
+	}
+	if !strings.Contains(inv.lastPrompt, "Add tests") {
+		t.Error("expected second comment body in prompt")
+	}
+
+	// 2 reply calls for 2 top-level comments.
+	if len(replier.calls) != 2 {
+		t.Fatalf("expected 2 reply calls, got %d", len(replier.calls))
+	}
+}
+
+// --- Integration test: dynamic commit message from AI response (IT-003) ---
+
+func TestNewAction_DynamicCommitMessage(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, git := defaultMocks(project)
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "auth.go", Body: "Fix null check", User: "reviewer"},
+		{ID: 2, Path: "errors.go", Body: "Update error format", User: "reviewer"},
+	}
+	inv.response = `### auth.go
+**Action:** changed
+**Response:** Fix null check in auth handler
+
+### errors.go
+**Action:** changed
+**Response:** Update error message format`
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(git.commitCalls) != 1 {
+		t.Fatalf("expected 1 commit call, got %d", len(git.commitCalls))
+	}
+
+	msg := git.commitCalls[0].message
+	// Should NOT be the static fallback.
+	if msg == "Address review feedback" {
+		t.Error("expected dynamic commit message, not static fallback")
+	}
+	// Title should summarize changes.
+	if !strings.Contains(msg, "Fix null check") {
+		t.Errorf("expected commit message to summarize changes, got: %q", msg)
+	}
+	// Title line should be <= 72 chars.
+	lines := strings.SplitN(msg, "\n", 2)
+	if len(lines[0]) > 72 {
+		t.Errorf("expected title line <= 72 chars, got %d: %q", len(lines[0]), lines[0])
+	}
+}
+
+// --- Integration test: fallback commit message for unstructured response (IT-004) ---
+
+func TestNewAction_FallbackCommitMessage_UnstructuredResponse(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, git := defaultMocks(project)
+
+	inv.response = "I looked at the code and made some fixes."
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(git.commitCalls) != 1 {
+		t.Fatalf("expected 1 commit call, got %d", len(git.commitCalls))
+	}
+
+	if git.commitCalls[0].message != "Address review feedback" {
+		t.Errorf("expected fallback 'Address review feedback', got: %q", git.commitCalls[0].message)
+	}
+}
+
+// --- Integration test: end-to-end threads + trust + dynamic commit (IT-006) ---
+
+func TestNewAction_EndToEnd_ThreadsTrustDynamicCommit(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, git := defaultMocks(project)
+
+	cfg.TrustedUser = "lead-dev"
+	reactor := &mockCommentReactor{}
+	cfg.Reactor = reactor
+
+	// Parent from lead-dev (ID 1), reply from junior-dev (ID 2, InReplyTo 1),
+	// standalone from junior-dev (ID 3).
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix the error handling", User: "lead-dev"},
+		{ID: 2, Path: "main.go", Body: "I agree, this is broken", User: "junior-dev", InReplyTo: 1},
+		{ID: 3, Path: "utils.go", Body: "Add input validation", User: "junior-dev"},
+	}
+
+	inv.response = `### main.go
+**Action:** changed
+**Response:** Fixed error handling with proper nil checks
+
+### utils.go
+**Action:** changed
+**Response:** Added input validation for edge cases`
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify threaded replies in prompt.
+	if !strings.Contains(inv.lastPrompt, "Fix the error handling") {
+		t.Error("expected parent comment in prompt")
+	}
+	if !strings.Contains(inv.lastPrompt, "I agree, this is broken") {
+		t.Error("expected reply body in prompt")
+	}
+
+	// Verify trust annotations.
+	if !strings.Contains(inv.lastPrompt, "(trusted)") {
+		t.Error("expected trusted annotation in prompt")
+	}
+
+	// Verify dynamic commit message (not static fallback).
+	if len(git.commitCalls) != 1 {
+		t.Fatalf("expected 1 commit call, got %d", len(git.commitCalls))
+	}
+	if git.commitCalls[0].message == "Address review feedback" {
+		t.Error("expected dynamic commit message, not static fallback")
+	}
+
+	// Exactly 2 reaction calls (IDs 1 and 3, not reply ID 2).
+	if len(reactor.calls) != 2 {
+		t.Fatalf("expected 2 reaction calls, got %d", len(reactor.calls))
+	}
+	if reactor.calls[0].commentID != 1 {
+		t.Errorf("expected first reaction on comment 1, got %d", reactor.calls[0].commentID)
+	}
+	if reactor.calls[1].commentID != 3 {
+		t.Errorf("expected second reaction on comment 3, got %d", reactor.calls[1].commentID)
+	}
+
+	// Exactly 2 reply calls (IDs 1 and 3).
+	if len(replier.calls) != 2 {
+		t.Fatalf("expected 2 reply calls, got %d", len(replier.calls))
+	}
+	if replier.calls[0].commentID != 1 {
+		t.Errorf("expected first reply to comment 1, got %d", replier.calls[0].commentID)
+	}
+	if replier.calls[1].commentID != 3 {
+		t.Errorf("expected second reply to comment 3, got %d", replier.calls[1].commentID)
 	}
 }

@@ -331,6 +331,49 @@ profiles:
 	}
 }
 
+func TestResolve_GithubUsername_Set(t *testing.T) {
+	dir := t.TempDir()
+	writeCredentialsFile(t, dir, `
+default_profile: work
+profiles:
+  work:
+    linear_api_key: work-linear
+    github_token: work-github
+    github_username: my-bot
+`)
+	t.Setenv("LINEAR_API_KEY", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	creds, err := Resolve(dir, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GithubUsername != "my-bot" {
+		t.Errorf("GithubUsername = %q, want %q", creds.GithubUsername, "my-bot")
+	}
+}
+
+func TestResolve_GithubUsername_Unset(t *testing.T) {
+	dir := t.TempDir()
+	writeCredentialsFile(t, dir, `
+default_profile: work
+profiles:
+  work:
+    linear_api_key: work-linear
+    github_token: work-github
+`)
+	t.Setenv("LINEAR_API_KEY", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	creds, err := Resolve(dir, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.GithubUsername != "" {
+		t.Errorf("GithubUsername = %q, want empty", creds.GithubUsername)
+	}
+}
+
 func TestResolve_GitIdentity_FromProfile(t *testing.T) {
 	dir := t.TempDir()
 	writeCredentialsFile(t, dir, `
