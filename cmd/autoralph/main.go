@@ -29,6 +29,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/rebase"
 	"github.com/uesteibar/ralph/internal/autoralph/refine"
 	"github.com/uesteibar/ralph/internal/autoralph/server"
+	"github.com/uesteibar/ralph/internal/autoralph/usagelimit"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
 	"github.com/uesteibar/ralph/internal/gitops"
 	"github.com/uesteibar/ralph/internal/workspace"
@@ -280,12 +281,21 @@ func runServe(args []string) error {
 	// --- 6. Orchestrator with transitions ---
 	sm := orchestrator.New(database)
 
+	// Shared usage limit state so all workers coordinate around rate limits.
+	ulState := usagelimit.NewState(logger)
+
 	if hasLinear {
-		invoker := &claudeInvoker{}
+		invoker := &usagelimitInvoker{
+			inner: &claudeInvoker{},
+			state: ulState,
+		}
 		// readOnlyInvoker blocks write tools so the AI can only read the
 		// codebase during refinement and iteration — no code changes.
-		readOnlyInvoker := &claudeInvoker{
-			DisallowedTools: []string{"Edit", "Write", "Bash", "NotebookEdit"},
+		readOnlyInvoker := &usagelimitInvoker{
+			inner: &claudeInvoker{
+				DisallowedTools: []string{"Edit", "Write", "Bash", "NotebookEdit"},
+			},
+			state: ulState,
 		}
 		cfgLoader := &configLoaderAdapter{}
 		puller := &gitPullerAdapter{
@@ -516,7 +526,7 @@ func runServe(args []string) error {
 				gitAuthorEmail: gitEmail,
 			}
 			return pr.NewAction(pr.Config{
-				Invoker:    &claudeInvoker{},
+				Invoker:    &usagelimitInvoker{inner: &claudeInvoker{}, state: ulState},
 				Git:        gitOps,
 				Diff:       gitOps,
 				PRD:        &prdReaderAdapter{},

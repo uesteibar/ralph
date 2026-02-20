@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/feedback"
 	"github.com/uesteibar/ralph/internal/autoralph/ghpoller"
 	"github.com/uesteibar/ralph/internal/autoralph/rebase"
+	"github.com/uesteibar/ralph/internal/autoralph/usagelimit"
 	ghclient "github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
@@ -50,6 +52,7 @@ var (
 	_ rebase.BranchPuller          = (*branchPullerAdapter)(nil)
 	_ ghpoller.GitHubClient        = (*ghclient.Client)(nil)
 	_ invoker.EventInvoker         = (*claudeInvoker)(nil)
+	_ invoker.EventInvoker         = (*usagelimitInvoker)(nil)
 )
 
 // claudeInvoker wraps claude.Invoke to satisfy the Invoker interface used by
@@ -79,6 +82,58 @@ func (c *claudeInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string
 		DisallowedTools: c.DisallowedTools,
 		EventHandler:    handler,
 	})
+}
+
+// fullInvoker combines both Invoke and InvokeWithEvents for the
+// usagelimitInvoker wrapper. The claudeInvoker satisfies this interface.
+type fullInvoker interface {
+	Invoke(ctx context.Context, prompt, dir string, maxTurns int) (string, error)
+	InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error)
+}
+
+// usagelimitInvoker wraps an invoker with wait-and-retry logic for usage limits.
+// When a usage limit is already known (from another worker), it waits before
+// invoking. When claude.Invoke returns a UsageLimitError, it records the reset
+// time in shared state and retries after waiting.
+type usagelimitInvoker struct {
+	inner fullInvoker
+	state *usagelimit.State
+}
+
+func (u *usagelimitInvoker) Invoke(ctx context.Context, prompt, dir string, maxTurns int) (string, error) {
+	for {
+		if err := u.state.Wait(ctx); err != nil {
+			return "", err
+		}
+
+		out, err := u.inner.Invoke(ctx, prompt, dir, maxTurns)
+
+		var ulErr *claude.UsageLimitError
+		if errors.As(err, &ulErr) {
+			u.state.Set(ulErr.ResetAt)
+			continue
+		}
+
+		return out, err
+	}
+}
+
+func (u *usagelimitInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
+	for {
+		if err := u.state.Wait(ctx); err != nil {
+			return "", err
+		}
+
+		out, err := u.inner.InvokeWithEvents(ctx, prompt, dir, maxTurns, handler)
+
+		var ulErr *claude.UsageLimitError
+		if errors.As(err, &ulErr) {
+			u.state.Set(ulErr.ResetAt)
+			continue
+		}
+
+		return out, err
+	}
 }
 
 // loopRunnerAdapter wraps loop.Run to satisfy worker.LoopRunner.
