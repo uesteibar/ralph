@@ -129,6 +129,21 @@ func (m *mockDefaultBaseResolver) DefaultBase(projectLocalPath, ralphConfigPath 
 	return m.base, m.err
 }
 
+type mockBranchPuller struct {
+	calls []pullBranchCall
+	err   error
+}
+
+type pullBranchCall struct {
+	workDir string
+	branch  string
+}
+
+func (m *mockBranchPuller) PullBranch(_ context.Context, workDir, branch string) error {
+	m.calls = append(m.calls, pullBranchCall{workDir: workDir, branch: branch})
+	return m.err
+}
+
 // --- NeedsRebase Tests ---
 
 func TestNeedsRebase_NoPRNumber_ReturnsFalse(t *testing.T) {
@@ -307,10 +322,11 @@ func TestNewAction_Success_RebasesAndForcePushes(t *testing.T) {
 	projects := &mockProjectGetter{project: project}
 
 	cfg := Config{
-		Runner:   runner,
-		Pusher:   pusher,
-		Resolver: resolver,
-		Projects: projects,
+		Runner:       runner,
+		Pusher:       pusher,
+		Resolver:     resolver,
+		Projects:     projects,
+		BranchPuller: &mockBranchPuller{},
 	}
 
 	action := NewAction(cfg)
@@ -354,10 +370,11 @@ func TestNewAction_LogsRebaseStartAndFinish(t *testing.T) {
 	projects := &mockProjectGetter{project: project}
 
 	cfg := Config{
-		Runner:   runner,
-		Pusher:   pusher,
-		Resolver: resolver,
-		Projects: projects,
+		Runner:       runner,
+		Pusher:       pusher,
+		Resolver:     resolver,
+		Projects:     projects,
+		BranchPuller: &mockBranchPuller{},
 	}
 
 	action := NewAction(cfg)
@@ -405,10 +422,11 @@ func TestNewAction_RebaseError_ReturnsError(t *testing.T) {
 	projects := &mockProjectGetter{project: project}
 
 	cfg := Config{
-		Runner:   runner,
-		Pusher:   pusher,
-		Resolver: resolver,
-		Projects: projects,
+		Runner:       runner,
+		Pusher:       pusher,
+		Resolver:     resolver,
+		Projects:     projects,
+		BranchPuller: &mockBranchPuller{},
 	}
 
 	action := NewAction(cfg)
@@ -448,10 +466,11 @@ func TestNewAction_ForcePushError_ReturnsError(t *testing.T) {
 	projects := &mockProjectGetter{project: project}
 
 	cfg := Config{
-		Runner:   runner,
-		Pusher:   pusher,
-		Resolver: resolver,
-		Projects: projects,
+		Runner:       runner,
+		Pusher:       pusher,
+		Resolver:     resolver,
+		Projects:     projects,
+		BranchPuller: &mockBranchPuller{},
 	}
 
 	action := NewAction(cfg)
@@ -504,4 +523,143 @@ func TestNewAction_DefaultBaseError_ReturnsError(t *testing.T) {
 	if !strings.Contains(err.Error(), "resolving default base") {
 		t.Errorf("expected 'resolving default base' in error, got: %s", err.Error())
 	}
+}
+
+// --- BranchPuller Tests ---
+
+func TestNewAction_PullsBranchBeforeRebase(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+
+	puller := &mockBranchPuller{}
+	runner := &mockRebaseRunner{}
+	pusher := &mockForcePusher{}
+	resolver := &mockDefaultBaseResolver{base: "main"}
+	projects := &mockProjectGetter{project: project}
+
+	cfg := Config{
+		Runner:       runner,
+		Pusher:       pusher,
+		Resolver:     resolver,
+		Projects:     projects,
+		BranchPuller: puller,
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(puller.calls) != 1 {
+		t.Fatalf("expected 1 PullBranch call, got %d", len(puller.calls))
+	}
+	expectedTreePath := filepath.Join("/tmp/test", ".ralph", "workspaces", "proj-42", "tree")
+	if puller.calls[0].workDir != expectedTreePath {
+		t.Errorf("expected workDir %q, got %q", expectedTreePath, puller.calls[0].workDir)
+	}
+	if puller.calls[0].branch != "autoralph/proj-42" {
+		t.Errorf("expected branch 'autoralph/proj-42', got %q", puller.calls[0].branch)
+	}
+}
+
+func TestNewAction_PullError_ReturnsErrorWithoutRebase(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+
+	puller := &mockBranchPuller{err: errors.New("ff-only failed: diverged")}
+	runner := &mockRebaseRunner{}
+	pusher := &mockForcePusher{}
+	resolver := &mockDefaultBaseResolver{base: "main"}
+	projects := &mockProjectGetter{project: project}
+
+	cfg := Config{
+		Runner:       runner,
+		Pusher:       pusher,
+		Resolver:     resolver,
+		Projects:     projects,
+		BranchPuller: puller,
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error when pull fails")
+	}
+	if !strings.Contains(err.Error(), "pulling branch") {
+		t.Errorf("expected 'pulling branch' in error, got: %s", err.Error())
+	}
+
+	// Rebase and force push should NOT be called
+	if len(runner.calls) != 0 {
+		t.Errorf("expected no rebase calls on pull failure, got %d", len(runner.calls))
+	}
+	if len(pusher.pushedBranches) != 0 {
+		t.Errorf("expected no force push on pull failure, got %d", len(pusher.pushedBranches))
+	}
+}
+
+func TestNewAction_PullBeforeRebase_Ordering(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+
+	var order []string
+	puller := &mockBranchPuller{}
+	runner := &mockRebaseRunner{}
+	resolver := &mockDefaultBaseResolver{base: "main"}
+	projects := &mockProjectGetter{project: project}
+	pusher := &mockForcePusher{}
+
+	// Wrap puller and runner to track call order
+	orderPuller := &orderTrackingPuller{inner: puller, orderLog: &order}
+	orderRunner := &orderTrackingRunner{inner: runner, orderLog: &order}
+
+	cfg := Config{
+		Runner:       orderRunner,
+		Pusher:       pusher,
+		Resolver:     resolver,
+		Projects:     projects,
+		BranchPuller: orderPuller,
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(order) != 2 {
+		t.Fatalf("expected 2 ordered calls, got %d: %v", len(order), order)
+	}
+	if order[0] != "pull" {
+		t.Errorf("expected pull first, got %q", order[0])
+	}
+	if order[1] != "rebase" {
+		t.Errorf("expected rebase second, got %q", order[1])
+	}
+}
+
+// Order-tracking wrappers for verifying call sequence.
+
+type orderTrackingPuller struct {
+	inner    *mockBranchPuller
+	orderLog *[]string
+}
+
+func (o *orderTrackingPuller) PullBranch(ctx context.Context, workDir, branch string) error {
+	*o.orderLog = append(*o.orderLog, "pull")
+	return o.inner.PullBranch(ctx, workDir, branch)
+}
+
+type orderTrackingRunner struct {
+	inner    *mockRebaseRunner
+	orderLog *[]string
+}
+
+func (o *orderTrackingRunner) RunRebase(ctx context.Context, base, workspaceName, projectConfigPath string) error {
+	*o.orderLog = append(*o.orderLog, "rebase")
+	return o.inner.RunRebase(ctx, base, workspaceName, projectConfigPath)
 }

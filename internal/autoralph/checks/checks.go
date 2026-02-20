@@ -50,6 +50,11 @@ type ProjectGetter interface {
 	GetProject(id string) (db.Project, error)
 }
 
+// BranchPuller pulls the latest remote branch state into the local worktree.
+type BranchPuller interface {
+	PullBranch(ctx context.Context, workDir, branch string) error
+}
+
 // ConfigLoader loads a Ralph config from a file path.
 type ConfigLoader interface {
 	Load(path string) (*config.Config, error)
@@ -63,6 +68,7 @@ type Config struct {
 	PRs          PRFetcher
 	Comments     PRCommenter
 	Git          GitOps
+	BranchPuller BranchPuller
 	Projects     ProjectGetter
 	ConfigLoad   ConfigLoader
 	EventHandler events.EventHandler
@@ -145,6 +151,10 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 
 		// Invoke AI in the workspace worktree
 		treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
+
+		if err := cfg.BranchPuller.PullBranch(ctx, treePath, issue.BranchName); err != nil {
+			return fmt.Errorf("pulling branch: %w", err)
+		}
 
 		// Render fix_checks.md template
 		prompt, err := ai.RenderFixChecks(ai.FixChecksData{

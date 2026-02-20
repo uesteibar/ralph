@@ -54,6 +54,11 @@ type IssueCommentReactor interface {
 	ReactToIssueComment(ctx context.Context, owner, repo string, commentID int64, reaction string) error
 }
 
+// BranchPuller pulls the latest remote branch state into the local worktree.
+type BranchPuller interface {
+	PullBranch(ctx context.Context, workDir, branch string) error
+}
+
 // GitOps abstracts git operations for the feedback action.
 type GitOps interface {
 	Commit(ctx context.Context, workDir, message string) error
@@ -80,6 +85,7 @@ type Config struct {
 	Replier       ReviewReplier       // for inline (line-specific) replies
 	PRCommenter   PRCommenter         // optional: for general PR comment replies
 	Git           GitOps
+	BranchPuller  BranchPuller
 	Projects      ProjectGetter
 	ConfigLoad    ConfigLoader
 	Reactor       CommentReactor       // for line comment reactions
@@ -167,6 +173,10 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		}
 
 		treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
+
+		if err := cfg.BranchPuller.PullBranch(ctx, treePath, issue.BranchName); err != nil {
+			return fmt.Errorf("pulling branch: %w", err)
+		}
 
 		prompt, err := ai.RenderAddressFeedback(ai.AddressFeedbackData{
 			Comments:      aiComments,

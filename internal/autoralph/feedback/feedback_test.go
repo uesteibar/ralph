@@ -190,6 +190,21 @@ func (m *mockConfigLoader) Load(_ string) (*config.Config, error) {
 	return m.cfg, m.err
 }
 
+type mockBranchPuller struct {
+	calls []pullBranchCall
+	err   error
+}
+
+type pullBranchCall struct {
+	workDir string
+	branch  string
+}
+
+func (m *mockBranchPuller) PullBranch(_ context.Context, workDir, branch string) error {
+	m.calls = append(m.calls, pullBranchCall{workDir: workDir, branch: branch})
+	return m.err
+}
+
 func defaultMocks(project db.Project) (Config, *mockInvoker, *mockCommentFetcher, *mockReviewReplier, *mockGitOps) {
 	inv := &mockInvoker{response: "AI addressed all feedback"}
 	fetcher := &mockCommentFetcher{
@@ -203,11 +218,12 @@ func defaultMocks(project db.Project) (Config, *mockInvoker, *mockCommentFetcher
 	projGetter := &mockProjectGetter{project: project}
 
 	cfg := Config{
-		Invoker:  inv,
-		Comments: fetcher,
-		Replier:  replier,
-		Git:      git,
-		Projects: projGetter,
+		Invoker:      inv,
+		Comments:     fetcher,
+		Replier:      replier,
+		Git:          git,
+		BranchPuller: &mockBranchPuller{},
+		Projects:     projGetter,
 	}
 	return cfg, inv, fetcher, replier, git
 }
@@ -1577,12 +1593,13 @@ func TestNewAction_IncludesKnowledgePath(t *testing.T) {
 	}}
 
 	action := NewAction(Config{
-		Invoker:    invoker,
-		Comments:   comments,
-		Replier:    &mockReviewReplier{},
-		Git:        &mockGitOps{},
-		Projects:   d,
-		ConfigLoad: &mockConfigLoader{cfg: &config.Config{}},
+		Invoker:      invoker,
+		Comments:     comments,
+		Replier:      &mockReviewReplier{},
+		Git:          &mockGitOps{},
+		BranchPuller: &mockBranchPuller{},
+		Projects:     d,
+		ConfigLoad:   &mockConfigLoader{cfg: &config.Config{}},
 	})
 
 	err := action(issue, d)
@@ -1594,6 +1611,116 @@ func TestNewAction_IncludesKnowledgePath(t *testing.T) {
 	if !strings.Contains(invoker.lastPrompt, ".ralph/knowledge") {
 		t.Error("expected prompt to contain knowledge path")
 	}
+}
+
+// --- BranchPuller tests ---
+
+func TestNewAction_PullsBranchBeforeAIInvocation(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+
+	puller := &mockBranchPuller{}
+	cfg.BranchPuller = puller
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(puller.calls) != 1 {
+		t.Fatalf("expected 1 PullBranch call, got %d", len(puller.calls))
+	}
+
+	expectedTreePath := filepath.Join("/tmp/test", ".ralph", "workspaces", "proj-42", "tree")
+	if puller.calls[0].workDir != expectedTreePath {
+		t.Errorf("expected workDir %q, got %q", expectedTreePath, puller.calls[0].workDir)
+	}
+	if puller.calls[0].branch != "autoralph/proj-42" {
+		t.Errorf("expected branch %q, got %q", "autoralph/proj-42", puller.calls[0].branch)
+	}
+}
+
+func TestNewAction_PullBranchError_ReturnsErrorWithoutAI(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, _, _, git := defaultMocks(project)
+
+	puller := &mockBranchPuller{err: errors.New("ff-only failed: diverged")}
+	cfg.BranchPuller = puller
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error from PullBranch")
+	}
+	if !strings.Contains(err.Error(), "pulling branch") {
+		t.Errorf("expected 'pulling branch' in error, got: %s", err.Error())
+	}
+
+	// AI should NOT have been invoked
+	if inv.lastPrompt != "" {
+		t.Error("expected AI not to be invoked when PullBranch fails")
+	}
+
+	// No git operations should have occurred
+	if len(git.commitCalls) != 0 {
+		t.Errorf("expected no commit calls, got %d", len(git.commitCalls))
+	}
+	if len(git.pushCalls) != 0 {
+		t.Errorf("expected no push calls, got %d", len(git.pushCalls))
+	}
+}
+
+func TestNewAction_PullBranchCalledBeforeInvoke(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+
+	var order []string
+	puller := &mockBranchPuller{}
+	cfg.BranchPuller = &orderTrackingPuller{inner: puller, orderLog: &order}
+	cfg.Invoker = &orderTrackingInvoker{inner: cfg.Invoker, orderLog: &order}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	pullIdx := -1
+	invokeIdx := -1
+	for i, entry := range order {
+		if entry == "pull" && pullIdx < 0 {
+			pullIdx = i
+		}
+		if entry == "invoke" && invokeIdx < 0 {
+			invokeIdx = i
+		}
+	}
+	if pullIdx < 0 {
+		t.Fatal("expected PullBranch call")
+	}
+	if invokeIdx < 0 {
+		t.Fatal("expected AI invocation call")
+	}
+	if pullIdx >= invokeIdx {
+		t.Errorf("expected PullBranch (index %d) before AI invocation (index %d)", pullIdx, invokeIdx)
+	}
+}
+
+type orderTrackingPuller struct {
+	inner    BranchPuller
+	orderLog *[]string
+}
+
+func (o *orderTrackingPuller) PullBranch(ctx context.Context, workDir, branch string) error {
+	*o.orderLog = append(*o.orderLog, "pull")
+	return o.inner.PullBranch(ctx, workDir, branch)
 }
 
 // --- buildReplyForComment tests ---

@@ -424,6 +424,7 @@ func runServe(args []string) error {
 						ConfigLoad:    &configLoaderAdapter{},
 						Reactor:       gc,
 						IssueReactor:  gc,
+						BranchPuller:  &branchPullerAdapter{},
 						OnBuildEvent:  onBuildEvent,
 					})(issue, database)
 				},
@@ -438,15 +439,21 @@ func runServe(args []string) error {
 					if err != nil {
 						return err
 					}
+					gitName, gitEmail := registry.gitIdentity(issue.ProjectID)
+					gitOps := &gitOpsAdapter{
+						gitAuthorName:  gitName,
+						gitAuthorEmail: gitEmail,
+					}
 					return checks.NewAction(checks.Config{
 						Invoker:      invoker,
 						CheckRuns:    gc,
 						Logs:         gc,
 						PRs:          gc,
 						Comments:     gc,
-						Git:          &gitOpsAdapter{},
+						Git:          gitOps,
 						Projects:     database,
 						ConfigLoad:   &configLoaderAdapter{},
+						BranchPuller: &branchPullerAdapter{},
 						OnBuildEvent: onBuildEvent,
 					})(issue, database)
 				},
@@ -455,12 +462,13 @@ func runServe(args []string) error {
 			// IN_REVIEW → IN_REVIEW (rebase when branch falls behind base)
 			// Registered after feedback so merge detection and feedback take priority.
 			rebaseCfg := rebase.Config{
-				Fetcher:  &gitOpsAdapter{},
-				Checker:  &gitOpsAdapter{},
-				Pusher:   &gitOpsAdapter{},
-				Runner:   &rebaseRunnerAdapter{},
-				Projects: database,
-				Resolver: cfgLoader,
+				Fetcher:      &gitOpsAdapter{},
+				Checker:      &gitOpsAdapter{},
+				Pusher:       &gitOpsAdapter{},
+				Runner:       &rebaseRunnerAdapter{},
+				Projects:     database,
+				Resolver:     cfgLoader,
+				BranchPuller: &branchPullerAdapter{},
 			}
 			sm.Register(orchestrator.Transition{
 				From:      orchestrator.StateInReview,

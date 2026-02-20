@@ -40,14 +40,20 @@ type DefaultBaseResolver interface {
 	DefaultBase(projectLocalPath, ralphConfigPath string) (string, error)
 }
 
+// BranchPuller pulls the latest remote branch state into the local worktree.
+type BranchPuller interface {
+	PullBranch(ctx context.Context, workDir, branch string) error
+}
+
 // Config holds the dependencies for the rebase condition and action.
 type Config struct {
-	Fetcher  BranchFetcher
-	Checker  AncestorChecker
-	Pusher   ForcePusher
-	Runner   RebaseRunner
-	Projects ProjectGetter
-	Resolver DefaultBaseResolver
+	Fetcher      BranchFetcher
+	Checker      AncestorChecker
+	Pusher       ForcePusher
+	Runner       RebaseRunner
+	Projects     ProjectGetter
+	Resolver     DefaultBaseResolver
+	BranchPuller BranchPuller
 }
 
 // NeedsRebase returns a ConditionFunc that checks whether the issue's branch
@@ -108,6 +114,12 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("resolving default base: %w", err)
 		}
 
+		treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
+
+		if err := cfg.BranchPuller.PullBranch(ctx, treePath, issue.BranchName); err != nil {
+			return fmt.Errorf("pulling branch: %w", err)
+		}
+
 		if err := database.LogActivity(issue.ID, "rebase_start", "", "", fmt.Sprintf("Rebasing %s onto %s", issue.Identifier, base)); err != nil {
 			return fmt.Errorf("logging activity: %w", err)
 		}
@@ -117,8 +129,6 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		if err := cfg.Runner.RunRebase(ctx, base, issue.WorkspaceName, projectConfigPath); err != nil {
 			return fmt.Errorf("running rebase: %w", err)
 		}
-
-		treePath := workspace.TreePath(project.LocalPath, issue.WorkspaceName)
 
 		if err := cfg.Pusher.ForcePushBranch(ctx, treePath, issue.BranchName); err != nil {
 			return fmt.Errorf("force pushing branch: %w", err)
