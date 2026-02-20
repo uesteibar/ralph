@@ -94,6 +94,8 @@ function IssueRow({ issue, projectName }: { issue: Issue; projectName: string })
             ? `Running${issue.model ? ` - ${issue.model}` : ''}`
             : 'Idle'}
         </span>
+      </td>
+      <td style={{ padding: '10px 12px' }}>
         {issue.pr_url && (
           <a
             href={issue.pr_url}
@@ -218,7 +220,8 @@ export default function Dashboard() {
                   <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Project</th>
                   <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Title</th>
                   <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>State</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Info</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Status</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>PR</th>
                 </tr>
               </thead>
               <tbody>
