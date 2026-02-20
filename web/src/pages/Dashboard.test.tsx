@@ -304,7 +304,7 @@ describe('Dashboard', () => {
     })
     const headers = screen.getAllByRole('columnheader')
     const headerTexts = headers.map(h => h.textContent)
-    expect(headerTexts).toEqual(['ID', 'Project', 'Title', 'State', 'Info'])
+    expect(headerTexts).toEqual(['ID', 'Project', 'Title', 'State', 'Status', 'PR'])
   })
 
   it('displays correct project name for each issue across multiple projects', async () => {
@@ -406,6 +406,78 @@ describe('Dashboard', () => {
     })
     expect(screen.getByText('Idle')).toBeInTheDocument()
     expect(screen.queryByText(/Sonnet/)).not.toBeInTheDocument()
+  })
+
+  it('renders PR link in dedicated PR column cell, not in Status cell', async () => {
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Fix login bug')).toBeInTheDocument()
+    })
+    // Find the row for the issue with a PR
+    const rows = screen.getAllByRole('row')
+    const prRow = rows.find(r => r.textContent?.includes('Fix login bug'))!
+    const cells = prRow.querySelectorAll('td')
+    // 6th cell (index 5) = PR column
+    expect(cells[5].querySelector('a')).toHaveAttribute('href', 'https://github.com/octocat/hello-world/pull/42')
+    expect(cells[5]).toHaveTextContent('PR #42')
+    // 5th cell (index 4) = Status column — should NOT contain PR link
+    expect(cells[4].querySelector('a')).toBeNull()
+    expect(cells[4]).not.toHaveTextContent('PR #42')
+  })
+
+  it('renders Status indicator in dedicated Status cell without PR content', async () => {
+    const issuesWithModel: Issue[] = [
+      {
+        id: 'iss-model',
+        project_id: 'p1',
+        identifier: 'PROJ-M1',
+        title: 'Model issue',
+        state: 'building',
+        build_active: true,
+        model: 'Sonnet 4.5',
+        created_at: '2025-02-11T12:00:00Z',
+        updated_at: '2025-02-11T12:30:00Z',
+        pr_number: 99,
+        pr_url: 'https://github.com/octocat/hello-world/pull/99',
+      },
+    ]
+    vi.mocked(fetchIssues).mockResolvedValue(issuesWithModel)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Model issue')).toBeInTheDocument()
+    })
+    const rows = screen.getAllByRole('row')
+    const cells = rows[1].querySelectorAll('td')
+    // Status cell (index 4) shows Running with model
+    expect(cells[4]).toHaveTextContent('Running - Sonnet 4.5')
+    // Status cell does NOT contain PR link
+    expect(cells[4]).not.toHaveTextContent('PR #99')
+    // PR cell (index 5) contains the PR link
+    expect(cells[5]).toHaveTextContent('PR #99')
+  })
+
+  it('shows empty PR cell when issue has no PR', async () => {
+    const noPrIssues: Issue[] = [
+      {
+        id: 'iss-nopr',
+        project_id: 'p1',
+        identifier: 'PROJ-NP',
+        title: 'No PR issue',
+        state: 'building',
+        build_active: true,
+        created_at: '2025-02-11T12:00:00Z',
+        updated_at: '2025-02-11T12:30:00Z',
+      },
+    ]
+    vi.mocked(fetchIssues).mockResolvedValue(noPrIssues)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('No PR issue')).toBeInTheDocument()
+    })
+    const rows = screen.getAllByRole('row')
+    const cells = rows[1].querySelectorAll('td')
+    // PR cell (index 5) is empty
+    expect(cells[5].textContent).toBe('')
   })
 
   it('shows empty string when project name cannot be resolved', async () => {
