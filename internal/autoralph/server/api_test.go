@@ -1074,3 +1074,160 @@ func TestAPI_CCUsage_ContentType(t *testing.T) {
 		t.Fatalf("expected Content-Type application/json, got %s", ct)
 	}
 }
+
+func TestAPI_ListIssues_IncludesModelName(t *testing.T) {
+	d := testDB(t)
+	srv, err := server.New("127.0.0.1:0", server.Config{DB: d, ModelName: "Sonnet 4.5"})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	go srv.Serve()
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue1", State: "refining"})
+
+	resp, err := http.Get(apiURL(srv, "/api/issues"))
+	if err != nil {
+		t.Fatalf("GET /api/issues failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result []map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(result))
+	}
+	if result[0]["model"] != "Sonnet 4.5" {
+		t.Fatalf("expected model 'Sonnet 4.5', got %v", result[0]["model"])
+	}
+}
+
+func TestAPI_GetIssue_IncludesModelName(t *testing.T) {
+	d := testDB(t)
+	srv, err := server.New("127.0.0.1:0", server.Config{DB: d, ModelName: "Opus 4.6"})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	go srv.Serve()
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue1", State: "building"})
+
+	resp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID))
+	if err != nil {
+		t.Fatalf("GET /api/issues/:id failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["model"] != "Opus 4.6" {
+		t.Fatalf("expected model 'Opus 4.6', got %v", result["model"])
+	}
+}
+
+func TestAPI_ListIssues_EmptyModelName(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue1", State: "queued"})
+
+	resp, err := http.Get(apiURL(srv, "/api/issues"))
+	if err != nil {
+		t.Fatalf("GET /api/issues failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result []map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(result))
+	}
+	// model field must be present as empty string, not omitted
+	model, ok := result[0]["model"]
+	if !ok {
+		t.Fatal("expected 'model' field to be present in response")
+	}
+	if model != "" {
+		t.Fatalf("expected model '', got %v", model)
+	}
+}
+
+func TestAPI_GetIssue_EmptyModelName(t *testing.T) {
+	d := testDB(t)
+	srv := newAPIServer(t, d)
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "issue1", State: "building"})
+
+	resp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID))
+	if err != nil {
+		t.Fatalf("GET /api/issues/:id failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	model, ok := result["model"]
+	if !ok {
+		t.Fatal("expected 'model' field to be present in response")
+	}
+	if model != "" {
+		t.Fatalf("expected model '', got %v", model)
+	}
+}
+
+// mockBuildChecker implements server.BuildChecker for testing.
+type mockBuildChecker struct {
+	running map[string]bool
+}
+
+func (m *mockBuildChecker) IsRunning(issueID string) bool {
+	return m.running[issueID]
+}
+
+func TestAPI_BuildActive_ReturnedForNonBuildingStates(t *testing.T) {
+	d := testDB(t)
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: "/tmp/p"})
+	iss, _ := d.CreateIssue(db.Issue{ProjectID: p.ID, Title: "refining issue", State: "refining"})
+
+	checker := &mockBuildChecker{running: map[string]bool{iss.ID: true}}
+	srv, err := server.New("127.0.0.1:0", server.Config{DB: d, BuildChecker: checker})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	go srv.Serve()
+
+	// Verify list endpoint returns build_active true for refining issue
+	resp, err := http.Get(apiURL(srv, "/api/issues"))
+	if err != nil {
+		t.Fatalf("GET /api/issues failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var listResult []map[string]any
+	json.NewDecoder(resp.Body).Decode(&listResult)
+	if len(listResult) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(listResult))
+	}
+	if listResult[0]["build_active"] != true {
+		t.Fatalf("expected build_active true for refining issue, got %v", listResult[0]["build_active"])
+	}
+
+	// Verify detail endpoint returns build_active true for refining issue
+	detailResp, err := http.Get(apiURL(srv, "/api/issues/"+iss.ID))
+	if err != nil {
+		t.Fatalf("GET /api/issues/:id failed: %v", err)
+	}
+	defer detailResp.Body.Close()
+
+	var detailResult map[string]any
+	json.NewDecoder(detailResp.Body).Decode(&detailResult)
+	if detailResult["build_active"] != true {
+		t.Fatalf("expected build_active true for refining issue detail, got %v", detailResult["build_active"])
+	}
+}

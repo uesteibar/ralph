@@ -362,32 +362,32 @@ export default function IssueDetail() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
           <span style={{ fontSize: '14px', fontWeight: 500, color: '#6b7280' }}>{issue.identifier}</span>
           <StateBadge state={issue.state} />
-          {issue.state === 'building' && (
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '2px 10px',
+              borderRadius: '12px',
+              fontSize: '12px',
+              fontWeight: 600,
+              color: issue.build_active ? '#065f46' : '#92400e',
+              backgroundColor: issue.build_active ? '#d1fae5' : '#fef3c7',
+            }}
+          >
             <span
               style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '2px 10px',
-                borderRadius: '12px',
-                fontSize: '12px',
-                fontWeight: 600,
-                color: issue.build_active ? '#065f46' : '#92400e',
-                backgroundColor: issue.build_active ? '#d1fae5' : '#fef3c7',
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: issue.build_active ? '#10b981' : '#f59e0b',
+                display: 'inline-block',
               }}
-            >
-              <span
-                style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  backgroundColor: issue.build_active ? '#10b981' : '#f59e0b',
-                  display: 'inline-block',
-                }}
-              />
-              {issue.build_active ? 'Daemon running' : 'Daemon stopped'}
-            </span>
-          )}
+            />
+            {issue.build_active
+              ? `Agent running${issue.model ? ` - ${issue.model}` : ''}`
+              : 'Agent idle'}
+          </span>
           {issue.iteration && issue.iteration > 0 && (
             <span style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>
               Iteration {issue.iteration}{issue.max_iterations ? `/${issue.max_iterations}` : ''}

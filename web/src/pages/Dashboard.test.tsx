@@ -321,6 +321,93 @@ describe('Dashboard', () => {
     expect(rows[2]).toHaveTextContent('second-project')
   })
 
+  it('shows Running indicator for non-building states when build_active is true', async () => {
+    const refiningIssues: Issue[] = [
+      {
+        id: 'iss-refining',
+        project_id: 'p1',
+        identifier: 'PROJ-R1',
+        title: 'Refining issue',
+        state: 'refining',
+        build_active: true,
+        created_at: '2025-02-11T12:00:00Z',
+        updated_at: '2025-02-11T12:30:00Z',
+      },
+    ]
+    vi.mocked(fetchIssues).mockResolvedValue(refiningIssues)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Refining issue')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Running')).toBeInTheDocument()
+  })
+
+  it('shows Idle indicator for non-building states when build_active is false', async () => {
+    const reviewIssues: Issue[] = [
+      {
+        id: 'iss-review',
+        project_id: 'p1',
+        identifier: 'PROJ-R2',
+        title: 'Review issue',
+        state: 'in_review',
+        build_active: false,
+        created_at: '2025-02-11T12:00:00Z',
+        updated_at: '2025-02-11T12:30:00Z',
+      },
+    ]
+    vi.mocked(fetchIssues).mockResolvedValue(reviewIssues)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Review issue')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Idle')).toBeInTheDocument()
+  })
+
+  it('shows model name in Running indicator when model is present and build_active', async () => {
+    const issuesWithModel: Issue[] = [
+      {
+        id: 'iss-model',
+        project_id: 'p1',
+        identifier: 'PROJ-M1',
+        title: 'Model issue',
+        state: 'building',
+        build_active: true,
+        model: 'Sonnet 4.5',
+        created_at: '2025-02-11T12:00:00Z',
+        updated_at: '2025-02-11T12:30:00Z',
+      },
+    ]
+    vi.mocked(fetchIssues).mockResolvedValue(issuesWithModel)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Model issue')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Running - Sonnet 4.5')).toBeInTheDocument()
+  })
+
+  it('does not show model name when build_active is false', async () => {
+    const idleWithModel: Issue[] = [
+      {
+        id: 'iss-idle-model',
+        project_id: 'p1',
+        identifier: 'PROJ-IM1',
+        title: 'Idle with model',
+        state: 'building',
+        build_active: false,
+        model: 'Sonnet 4.5',
+        created_at: '2025-02-11T12:00:00Z',
+        updated_at: '2025-02-11T12:30:00Z',
+      },
+    ]
+    vi.mocked(fetchIssues).mockResolvedValue(idleWithModel)
+    renderDashboard()
+    await waitFor(() => {
+      expect(screen.getByText('Idle with model')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Idle')).toBeInTheDocument()
+    expect(screen.queryByText(/Sonnet/)).not.toBeInTheDocument()
+  })
+
   it('shows empty string when project name cannot be resolved', async () => {
     const orphanIssue: Issue[] = [
       {

@@ -15,6 +15,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/ccusage"
 	"github.com/uesteibar/ralph/internal/autoralph/checks"
 	"github.com/uesteibar/ralph/internal/autoralph/complete"
+	"github.com/uesteibar/ralph/internal/claude"
 	"github.com/uesteibar/ralph/internal/autoralph/credentials"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/feedback"
@@ -559,7 +560,13 @@ func runServe(args []string) error {
 		logger.Info("recovered building issues", "count", count)
 	}
 
-	// --- 12. Start HTTP server ---
+	// --- 12. Resolve model name ---
+	modelName := claude.ModelName()
+	if modelName != "" {
+		logger.Info("resolved model name", "model", modelName)
+	}
+
+	// --- 13. Start HTTP server ---
 	cfg := server.Config{
 		DevMode:          devMode,
 		LinearURL:        linearURL,
@@ -571,6 +578,7 @@ func runServe(args []string) error {
 		PRDPathFn:        workspace.PRDPathForWorkspace,
 		CCUsageProvider:  ccPoller,
 		Wake:             wake,
+		ModelName:        modelName,
 	}
 	srv, err := server.New(addr, cfg)
 	if err != nil {
@@ -596,7 +604,7 @@ func runServe(args []string) error {
 		}
 	}()
 
-	// --- 13. Wait for shutdown ---
+	// --- 14. Wait for shutdown ---
 	<-ctx.Done()
 	fmt.Fprintln(os.Stderr, "\nshutting down...")
 

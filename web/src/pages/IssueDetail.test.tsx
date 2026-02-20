@@ -404,6 +404,81 @@ describe('IssueDetail', () => {
     expect(thoughtText.closest('span')!.style.color).toBe('rgb(201, 160, 220)')
   })
 
+  it('shows Agent running label instead of Daemon running', async () => {
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText(/Agent running/)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Daemon/)).not.toBeInTheDocument()
+  })
+
+  it('shows Agent idle label when build_active is false', async () => {
+    const idleIssue = {
+      ...mockIssue,
+      state: 'refining',
+      build_active: false,
+      activity: [],
+      build_activity: [],
+      stories: [],
+      integration_tests: [],
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(idleIssue)
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Agent idle')).toBeInTheDocument()
+    })
+  })
+
+  it('shows indicator for non-building states when build_active is true', async () => {
+    const refiningActive = {
+      ...mockIssue,
+      state: 'refining',
+      build_active: true,
+      activity: [],
+      build_activity: [],
+      stories: [],
+      integration_tests: [],
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(refiningActive)
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText(/Agent running/)).toBeInTheDocument()
+    })
+  })
+
+  it('shows model name when model is present and build_active is true', async () => {
+    const issueWithModel = {
+      ...mockIssue,
+      state: 'building',
+      build_active: true,
+      model: 'Sonnet 4.5',
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(issueWithModel)
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Agent running - Sonnet 4.5')).toBeInTheDocument()
+    })
+  })
+
+  it('does not show model name when build_active is false', async () => {
+    const idleWithModel = {
+      ...mockIssue,
+      state: 'building',
+      build_active: false,
+      model: 'Sonnet 4.5',
+      activity: [],
+      build_activity: [],
+      stories: [],
+      integration_tests: [],
+    }
+    vi.mocked(fetchIssue).mockResolvedValue(idleWithModel)
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Agent idle')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Sonnet/)).not.toBeInTheDocument()
+  })
+
   it('renders Timeline directly from activity without filtering', async () => {
     const issueTimelineOnly = {
       ...mockIssue,

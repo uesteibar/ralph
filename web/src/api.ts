@@ -20,6 +20,7 @@ export interface Issue {
   workspace_name?: string
   branch_name?: string
   build_active: boolean
+  model?: string
   created_at: string
   updated_at: string
 }
@@ -85,6 +86,7 @@ export interface IssueDetail {
   pr_url?: string
   error_message?: string
   build_active: boolean
+  model?: string
   stories: StoryInfo[]
   integration_tests: IntegrationTestInfo[]
   current_story?: string

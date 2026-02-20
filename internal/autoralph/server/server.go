@@ -55,6 +55,9 @@ type Config struct {
 	// should re-evaluate immediately (e.g. after a retry or resume). A non-blocking
 	// send is performed; if the channel is nil or full the signal is silently dropped.
 	Wake chan<- struct{}
+	// ModelName is the resolved Claude model display name (e.g. "Sonnet 4.5").
+	// Included in issue list and detail API responses.
+	ModelName string
 	// LinearURL overrides the Linear API endpoint (for mock servers in E2E tests).
 	LinearURL string
 	// GithubURL overrides the GitHub API endpoint (for mock servers in E2E tests).
@@ -98,7 +101,7 @@ func (s *Server) Close() error {
 
 func (s *Server) registerRoutes(cfg Config) {
 	if cfg.DB != nil {
-		api := &apiHandler{db: cfg.DB, startAt: time.Now(), workspaceRemover: cfg.WorkspaceRemover, buildChecker: cfg.BuildChecker, prdPathFn: cfg.PRDPathFn, wake: cfg.Wake}
+		api := &apiHandler{db: cfg.DB, startAt: time.Now(), workspaceRemover: cfg.WorkspaceRemover, buildChecker: cfg.BuildChecker, prdPathFn: cfg.PRDPathFn, wake: cfg.Wake, modelName: cfg.ModelName}
 		s.mux.HandleFunc("GET /api/status", api.handleStatus)
 		s.mux.HandleFunc("GET /api/projects", api.handleListProjects)
 		s.mux.HandleFunc("GET /api/issues", api.handleListIssues)
