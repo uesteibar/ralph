@@ -1933,6 +1933,139 @@ func TestNewAction_ReplyThreadsInPrompt(t *testing.T) {
 	}
 }
 
+// --- annotateTrust unit tests ---
+
+func TestAnnotateTrust_MarksMatchingAuthor(t *testing.T) {
+	items := []feedbackItem{
+		{author: "trusted-reviewer", body: "fix this"},
+		{author: "other-dev", body: "looks good"},
+	}
+	annotateTrust(items, "trusted-reviewer")
+	if !items[0].isTrusted {
+		t.Error("expected trusted-reviewer to be marked trusted")
+	}
+	if items[1].isTrusted {
+		t.Error("expected other-dev NOT to be marked trusted")
+	}
+}
+
+func TestAnnotateTrust_CaseInsensitive(t *testing.T) {
+	items := []feedbackItem{
+		{author: "Trusted-Reviewer", body: "fix this"},
+	}
+	annotateTrust(items, "trusted-reviewer")
+	if !items[0].isTrusted {
+		t.Error("expected case-insensitive match to be trusted")
+	}
+}
+
+func TestAnnotateTrust_EmptyTrustedUser_NoAnnotation(t *testing.T) {
+	items := []feedbackItem{
+		{author: "reviewer", body: "fix this"},
+	}
+	annotateTrust(items, "")
+	if items[0].isTrusted {
+		t.Error("expected no trust annotation when TrustedUser is empty")
+	}
+}
+
+func TestAnnotateTrust_NoMatchingAuthor(t *testing.T) {
+	items := []feedbackItem{
+		{author: "other-dev", body: "fix this"},
+	}
+	annotateTrust(items, "trusted-reviewer")
+	if items[0].isTrusted {
+		t.Error("expected non-matching author NOT to be trusted")
+	}
+}
+
+// --- Integration test: trusted annotation in AI prompt (IT-002) ---
+
+func TestNewAction_TrustedUserAnnotation_InPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	cfg.TrustedUser = "trusted-reviewer"
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix the null check", User: "trusted-reviewer"},
+		{ID: 2, Path: "utils.go", Body: "Add tests", User: "other-dev"},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Trusted reviewer should have "(trusted)" marker in prompt.
+	if !strings.Contains(inv.lastPrompt, "(trusted)") {
+		t.Error("expected prompt to contain '(trusted)' for trusted reviewer")
+	}
+
+	// The trusted marker should appear next to the trusted reviewer's name.
+	if !strings.Contains(inv.lastPrompt, "trusted-reviewer") {
+		t.Error("expected prompt to contain trusted reviewer name")
+	}
+
+	// The untrusted reviewer should NOT have "(trusted)" next to their name.
+	// Check that "other-dev" and "(trusted)" do NOT appear together.
+	otherDevIdx := strings.Index(inv.lastPrompt, "other-dev")
+	if otherDevIdx < 0 {
+		t.Fatal("expected prompt to contain 'other-dev'")
+	}
+	// Look at the text around other-dev's entry — it should not have "(trusted)".
+	otherDevSection := inv.lastPrompt[otherDevIdx : otherDevIdx+50]
+	if strings.Contains(otherDevSection, "(trusted)") {
+		t.Error("expected '(trusted)' NOT to appear next to 'other-dev'")
+	}
+
+	// Prompt should contain guidance about prioritizing trusted feedback.
+	if !strings.Contains(inv.lastPrompt, "prioritize trusted") {
+		t.Error("expected prompt to contain trusted prioritization guidance")
+	}
+}
+
+// --- Integration test: no trust annotation when TrustedUser is empty (IT-005) ---
+
+func TestNewAction_NoTrustAnnotation_WhenTrustedUserEmpty(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	cfg.TrustedUser = "" // empty — no trust annotation
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer-a"},
+		{ID: 2, Path: "utils.go", Body: "Add tests", User: "reviewer-b"},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No "(trusted)" should appear in the prompt.
+	if strings.Contains(inv.lastPrompt, "(trusted)") {
+		t.Error("expected NO '(trusted)' annotations when TrustedUser is empty")
+	}
+
+	// All comments should still be present.
+	if !strings.Contains(inv.lastPrompt, "Fix this") {
+		t.Error("expected first comment body in prompt")
+	}
+	if !strings.Contains(inv.lastPrompt, "Add tests") {
+		t.Error("expected second comment body in prompt")
+	}
+
+	// Should NOT contain trusted prioritization guidance.
+	if strings.Contains(inv.lastPrompt, "prioritize trusted") {
+		t.Error("expected NO trusted prioritization guidance when TrustedUser is empty")
+	}
+}
+
 func TestNewAction_NoReplies_BackwardCompatible(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)

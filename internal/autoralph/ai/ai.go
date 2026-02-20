@@ -79,19 +79,21 @@ type CommentReply struct {
 
 // AddressFeedbackComment represents a single review comment.
 type AddressFeedbackComment struct {
-	Path    string
-	Line    int
-	Author  string
-	Body    string
-	Replies []CommentReply
+	Path      string
+	Line      int
+	Author    string
+	Body      string
+	Replies   []CommentReply
+	IsTrusted bool
 }
 
 // AddressFeedbackData holds the context for rendering the address_feedback prompt.
 type AddressFeedbackData struct {
-	Comments      []AddressFeedbackComment
-	CodeContext   string
-	QualityChecks []string
-	KnowledgePath string
+	Comments       []AddressFeedbackComment
+	CodeContext    string
+	QualityChecks  []string
+	KnowledgePath  string
+	HasTrustedUser bool
 }
 
 // FailedCheckRun represents a single failed CI check run.

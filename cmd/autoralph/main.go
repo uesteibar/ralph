@@ -236,10 +236,11 @@ func runServe(args []string) error {
 		}
 
 		registry[proj.ID] = &projectClients{
-			linear:   lc,
-			github:   gc,
-			gitName:  creds.GitAuthorName,
-			gitEmail: creds.GitAuthorEmail,
+			linear:         lc,
+			github:         gc,
+			gitName:        creds.GitAuthorName,
+			gitEmail:       creds.GitAuthorEmail,
+			githubUsername: creds.GithubUsername,
 		}
 
 		pollerProjects = append(pollerProjects, poller.ProjectInfo{
@@ -443,6 +444,7 @@ func runServe(args []string) error {
 						IssueReactor:  gc,
 						BranchPuller:  &branchPullerAdapter{},
 						OnBuildEvent:  onBuildEvent,
+						TrustedUser:   registry.githubUsername(issue.ProjectID),
 					})(issue, database)
 				},
 			})
@@ -873,10 +875,11 @@ func dispatchAsync(
 // projectClients holds the per-project Linear, GitHub, and git identity
 // clients resolved at startup.
 type projectClients struct {
-	linear   *linear.Client
-	github   *ghclient.Client
-	gitName  string
-	gitEmail string
+	linear         *linear.Client
+	github         *ghclient.Client
+	gitName        string
+	gitEmail       string
+	githubUsername string
 }
 
 // clientRegistry maps project IDs to their resolved clients.
@@ -904,6 +907,14 @@ func (r clientRegistry) gitIdentity(projectID string) (name, email string) {
 		return "", ""
 	}
 	return c.gitName, c.gitEmail
+}
+
+func (r clientRegistry) githubUsername(projectID string) string {
+	c, ok := r[projectID]
+	if !ok {
+		return ""
+	}
+	return c.githubUsername
 }
 
 // isTerminalState returns true for states that should not be evaluated by the

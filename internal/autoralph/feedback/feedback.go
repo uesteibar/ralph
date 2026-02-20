@@ -96,6 +96,7 @@ type Config struct {
 	EventHandler  events.EventHandler
 	OnBuildEvent  func(issueID, detail string)
 	OverrideDir   string
+	TrustedUser   string // GitHub username of the trusted reviewer (empty = no trust annotation)
 }
 
 // commentSource identifies where a feedback item originated.
@@ -115,12 +116,13 @@ type replyItem struct {
 
 // feedbackItem is a normalized piece of feedback from any source.
 type feedbackItem struct {
-	id      int64
-	path    string // empty for non-line feedback
-	author  string
-	body    string
-	source  commentSource
-	replies []replyItem
+	id        int64
+	path      string // empty for non-line feedback
+	author    string
+	body      string
+	source    commentSource
+	replies   []replyItem
+	isTrusted bool
 }
 
 func (f feedbackItem) isInline() bool {
@@ -169,6 +171,9 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return nil
 		}
 
+		// Annotate trusted user if configured.
+		annotateTrust(items, cfg.TrustedUser)
+
 		// React 👀 to each feedback item before invoking AI.
 		reactToFeedback(ctx, cfg, project.GithubOwner, project.GithubRepo, items)
 
@@ -183,10 +188,11 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 				})
 			}
 			aiComments = append(aiComments, ai.AddressFeedbackComment{
-				Path:    item.path,
-				Author:  item.author,
-				Body:    item.body,
-				Replies: replies,
+				Path:      item.path,
+				Author:    item.author,
+				Body:      item.body,
+				Replies:   replies,
+				IsTrusted: item.isTrusted,
 			})
 		}
 
@@ -197,9 +203,10 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		}
 
 		prompt, err := ai.RenderAddressFeedback(ai.AddressFeedbackData{
-			Comments:      aiComments,
-			QualityChecks: qualityChecks,
-			KnowledgePath: knowledge.Dir(treePath),
+			Comments:       aiComments,
+			QualityChecks:  qualityChecks,
+			KnowledgePath:  knowledge.Dir(treePath),
+			HasTrustedUser: cfg.TrustedUser != "",
 		}, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering feedback prompt: %w", err)
@@ -386,6 +393,19 @@ func groupThreads(comments []github.Comment) []feedbackItem {
 		}
 	}
 	return result
+}
+
+// annotateTrust marks feedback items whose author matches trustedUser as trusted.
+// When trustedUser is empty, no annotations are applied.
+func annotateTrust(items []feedbackItem, trustedUser string) {
+	if trustedUser == "" {
+		return
+	}
+	for i := range items {
+		if strings.EqualFold(items[i].author, trustedUser) {
+			items[i].isTrusted = true
+		}
+	}
 }
 
 // isBot returns true if the username looks like a GitHub App bot (e.g. "my-app[bot]").

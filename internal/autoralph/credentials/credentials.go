@@ -17,7 +17,8 @@ type Credentials struct {
 	GithubAppInstallationID int64
 	GithubAppPrivateKeyPath string
 
-	GithubUserID int64
+	GithubUserID   int64
+	GithubUsername string
 
 	GitAuthorName  string
 	GitAuthorEmail string
@@ -35,6 +36,7 @@ type profileEntry struct {
 	GithubAppInstallationID int64  `yaml:"github_app_installation_id"`
 	GithubAppPrivateKeyPath string `yaml:"github_app_private_key_path"`
 	GithubUserID            int64  `yaml:"github_user_id"`
+	GithubUsername          string `yaml:"github_username"`
 	GitAuthorName           string `yaml:"git_author_name"`
 	GitAuthorEmail          string `yaml:"git_author_email"`
 }
@@ -110,6 +112,7 @@ func Resolve(configDir, profileName string) (Credentials, error) {
 		GithubAppInstallationID: profile.GithubAppInstallationID,
 		GithubAppPrivateKeyPath: profile.GithubAppPrivateKeyPath,
 		GithubUserID:            profile.GithubUserID,
+		GithubUsername:          profile.GithubUsername,
 		GitAuthorName:           gitAuthorNameWithDefault(profile.GitAuthorName),
 		GitAuthorEmail:          gitAuthorEmailWithDefault(profile.GitAuthorEmail),
 	}
