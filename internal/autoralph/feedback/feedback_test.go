@@ -528,7 +528,7 @@ func TestNewAction_ProjectNotFound(t *testing.T) {
 	}
 }
 
-func TestNewAction_SkipsReplyComments(t *testing.T) {
+func TestNewAction_GroupsReplyThreads(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
 	issue := createTestIssue(t, d, project)
@@ -546,12 +546,18 @@ func TestNewAction_SkipsReplyComments(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if strings.Contains(inv.lastPrompt, "Addressed in abc123") {
-		t.Error("expected reply comments to be excluded from AI prompt")
+	// Reply body should appear in the prompt as context under the parent.
+	if !strings.Contains(inv.lastPrompt, "Addressed in abc123") {
+		t.Error("expected reply body to be included in AI prompt as context")
+	}
+	// Parent body should also be present.
+	if !strings.Contains(inv.lastPrompt, "Fix this") {
+		t.Error("expected parent comment body in prompt")
 	}
 
+	// Only top-level comments get replies (not the reply comment itself).
 	if len(replier.calls) != 2 {
-		t.Fatalf("expected 2 reply calls (skipping reply comment), got %d", len(replier.calls))
+		t.Fatalf("expected 2 reply calls (to top-level comments only), got %d", len(replier.calls))
 	}
 	if replier.calls[0].commentID != 1 {
 		t.Errorf("expected first reply to comment 1, got %d", replier.calls[0].commentID)
@@ -1800,5 +1806,160 @@ func TestBuildReplyForComment_LongAIResponse_Truncated(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Error("expected truncation marker at end")
+	}
+}
+
+// --- groupThreads tests ---
+
+func TestGroupThreads_NoComments(t *testing.T) {
+	result := groupThreads(nil)
+	if len(result) != 0 {
+		t.Errorf("expected 0 items, got %d", len(result))
+	}
+}
+
+func TestGroupThreads_TopLevelOnly(t *testing.T) {
+	comments := []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 2, Path: "utils.go", Body: "Add tests", User: "other"},
+	}
+	result := groupThreads(comments)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(result))
+	}
+	if result[0].id != 1 || result[1].id != 2 {
+		t.Errorf("unexpected IDs: %d, %d", result[0].id, result[1].id)
+	}
+	if len(result[0].replies) != 0 {
+		t.Errorf("expected 0 replies for first item, got %d", len(result[0].replies))
+	}
+	if len(result[1].replies) != 0 {
+		t.Errorf("expected 0 replies for second item, got %d", len(result[1].replies))
+	}
+}
+
+func TestGroupThreads_RepliesAttachedToParent(t *testing.T) {
+	comments := []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 2, Path: "main.go", Body: "I agree with above", User: "dev", InReplyTo: 1},
+		{ID: 3, Path: "main.go", Body: "Done, fixed it", User: "author", InReplyTo: 1},
+		{ID: 4, Path: "utils.go", Body: "Add tests", User: "reviewer"},
+	}
+	result := groupThreads(comments)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 top-level items, got %d", len(result))
+	}
+
+	// First item should have 2 replies.
+	if len(result[0].replies) != 2 {
+		t.Fatalf("expected 2 replies for comment 1, got %d", len(result[0].replies))
+	}
+	if result[0].replies[0].author != "dev" || result[0].replies[0].body != "I agree with above" {
+		t.Errorf("unexpected first reply: %+v", result[0].replies[0])
+	}
+	if result[0].replies[1].author != "author" || result[0].replies[1].body != "Done, fixed it" {
+		t.Errorf("unexpected second reply: %+v", result[0].replies[1])
+	}
+
+	// Second item should have no replies.
+	if len(result[1].replies) != 0 {
+		t.Errorf("expected 0 replies for comment 4, got %d", len(result[1].replies))
+	}
+}
+
+func TestGroupThreads_OrphanReplyIgnored(t *testing.T) {
+	comments := []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 5, Path: "main.go", Body: "orphan reply", User: "someone", InReplyTo: 999},
+	}
+	result := groupThreads(comments)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 top-level item, got %d", len(result))
+	}
+	if len(result[0].replies) != 0 {
+		t.Errorf("expected 0 replies (orphan discarded), got %d", len(result[0].replies))
+	}
+}
+
+// --- Integration test: reply threads in AI prompt ---
+
+func TestNewAction_ReplyThreadsInPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
+
+	reactor := &mockCommentReactor{}
+	cfg.Reactor = reactor
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix the null check", User: "reviewer"},
+		{ID: 2, Path: "main.go", Body: "I think this is related to issue #42", User: "other-dev", InReplyTo: 1},
+		{ID: 3, Path: "main.go", Body: "Yes, same root cause", User: "reviewer", InReplyTo: 1},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Parent comment body should be in prompt.
+	if !strings.Contains(inv.lastPrompt, "Fix the null check") {
+		t.Error("expected parent comment body in prompt")
+	}
+	// Both reply bodies should appear in prompt.
+	if !strings.Contains(inv.lastPrompt, "I think this is related to issue #42") {
+		t.Error("expected first reply body in prompt")
+	}
+	if !strings.Contains(inv.lastPrompt, "Yes, same root cause") {
+		t.Error("expected second reply body in prompt")
+	}
+
+	// Only 1 reply call (to parent comment ID 1, not to reply IDs 2,3).
+	if len(replier.calls) != 1 {
+		t.Fatalf("expected 1 reply call (parent only), got %d", len(replier.calls))
+	}
+	if replier.calls[0].commentID != 1 {
+		t.Errorf("expected reply to comment 1, got %d", replier.calls[0].commentID)
+	}
+
+	// Only 1 reaction call (to parent comment ID 1).
+	if len(reactor.calls) != 1 {
+		t.Fatalf("expected 1 reaction call, got %d", len(reactor.calls))
+	}
+	if reactor.calls[0].commentID != 1 {
+		t.Errorf("expected reaction on comment 1, got %d", reactor.calls[0].commentID)
+	}
+}
+
+func TestNewAction_NoReplies_BackwardCompatible(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
+
+	fetcher.comments = []github.Comment{
+		{ID: 1, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 2, Path: "utils.go", Body: "Add tests", User: "reviewer"},
+	}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Both parent comments in prompt.
+	if !strings.Contains(inv.lastPrompt, "Fix this") {
+		t.Error("expected first comment body in prompt")
+	}
+	if !strings.Contains(inv.lastPrompt, "Add tests") {
+		t.Error("expected second comment body in prompt")
+	}
+
+	// 2 reply calls for 2 top-level comments.
+	if len(replier.calls) != 2 {
+		t.Fatalf("expected 2 reply calls, got %d", len(replier.calls))
 	}
 }

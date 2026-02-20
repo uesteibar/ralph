@@ -107,13 +107,20 @@ const (
 	sourceIssueComment                      // general PR/issue comment
 )
 
-// feedbackItem is a normalized piece of feedback from any source.
-type feedbackItem struct {
-	id     int64
-	path   string // empty for non-line feedback
+// replyItem holds a reply attached to a parent feedback comment.
+type replyItem struct {
 	author string
 	body   string
-	source commentSource
+}
+
+// feedbackItem is a normalized piece of feedback from any source.
+type feedbackItem struct {
+	id      int64
+	path    string // empty for non-line feedback
+	author  string
+	body    string
+	source  commentSource
+	replies []replyItem
 }
 
 func (f feedbackItem) isInline() bool {
@@ -168,10 +175,18 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		// Build AI prompt data from all feedback items.
 		var aiComments []ai.AddressFeedbackComment
 		for _, item := range items {
+			var replies []ai.CommentReply
+			for _, r := range item.replies {
+				replies = append(replies, ai.CommentReply{
+					Author: r.author,
+					Body:   r.body,
+				})
+			}
 			aiComments = append(aiComments, ai.AddressFeedbackComment{
-				Path:   item.path,
-				Author: item.author,
-				Body:   item.body,
+				Path:    item.path,
+				Author:  item.author,
+				Body:    item.body,
+				Replies: replies,
 			})
 		}
 
@@ -243,20 +258,12 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 func gatherFeedback(ctx context.Context, cfg Config, owner, repo string, prNumber int) ([]feedbackItem, error) {
 	var items []feedbackItem
 
-	// 1. Line-specific review comments.
+	// 1. Line-specific review comments (grouped with reply threads).
 	comments, err := cfg.Comments.FetchPRComments(ctx, owner, repo, prNumber)
 	if err != nil {
 		return nil, fmt.Errorf("fetching PR comments: %w", err)
 	}
-	for _, c := range filterTopLevel(comments) {
-		items = append(items, feedbackItem{
-			id:     c.ID,
-			path:   c.Path,
-			author: c.User,
-			body:   c.Body,
-			source: sourceLineComment,
-		})
-	}
+	items = append(items, groupThreads(comments)...)
 
 	// 2. Review submission bodies (optional).
 	if cfg.Reviews != nil {
@@ -347,12 +354,35 @@ func replyToFeedback(ctx context.Context, cfg Config, owner, repo string, prNumb
 	return nil
 }
 
-// filterTopLevel returns only comments that are not replies (InReplyTo == 0).
-func filterTopLevel(comments []github.Comment) []github.Comment {
-	var result []github.Comment
+// groupThreads groups comments into top-level feedback items with their replies
+// attached. A comment with InReplyTo == 0 is a top-level comment; otherwise it
+// is a reply that gets attached to its parent. Only top-level comments become
+// actionable feedbackItems.
+func groupThreads(comments []github.Comment) []feedbackItem {
+	// Index top-level comments by ID.
+	indexByID := make(map[int64]int) // comment ID -> index in result
+	var result []feedbackItem
 	for _, c := range comments {
 		if c.InReplyTo == 0 {
-			result = append(result, c)
+			indexByID[c.ID] = len(result)
+			result = append(result, feedbackItem{
+				id:     c.ID,
+				path:   c.Path,
+				author: c.User,
+				body:   c.Body,
+				source: sourceLineComment,
+			})
+		}
+	}
+	// Attach replies to their parent.
+	for _, c := range comments {
+		if c.InReplyTo != 0 {
+			if idx, ok := indexByID[c.InReplyTo]; ok {
+				result[idx].replies = append(result[idx].replies, replyItem{
+					author: c.User,
+					body:   c.Body,
+				})
+			}
 		}
 	}
 	return result

@@ -13,6 +13,9 @@ You are an autonomous software engineering agent addressing pull request review 
 {{- end}}
 **{{.Author}}:**
 {{.Body}}
+{{- range .Replies}}
+> **{{.Author}}:** {{.Body}}
+{{- end}}
 {{end}}
 {{if .CodeContext}}
 ## Code Context

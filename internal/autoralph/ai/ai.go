@@ -71,12 +71,19 @@ type PRDescriptionData struct {
 	LinearIssueIdentifier string
 }
 
-// AddressFeedbackComment represents a single review comment.
-type AddressFeedbackComment struct {
-	Path   string
-	Line   int
+// CommentReply holds a reply attached to a parent feedback comment.
+type CommentReply struct {
 	Author string
 	Body   string
+}
+
+// AddressFeedbackComment represents a single review comment.
+type AddressFeedbackComment struct {
+	Path    string
+	Line    int
+	Author  string
+	Body    string
+	Replies []CommentReply
 }
 
 // AddressFeedbackData holds the context for rendering the address_feedback prompt.
