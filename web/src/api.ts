@@ -111,6 +111,19 @@ async function postJSON<T>(path: string): Promise<T> {
   return resp.json()
 }
 
+async function postJSONWithBody<T>(path: string, body: unknown): Promise<T> {
+  const resp = await fetch(BASE + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!resp.ok) {
+    const respBody = await resp.json().catch(() => ({ error: resp.statusText }))
+    throw new Error(respBody.error || resp.statusText)
+  }
+  return resp.json()
+}
+
 export function resumeIssue(id: string): Promise<{ status: string; state: string }> {
   return postJSON(`/issues/${id}/resume`)
 }
@@ -146,4 +159,40 @@ export interface CCUsage {
 
 export function fetchCCUsage(): Promise<CCUsage> {
   return fetchJSON<CCUsage>('/cc-usage')
+}
+
+export interface TransitionEntry {
+  target_state: string
+}
+
+export interface ValidTransitionsResponse {
+  transitions: TransitionEntry[]
+  resettable_fields: string[]
+}
+
+export interface TransitionResponse {
+  status: string
+  from_state: string
+  to_state: string
+}
+
+export interface ResetResponse {
+  status: string
+  fields: string[]
+}
+
+export function fetchValidTransitions(id: string): Promise<ValidTransitionsResponse> {
+  return fetchJSON<ValidTransitionsResponse>(`/issues/${id}/transitions`)
+}
+
+export function transitionIssue(id: string, targetState: string, resetFields?: string[]): Promise<TransitionResponse> {
+  return postJSONWithBody(`/issues/${id}/transition`, { target_state: targetState, reset_fields: resetFields ?? [] })
+}
+
+export function resetIssueFields(id: string, fields: string[]): Promise<ResetResponse> {
+  return postJSONWithBody(`/issues/${id}/reset`, { fields })
+}
+
+export function pauseIssue(id: string): Promise<{ status: string; previous_state: string }> {
+  return postJSON(`/issues/${id}/pause`)
 }

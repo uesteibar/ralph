@@ -636,6 +636,254 @@ func handleCCUsage(provider CCUsageProvider) http.HandlerFunc {
 	}
 }
 
+// transitionMap defines allowed source-to-target state pairs for manual transitions.
+var transitionMap = map[string][]string{
+	"paused":              {"queued", "refining", "approved", "building", "in_review", "addressing_feedback", "fixing_checks"},
+	"failed":              {"queued", "refining", "approved", "building", "in_review", "addressing_feedback", "fixing_checks"},
+	"in_review":           {"addressing_feedback", "fixing_checks", "building", "refining", "queued"},
+	"addressing_feedback": {"in_review", "building"},
+	"building":            {"approved", "refining", "queued"},
+	"fixing_checks":       {"in_review", "building"},
+	"refining":            {"queued", "approved"},
+	"queued":              {"refining"},
+	"approved":            {"queued", "refining", "building"},
+}
+
+// prerequisitesForTarget checks whether the issue satisfies prerequisites for a target state.
+// Returns an error message if prerequisites are not met, or empty string if OK.
+func prerequisitesForTarget(issue db.Issue, target string) string {
+	switch target {
+	case "building":
+		if issue.WorkspaceName == "" {
+			return "target state 'building' requires workspace_name to be set"
+		}
+	case "in_review", "addressing_feedback", "fixing_checks":
+		if issue.PRNumber <= 0 {
+			return "target state '" + target + "' requires pr_number > 0"
+		}
+	}
+	return ""
+}
+
+// handleTransitionIssue performs a validated state transition with optional field resets.
+func (h *apiHandler) handleTransitionIssue(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing issue id")
+		return
+	}
+
+	var body struct {
+		TargetState string   `json:"target_state"`
+		ResetFields []string `json:"reset_fields"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.TargetState == "" {
+		writeError(w, http.StatusBadRequest, "missing target_state")
+		return
+	}
+
+	// Reject transitions to non-manual-target states.
+	if body.TargetState == "completed" || body.TargetState == "waiting_approval" {
+		writeError(w, http.StatusConflict, "cannot manually transition to "+body.TargetState)
+		return
+	}
+
+	issue, err := h.db.GetIssue(id)
+	if err != nil {
+		if strings.Contains(err.Error(), "issue not found") {
+			writeError(w, http.StatusNotFound, "issue not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get issue")
+		return
+	}
+
+	// Check source state is in the transition map.
+	allowedTargets, ok := transitionMap[issue.State]
+	if !ok {
+		writeError(w, http.StatusConflict, "cannot transition from state: "+issue.State)
+		return
+	}
+
+	// Check target is in allowed list.
+	valid := false
+	for _, t := range allowedTargets {
+		if t == body.TargetState {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		writeError(w, http.StatusConflict, fmt.Sprintf("transition from '%s' to '%s' is not allowed", issue.State, body.TargetState))
+		return
+	}
+
+	// Check prerequisites for target state.
+	if msg := prerequisitesForTarget(issue, body.TargetState); msg != "" {
+		writeError(w, http.StatusConflict, msg)
+		return
+	}
+
+	previousState := issue.State
+	issue.State = body.TargetState
+
+	// Apply field resets.
+	for _, field := range body.ResetFields {
+		switch field {
+		case "check_fix_attempts":
+			issue.CheckFixAttempts = 0
+		case "error_message":
+			issue.ErrorMessage = ""
+		case "last_review_id":
+			issue.LastReviewID = ""
+		case "last_check_sha":
+			issue.LastCheckSHA = ""
+		}
+	}
+
+	if err := h.db.UpdateIssue(issue); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update issue")
+		return
+	}
+	h.db.LogActivity(issue.ID, "state_change", previousState, body.TargetState, "Manual transition via API")
+	h.notifyWake()
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "transitioned", "from_state": previousState, "to_state": body.TargetState})
+}
+
+// handleGetTransitions returns valid target states and resettable fields for an issue.
+func (h *apiHandler) handleGetTransitions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing issue id")
+		return
+	}
+
+	issue, err := h.db.GetIssue(id)
+	if err != nil {
+		if strings.Contains(err.Error(), "issue not found") {
+			writeError(w, http.StatusNotFound, "issue not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get issue")
+		return
+	}
+
+	type transitionEntry struct {
+		TargetState string `json:"target_state"`
+	}
+
+	var transitions []transitionEntry
+	if allowedTargets, ok := transitionMap[issue.State]; ok {
+		for _, target := range allowedTargets {
+			if prerequisitesForTarget(issue, target) == "" {
+				transitions = append(transitions, transitionEntry{TargetState: target})
+			}
+		}
+	}
+	if transitions == nil {
+		transitions = []transitionEntry{}
+	}
+
+	var resettableFields []string
+	if issue.CheckFixAttempts != 0 {
+		resettableFields = append(resettableFields, "check_fix_attempts")
+	}
+	if issue.ErrorMessage != "" {
+		resettableFields = append(resettableFields, "error_message")
+	}
+	if issue.LastReviewID != "" {
+		resettableFields = append(resettableFields, "last_review_id")
+	}
+	if issue.LastCheckSHA != "" {
+		resettableFields = append(resettableFields, "last_check_sha")
+	}
+	if resettableFields == nil {
+		resettableFields = []string{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"transitions":      transitions,
+		"resettable_fields": resettableFields,
+	})
+}
+
+// handleResetFields resets tracking fields without changing state.
+func (h *apiHandler) handleResetFields(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing issue id")
+		return
+	}
+
+	var body struct {
+		Fields []string `json:"fields"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(body.Fields) == 0 {
+		writeError(w, http.StatusBadRequest, "fields array is empty")
+		return
+	}
+
+	validFields := map[string]bool{
+		"check_fix_attempts": true,
+		"error_message":      true,
+		"last_review_id":     true,
+		"last_check_sha":     true,
+	}
+
+	var recognized []string
+	for _, f := range body.Fields {
+		if validFields[f] {
+			recognized = append(recognized, f)
+		}
+	}
+	if len(recognized) == 0 {
+		writeError(w, http.StatusBadRequest, "no recognized fields in request")
+		return
+	}
+
+	issue, err := h.db.GetIssue(id)
+	if err != nil {
+		if strings.Contains(err.Error(), "issue not found") {
+			writeError(w, http.StatusNotFound, "issue not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get issue")
+		return
+	}
+
+	for _, field := range recognized {
+		switch field {
+		case "check_fix_attempts":
+			issue.CheckFixAttempts = 0
+		case "error_message":
+			issue.ErrorMessage = ""
+		case "last_review_id":
+			issue.LastReviewID = ""
+		case "last_check_sha":
+			issue.LastCheckSHA = ""
+		}
+	}
+
+	if err := h.db.UpdateIssue(issue); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update issue")
+		return
+	}
+
+	h.db.LogActivity(issue.ID, "field_reset", "", "", "Reset fields: "+strings.Join(recognized, ", "))
+	h.notifyWake()
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "reset", "fields": recognized})
+}
+
 // handleStatus returns orchestrator health.
 func (h *apiHandler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(h.startAt).Round(time.Second).String()

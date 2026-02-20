@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import IssueDetail from './IssueDetail'
 import type { IssueDetail as IssueDetailType } from '../api'
@@ -9,13 +9,17 @@ vi.mock('../api', () => ({
   resumeIssue: vi.fn(),
   retryIssue: vi.fn(),
   deleteIssue: vi.fn(),
+  fetchValidTransitions: vi.fn(),
+  transitionIssue: vi.fn(),
+  resetIssueFields: vi.fn(),
+  pauseIssue: vi.fn(),
 }))
 
 vi.mock('../useWebSocket', () => ({
   useWebSocket: vi.fn(),
 }))
 
-import { fetchIssue, resumeIssue, retryIssue, deleteIssue } from '../api'
+import { fetchIssue, resumeIssue, retryIssue, deleteIssue, fetchValidTransitions, transitionIssue, resetIssueFields, pauseIssue } from '../api'
 
 const mockIssue: IssueDetailType = {
   id: 'iss1',
@@ -90,10 +94,16 @@ function renderIssueDetail(id = 'iss1') {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   vi.mocked(fetchIssue).mockResolvedValue(mockIssue)
   vi.mocked(resumeIssue).mockResolvedValue({ status: 'resumed', state: 'building' })
   vi.mocked(retryIssue).mockResolvedValue({ status: 'retrying', state: 'building' })
   vi.mocked(deleteIssue).mockResolvedValue({ status: 'deleted' })
+  vi.mocked(fetchValidTransitions).mockResolvedValue({ transitions: [], resettable_fields: [] })
+  vi.mocked(transitionIssue).mockResolvedValue({ status: 'transitioned', from_state: 'building', to_state: 'queued' })
+  vi.mocked(resetIssueFields).mockResolvedValue({ status: 'reset', fields: ['error_message'] })
+  vi.mocked(pauseIssue).mockResolvedValue({ status: 'paused', previous_state: 'building' })
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
 describe('IssueDetail', () => {
@@ -510,5 +520,189 @@ describe('IssueDetail', () => {
     })
     expect(screen.getByText('PR #42 created')).toBeInTheDocument()
     expect(screen.queryByText('Agent Logs')).not.toBeInTheDocument()
+  })
+
+  it('shows Move to dropdown with transitions for non-terminal states', async () => {
+    vi.mocked(fetchValidTransitions).mockResolvedValue({
+      transitions: [{ target_state: 'approved' }, { target_state: 'refining' }, { target_state: 'queued' }],
+      resettable_fields: [],
+    })
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Move to...')).toBeInTheDocument()
+    })
+    const select = screen.getByRole('combobox')
+    expect(select).toBeInTheDocument()
+    // Options should include the placeholder + transitions
+    const options = select.querySelectorAll('option')
+    expect(options.length).toBe(4) // placeholder + 3 targets
+    expect(options[1].textContent).toBe('approved')
+    expect(options[2].textContent).toBe('refining')
+    expect(options[3].textContent).toBe('queued')
+  })
+
+  it('triggers transition on Move to selection with confirm', async () => {
+    vi.mocked(fetchValidTransitions).mockResolvedValue({
+      transitions: [{ target_state: 'queued' }],
+      resettable_fields: [],
+    })
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'queued' } })
+    await waitFor(() => {
+      expect(transitionIssue).toHaveBeenCalledWith('iss1', 'queued')
+    })
+    expect(window.confirm).toHaveBeenCalledWith('Transition issue to queued?')
+  })
+
+  it('does not trigger transition when confirm is cancelled', async () => {
+    vi.mocked(fetchValidTransitions).mockResolvedValue({
+      transitions: [{ target_state: 'queued' }],
+      resettable_fields: [],
+    })
+    vi.mocked(window.confirm).mockReturnValue(false)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'queued' } })
+    expect(window.confirm).toHaveBeenCalledWith('Transition issue to queued?')
+    expect(transitionIssue).not.toHaveBeenCalled()
+  })
+
+  it('does not show Move to dropdown for completed state', async () => {
+    const completedIssue = { ...mockIssue, state: 'completed', build_active: false, activity: [], build_activity: [], stories: [], integration_tests: [] }
+    vi.mocked(fetchIssue).mockResolvedValue(completedIssue)
+    vi.mocked(fetchValidTransitions).mockResolvedValue({ transitions: [], resettable_fields: [] })
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Add user avatars')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Move to...')).not.toBeInTheDocument()
+  })
+
+  it('shows Pause button for pausable states', async () => {
+    const queuedIssue = { ...mockIssue, state: 'queued', build_active: false, activity: [], build_activity: [], stories: [], integration_tests: [] }
+    vi.mocked(fetchIssue).mockResolvedValue(queuedIssue)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Pause')).toBeInTheDocument()
+    })
+  })
+
+  it('calls pauseIssue on Pause button click', async () => {
+    const queuedIssue = { ...mockIssue, state: 'queued', build_active: false, activity: [], build_activity: [], stories: [], integration_tests: [] }
+    vi.mocked(fetchIssue).mockResolvedValue(queuedIssue)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Pause')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByText('Pause'))
+    await waitFor(() => {
+      expect(pauseIssue).toHaveBeenCalledWith('iss1')
+    })
+  })
+
+  it('does not show Pause button for non-pausable states', async () => {
+    const failedIssue = { ...mockIssue, state: 'failed', build_active: false, activity: [], build_activity: [], stories: [], integration_tests: [] }
+    vi.mocked(fetchIssue).mockResolvedValue(failedIssue)
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Retry')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
+  })
+
+  it('shows reset controls for resettable fields', async () => {
+    vi.mocked(fetchValidTransitions).mockResolvedValue({
+      transitions: [],
+      resettable_fields: ['error_message', 'check_fix_attempts'],
+    })
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Reset error_message')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Reset check_fix_attempts')).toBeInTheDocument()
+  })
+
+  it('calls resetIssueFields on reset button click', async () => {
+    vi.mocked(fetchValidTransitions).mockResolvedValue({
+      transitions: [],
+      resettable_fields: ['error_message'],
+    })
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Reset error_message')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByText('Reset error_message'))
+    await waitFor(() => {
+      expect(resetIssueFields).toHaveBeenCalledWith('iss1', ['error_message'])
+    })
+  })
+
+  it('does not show reset controls when no resettable fields', async () => {
+    vi.mocked(fetchValidTransitions).mockResolvedValue({
+      transitions: [{ target_state: 'queued' }],
+      resettable_fields: [],
+    })
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByText('Move to...')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/^Reset /)).not.toBeInTheDocument()
+  })
+
+  it('reloads issue data after successful transition action', async () => {
+    vi.mocked(fetchValidTransitions).mockResolvedValue({
+      transitions: [{ target_state: 'queued' }],
+      resettable_fields: [],
+    })
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeInTheDocument()
+    })
+    // fetchIssue called once on mount
+    expect(fetchIssue).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'queued' } })
+    await waitFor(() => {
+      // After transition: loadIssue reloads the issue
+      expect(fetchIssue).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('shows error when transition fails', async () => {
+    vi.mocked(fetchValidTransitions).mockResolvedValue({
+      transitions: [{ target_state: 'in_review' }],
+      resettable_fields: [],
+    })
+    vi.mocked(transitionIssue).mockRejectedValue(new Error('missing PR'))
+
+    renderIssueDetail()
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'in_review' } })
+    await waitFor(() => {
+      expect(screen.getByText('missing PR')).toBeInTheDocument()
+    })
   })
 })

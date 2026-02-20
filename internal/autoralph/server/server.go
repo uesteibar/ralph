@@ -110,6 +110,9 @@ func (s *Server) registerRoutes(cfg Config) {
 		s.mux.HandleFunc("POST /api/issues/{id}/resume", api.handleResumeIssue)
 		s.mux.HandleFunc("POST /api/issues/{id}/retry", api.handleRetryIssue)
 		s.mux.HandleFunc("DELETE /api/issues/{id}", api.handleDeleteIssue)
+		s.mux.HandleFunc("POST /api/issues/{id}/transition", api.handleTransitionIssue)
+		s.mux.HandleFunc("POST /api/issues/{id}/reset", api.handleResetFields)
+		s.mux.HandleFunc("GET /api/issues/{id}/transitions", api.handleGetTransitions)
 		s.mux.HandleFunc("GET /api/activity", api.handleListActivity)
 	} else {
 		s.mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
