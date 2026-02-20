@@ -36,7 +36,7 @@ type mockInvoker struct {
 	calls    int32
 }
 
-func (m *mockInvoker) InvokeWithEvents(_ context.Context, _, _ string, _ events.EventHandler) (string, error) {
+func (m *mockInvoker) InvokeWithEvents(_ context.Context, _, _ string, _ int, _ events.EventHandler) (string, error) {
 	atomic.AddInt32(&m.calls, 1)
 	return m.response, nil
 }
