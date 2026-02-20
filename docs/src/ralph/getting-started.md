@@ -7,6 +7,8 @@
 - **git** (for worktree operations)
 - **bash** or **zsh** (for shell integration)
 
+To build from source, you also need **just** (task runner). For full development (web, docs, E2E), use [mise](https://mise.jdx.dev/) — the project includes a `mise.toml` with all tool versions; run `mise install` in the repo root.
+
 ## Installation
 
 ### From install script
@@ -26,7 +28,8 @@ go install github.com/uesteibar/ralph/cmd/ralph@latest
 ```bash
 git clone https://github.com/uesteibar/ralph.git
 cd ralph
-just install    # requires https://github.com/casey/just
+mise install    # Install Go, just, etc. (recommended)
+just install   # Install ralph to $GOPATH/bin
 ```
 
 ## Quick Start
