@@ -54,6 +54,13 @@ type Comment struct {
 	InReplyTo int64
 }
 
+// TimelineEvent represents a filtered PR timeline event (review_requested or review_request_removed).
+type TimelineEvent struct {
+	Event       string
+	RequesterID int64
+	ReviewerID  int64
+}
+
 // Client is a typed GitHub API client wrapping go-github.
 type Client struct {
 	gh           *gh.Client
@@ -491,6 +498,37 @@ func (c *Client) downloadURL(ctx context.Context, rawURL string) ([]byte, error)
 		return nil, fmt.Errorf("reading download body: %w", err)
 	}
 	return body, nil
+}
+
+// FetchTimeline returns review_requested and review_request_removed events
+// from the PR timeline, with Requester and Reviewer user IDs extracted.
+func (c *Client) FetchTimeline(ctx context.Context, owner, repo string, prNumber int) ([]TimelineEvent, error) {
+	return retry.DoVal(ctx, func() ([]TimelineEvent, error) {
+		var all []TimelineEvent
+		opts := &gh.ListOptions{PerPage: 100}
+		for {
+			events, resp, err := c.gh.Issues.ListIssueTimeline(ctx, owner, repo, prNumber, opts)
+			if err != nil {
+				return nil, classifyErr(fmt.Errorf("fetching PR timeline: %w", err))
+			}
+			for _, ev := range events {
+				eventType := ev.GetEvent()
+				if eventType != "review_requested" && eventType != "review_request_removed" {
+					continue
+				}
+				all = append(all, TimelineEvent{
+					Event:       eventType,
+					RequesterID: ev.Requester.GetID(),
+					ReviewerID:  ev.Reviewer.GetID(),
+				})
+			}
+			if resp.NextPage == 0 {
+				break
+			}
+			opts.Page = resp.NextPage
+		}
+		return all, nil
+	}, c.retryOpts()...)
 }
 
 // FetchPR fetches a single pull request by number.

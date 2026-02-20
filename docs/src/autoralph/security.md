@@ -37,6 +37,37 @@ profiles:
 This prevents untrusted third parties from injecting malicious review
 comments that AutoRalph would otherwise act on.
 
+### Delegated Trust via Review Requests
+
+When `github_user_id` is set, AutoRalph also trusts reviewers whose review
+was explicitly requested by the trusted user through GitHub's review request
+mechanism. This allows the trusted user to delegate review authority without
+changing the AutoRalph configuration.
+
+The trust evaluation works as follows:
+
+1. Each poll cycle, AutoRalph fetches the PR timeline from the GitHub API
+2. `review_requested` events where the requester matches `github_user_id`
+   **add** the requested reviewer to the trusted set
+3. `review_request_removed` events where the requester matches
+   `github_user_id` **remove** that reviewer from the trusted set
+4. A reviewer is trusted if they are the configured `github_user_id` **or**
+   are in the current trusted set
+
+Removing a review request immediately revokes trust for that reviewer. The
+next poll cycle will recompute the trusted set and skip any subsequent
+reviews from the revoked reviewer.
+
+> **Implementation detail**: Trust is verified via the immutable PR timeline
+> API (`/repos/{owner}/{repo}/issues/{number}/timeline`), not the current
+> `requested_reviewers` list on the PR. The timeline provides a complete
+> audit trail of request and removal events, ensuring trust decisions are
+> based on the full history rather than a point-in-time snapshot.
+
+When `github_user_id` is not set (or `0`), the timeline is not fetched and
+all non-bot reviews remain trusted — no behavior changes for unconfigured
+setups.
+
 ## GitHub App Authentication
 
 GitHub Apps provide better security than personal access tokens for

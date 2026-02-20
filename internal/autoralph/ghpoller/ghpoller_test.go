@@ -73,6 +73,10 @@ type mockGitHub struct {
 	checkRuns  []github.CheckRun
 	checkErr   error
 	checkCalls int
+
+	timeline      []github.TimelineEvent
+	timelineErr   error
+	timelineCalls int
 }
 
 func (m *mockGitHub) FetchPRReviews(_ context.Context, owner, repo string, prNumber int) ([]github.Review, error) {
@@ -99,6 +103,11 @@ func (m *mockGitHub) FetchPR(_ context.Context, owner, repo string, prNumber int
 func (m *mockGitHub) FetchCheckRuns(_ context.Context, owner, repo, ref string) ([]github.CheckRun, error) {
 	m.checkCalls++
 	return m.checkRuns, m.checkErr
+}
+
+func (m *mockGitHub) FetchTimeline(_ context.Context, owner, repo string, prNumber int) ([]github.TimelineEvent, error) {
+	m.timelineCalls++
+	return m.timeline, m.timelineErr
 }
 
 func TestPollProject_ChangesRequestedReview_TransitionsToAddressingFeedback(t *testing.T) {
@@ -655,7 +664,7 @@ func TestHasFeedback_IgnoresBotReviews(t *testing.T) {
 		{ID: 1, State: "COMMENTED", User: "autoralph[bot]"},
 		{ID: 2, State: "APPROVED", User: "human-reviewer"},
 	}
-	if hasFeedback(reviews, 0) {
+	if hasFeedback(reviews, 0, nil) {
 		t.Error("expected hasFeedback to return false when only bot has COMMENTED")
 	}
 }
@@ -665,7 +674,7 @@ func TestHasFeedback_HumanCommentedTriggersFeedback(t *testing.T) {
 		{ID: 1, State: "COMMENTED", User: "autoralph[bot]"},
 		{ID: 2, State: "COMMENTED", User: "human-reviewer"},
 	}
-	if !hasFeedback(reviews, 0) {
+	if !hasFeedback(reviews, 0, nil) {
 		t.Error("expected hasFeedback to return true when human has COMMENTED")
 	}
 }
@@ -675,7 +684,7 @@ func TestHasFeedback_TrustedUserID_OnlyTrustedUserTriggers(t *testing.T) {
 		{ID: 1, State: "CHANGES_REQUESTED", User: "untrusted", UserID: 99999},
 		{ID: 2, State: "COMMENTED", User: "trusted", UserID: 12345},
 	}
-	if !hasFeedback(reviews, 12345) {
+	if !hasFeedback(reviews, 12345, nil) {
 		t.Error("expected hasFeedback to return true when trusted user has feedback")
 	}
 }
@@ -684,7 +693,7 @@ func TestHasFeedback_TrustedUserID_UntrustedUserIgnored(t *testing.T) {
 	reviews := []github.Review{
 		{ID: 1, State: "CHANGES_REQUESTED", User: "untrusted", UserID: 99999},
 	}
-	if hasFeedback(reviews, 12345) {
+	if hasFeedback(reviews, 12345, nil) {
 		t.Error("expected hasFeedback to return false when only untrusted user has feedback")
 	}
 }
@@ -693,7 +702,7 @@ func TestHasFeedback_TrustedUserID_Zero_AllNonBotTrusted(t *testing.T) {
 	reviews := []github.Review{
 		{ID: 1, State: "CHANGES_REQUESTED", User: "anyone", UserID: 99999},
 	}
-	if !hasFeedback(reviews, 0) {
+	if !hasFeedback(reviews, 0, nil) {
 		t.Error("expected hasFeedback to return true when trustedUserID is 0 (backward compat)")
 	}
 }
@@ -1482,5 +1491,332 @@ func TestPollProject_FixingChecks_NoCheckFixAttemptsReset(t *testing.T) {
 	// CheckFixAttempts should NOT be reset because issue is in fixing_checks
 	if updated.CheckFixAttempts != 2 {
 		t.Errorf("expected CheckFixAttempts 2 (no reset in fixing_checks), got %d", updated.CheckFixAttempts)
+	}
+}
+
+// --- trustedReviewerIDs unit tests ---
+
+func TestTrustedReviewerIDs_RequestedByTrusted(t *testing.T) {
+	events := []github.TimelineEvent{
+		{Event: "review_requested", RequesterID: 100, ReviewerID: 200},
+	}
+	got := trustedReviewerIDs(events, 100)
+	if !got[200] {
+		t.Error("expected reviewer 200 to be trusted")
+	}
+}
+
+func TestTrustedReviewerIDs_RequestedByNonTrusted_Ignored(t *testing.T) {
+	events := []github.TimelineEvent{
+		{Event: "review_requested", RequesterID: 999, ReviewerID: 200},
+	}
+	got := trustedReviewerIDs(events, 100)
+	if got[200] {
+		t.Error("expected reviewer 200 to NOT be trusted (requested by non-trusted user)")
+	}
+}
+
+func TestTrustedReviewerIDs_RequestedThenRemoved(t *testing.T) {
+	events := []github.TimelineEvent{
+		{Event: "review_requested", RequesterID: 100, ReviewerID: 200},
+		{Event: "review_request_removed", RequesterID: 100, ReviewerID: 200},
+	}
+	got := trustedReviewerIDs(events, 100)
+	if got[200] {
+		t.Error("expected reviewer 200 to NOT be trusted (request was removed)")
+	}
+}
+
+func TestTrustedReviewerIDs_MultipleReviewers_MixedTrust(t *testing.T) {
+	events := []github.TimelineEvent{
+		{Event: "review_requested", RequesterID: 100, ReviewerID: 200},
+		{Event: "review_requested", RequesterID: 100, ReviewerID: 300},
+		{Event: "review_requested", RequesterID: 999, ReviewerID: 400}, // not by trusted user
+	}
+	got := trustedReviewerIDs(events, 100)
+	if !got[200] {
+		t.Error("expected reviewer 200 to be trusted")
+	}
+	if !got[300] {
+		t.Error("expected reviewer 300 to be trusted")
+	}
+	if got[400] {
+		t.Error("expected reviewer 400 to NOT be trusted")
+	}
+}
+
+func TestTrustedReviewerIDs_Empty(t *testing.T) {
+	got := trustedReviewerIDs(nil, 100)
+	if len(got) != 0 {
+		t.Errorf("expected empty map, got %v", got)
+	}
+}
+
+// --- hasFeedback with delegated trust ---
+
+func TestHasFeedback_DelegatedReviewer_Trusted(t *testing.T) {
+	reviews := []github.Review{
+		{ID: 1, State: "CHANGES_REQUESTED", User: "delegated", UserID: 200},
+	}
+	delegated := map[int64]bool{200: true}
+	if !hasFeedback(reviews, 100, delegated) {
+		t.Error("expected hasFeedback to return true for delegated trusted reviewer")
+	}
+}
+
+func TestHasFeedback_NonDelegatedReviewer_Untrusted(t *testing.T) {
+	reviews := []github.Review{
+		{ID: 1, State: "CHANGES_REQUESTED", User: "stranger", UserID: 300},
+	}
+	delegated := map[int64]bool{200: true}
+	if hasFeedback(reviews, 100, delegated) {
+		t.Error("expected hasFeedback to return false for non-delegated reviewer")
+	}
+}
+
+func TestHasFeedback_BotAlwaysIgnored_WithDelegation(t *testing.T) {
+	reviews := []github.Review{
+		{ID: 1, State: "COMMENTED", User: "my-bot[bot]", UserID: 200},
+	}
+	delegated := map[int64]bool{200: true}
+	if hasFeedback(reviews, 100, delegated) {
+		t.Error("expected hasFeedback to return false for bot even if in delegated set")
+	}
+}
+
+// --- Integration-level poll tests for timeline trust ---
+
+func TestPollProject_DelegatedReviewer_TransitionsToAddressingFeedback(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
+		timeline: []github.TimelineEvent{
+			{Event: "review_requested", RequesterID: 12345, ReviewerID: 200},
+		},
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "delegated", UserID: 200},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:     proj.ID,
+		GithubOwner:   "owner",
+		GithubRepo:    "repo",
+		GitHub:        mock,
+		TrustedUserID: 12345,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != string(orchestrator.StateAddressingFeedback) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateAddressingFeedback, updated.State)
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 activity entry, got %d", len(entries))
+	}
+	if entries[0].EventType != "changes_requested" {
+		t.Errorf("expected event_type %q, got %q", "changes_requested", entries[0].EventType)
+	}
+}
+
+func TestPollProject_ReviewerRequestedByNonTrusted_Skipped(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
+		timeline: []github.TimelineEvent{
+			{Event: "review_requested", RequesterID: 999, ReviewerID: 200},
+		},
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "delegated", UserID: 200},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:     proj.ID,
+		GithubOwner:   "owner",
+		GithubRepo:    "repo",
+		GitHub:        mock,
+		TrustedUserID: 12345,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != string(orchestrator.StateInReview) {
+		t.Errorf("expected state %q, got %q", orchestrator.StateInReview, updated.State)
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 activity entry (untrusted skip), got %d", len(entries))
+	}
+	if entries[0].EventType != "untrusted_feedback_skipped" {
+		t.Errorf("expected event_type %q, got %q", "untrusted_feedback_skipped", entries[0].EventType)
+	}
+}
+
+func TestPollProject_ReviewerRequestedThenRemoved_Skipped(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
+		timeline: []github.TimelineEvent{
+			{Event: "review_requested", RequesterID: 12345, ReviewerID: 200},
+			{Event: "review_request_removed", RequesterID: 12345, ReviewerID: 200},
+		},
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "delegated", UserID: 200},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:     proj.ID,
+		GithubOwner:   "owner",
+		GithubRepo:    "repo",
+		GitHub:        mock,
+		TrustedUserID: 12345,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != string(orchestrator.StateInReview) {
+		t.Errorf("expected state %q (review request revoked), got %q", orchestrator.StateInReview, updated.State)
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 activity entry (untrusted skip), got %d", len(entries))
+	}
+	if entries[0].EventType != "untrusted_feedback_skipped" {
+		t.Errorf("expected event_type %q, got %q", "untrusted_feedback_skipped", entries[0].EventType)
+	}
+}
+
+func TestPollProject_TrustedUserID_Zero_TimelineNotFetched(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr: github.PR{HeadSHA: "abc123"},
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "anyone", UserID: 55555},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:     proj.ID,
+		GithubOwner:   "owner",
+		GithubRepo:    "repo",
+		GitHub:        mock,
+		TrustedUserID: 0,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	if mock.timelineCalls != 0 {
+		t.Errorf("expected 0 timeline calls when TrustedUserID==0, got %d", mock.timelineCalls)
+	}
+}
+
+func TestPollProject_TimelineError_FallsBackToDirectTrust(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr:          github.PR{HeadSHA: "abc123"},
+		timelineErr: fmt.Errorf("timeline API error"),
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "trusted-user", UserID: 12345},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:     proj.ID,
+		GithubOwner:   "owner",
+		GithubRepo:    "repo",
+		GitHub:        mock,
+		TrustedUserID: 12345,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// Should still transition because the reviewer IS the trusted user directly
+	if updated.State != string(orchestrator.StateAddressingFeedback) {
+		t.Errorf("expected state %q (fallback to direct trust), got %q", orchestrator.StateAddressingFeedback, updated.State)
+	}
+}
+
+func TestPollProject_TimelineError_DelegatedReviewerNotTrusted(t *testing.T) {
+	d := testDB(t)
+	proj := testProject(t, d)
+	issue := testIssue(t, d, proj, string(orchestrator.StateInReview), 42)
+
+	mock := &mockGitHub{
+		pr:          github.PR{HeadSHA: "abc123"},
+		timelineErr: fmt.Errorf("timeline API error"),
+		reviews: []github.Review{
+			{ID: 100, State: "CHANGES_REQUESTED", Body: "Fix it", User: "delegated", UserID: 200},
+		},
+	}
+
+	p := New(d, []ProjectInfo{{
+		ProjectID:     proj.ID,
+		GithubOwner:   "owner",
+		GithubRepo:    "repo",
+		GitHub:        mock,
+		TrustedUserID: 12345,
+	}}, 30*time.Second, slog.Default(), nil)
+
+	ctx := context.Background()
+	p.poll(ctx)
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	// Should NOT transition because timeline failed and reviewer is not the trusted user directly
+	if updated.State != string(orchestrator.StateInReview) {
+		t.Errorf("expected state %q (timeline error, no delegated trust), got %q", orchestrator.StateInReview, updated.State)
 	}
 }
