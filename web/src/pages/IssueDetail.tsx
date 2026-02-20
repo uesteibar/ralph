@@ -370,7 +370,7 @@ export default function IssueDetail() {
     }
   }
 
-  const pausableStates = new Set(['queued', 'refining', 'approved', 'building', 'in_review', 'addressing_feedback'])
+  const pausableStates = new Set(['queued', 'refining', 'approved', 'building', 'in_review', 'addressing_feedback', 'fixing_checks'])
   const terminalStates = new Set(['completed'])
 
   if (loading) {
