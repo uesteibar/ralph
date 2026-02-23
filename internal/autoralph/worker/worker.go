@@ -83,7 +83,15 @@ type Config struct {
 
 	// HookRunner runs pre-PR hooks after the build loop completes but
 	// before PR creation. When nil, no hooks are executed.
+	// For multi-project setups, prefer HookRunnerFn which creates
+	// per-project runners.
 	HookRunner HookRunner
+
+	// HookRunnerFn creates a HookRunner for a given project. When set,
+	// this takes precedence over HookRunner in the run() method, allowing
+	// per-project hook configuration. The function receives the project
+	// and returns a HookRunner (or nil for no hooks).
+	HookRunnerFn func(project db.Project) HookRunner
 }
 
 // Dispatcher manages build worker goroutines. It limits the number of
@@ -101,6 +109,7 @@ type Dispatcher struct {
 	gitIdentityFn    func(projectID string) (name, email string)
 
 	hookRunner       HookRunner
+	hookRunnerFn     func(project db.Project) HookRunner
 
 	mu       sync.Mutex
 	active   map[string]context.CancelFunc // issue ID → cancel func
@@ -130,6 +139,7 @@ func New(cfg Config) *Dispatcher {
 		logger:         logger,
 		gitIdentityFn:  cfg.GitIdentityFn,
 		hookRunner:     cfg.HookRunner,
+		hookRunnerFn:   cfg.HookRunnerFn,
 		active:         make(map[string]context.CancelFunc),
 		sem:            make(chan struct{}, maxWorkers),
 	}
@@ -372,7 +382,13 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 	}
 
 	if runErr == nil {
-		d.handleSuccess(ctx, issue, workDir)
+		// Resolve the hook runner for this project. HookRunnerFn (per-project)
+		// takes precedence over the static HookRunner.
+		hr := d.hookRunner
+		if d.hookRunnerFn != nil {
+			hr = d.hookRunnerFn(project)
+		}
+		d.handleSuccess(ctx, issue, workDir, hr)
 		return
 	}
 
@@ -385,10 +401,10 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 	d.handleFailure(issue, runErr)
 }
 
-func (d *Dispatcher) handleSuccess(ctx context.Context, issue db.Issue, workDir string) {
+func (d *Dispatcher) handleSuccess(ctx context.Context, issue db.Issue, workDir string, hookRunner HookRunner) {
 	// Run pre-PR hooks (e.g. code generators, formatters) before creating the PR.
-	if d.hookRunner != nil {
-		if err := d.hookRunner.RunPrePR(ctx, workDir); err != nil {
+	if hookRunner != nil {
+		if err := hookRunner.RunPrePR(ctx, workDir); err != nil {
 			d.logger.Warn("pre-PR hooks failed", "issue", issue.ID, "error", err)
 		}
 	}
