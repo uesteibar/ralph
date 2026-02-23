@@ -55,6 +55,7 @@ var (
 	_ checks.HookRunner            = (*hooks.Runner)(nil)
 	_ feedback.PRUpdater           = (*prUpdaterAdapter)(nil)
 	_ checks.PRUpdater             = (*prUpdaterAdapter)(nil)
+	_ worker.HookRunner            = (*hooks.Runner)(nil)
 	_ pr.GitHubPREditor            = (*ghPREditorAdapter)(nil)
 	_ rebase.BranchPuller          = (*branchPullerAdapter)(nil)
 	_ ghpoller.GitHubClient        = (*ghclient.Client)(nil)
