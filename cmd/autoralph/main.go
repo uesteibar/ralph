@@ -643,7 +643,7 @@ func runServe(args []string) error {
 
 	// --- 10. Orchestrator evaluation loop ---
 	wake := make(chan struct{}, 1)
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, ulState)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake)
 
 	// --- 11. Recover BUILDING issues from previous run ---
 	if count, err := dispatcher.RecoverBuilding(ctx); err != nil {
@@ -716,7 +716,6 @@ func runOrchestratorLoop(
 	hub *server.Hub,
 	logger *slog.Logger,
 	wake <-chan struct{},
-	ulState *usagelimit.State,
 ) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -745,17 +744,10 @@ func runOrchestratorLoop(
 				continue
 			}
 
-			// Check if usage limit is active -- skip AI-driven dispatches to
-			// avoid wasting worker slots on invocations that will immediately wait.
-			limitActive := ulState != nil && ulState.IsActive()
-
 			// Re-dispatch BUILDING issues that aren't actively running.
 			// This handles retries (state set back to building via API)
 			// without requiring a process restart.
 			if issue.State == string(orchestrator.StateBuilding) && !dispatcher.IsRunning(issue.ID) {
-				if limitActive {
-					continue
-				}
 				if err := dispatcher.Dispatch(ctx, issue); err != nil {
 					logger.Warn("re-dispatching building issue", "issue", issue.Identifier, "error", err)
 				} else {
@@ -778,9 +770,6 @@ func runOrchestratorLoop(
 
 			// Async transitions: dispatch via worker instead of blocking.
 			if isAsyncTransition(tr) {
-				if limitActive {
-					continue
-				}
 				if dispatcher.IsRunning(issue.ID) {
 					continue
 				}

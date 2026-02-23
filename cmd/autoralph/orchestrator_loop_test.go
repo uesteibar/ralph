@@ -12,7 +12,6 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
 	"github.com/uesteibar/ralph/internal/autoralph/server"
-	"github.com/uesteibar/ralph/internal/autoralph/usagelimit"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
 )
 
@@ -388,95 +387,9 @@ func TestDispatchAsync_NilAction_StillTransitions(t *testing.T) {
 	}
 }
 
-// --- Usage limit guard tests ---
+// --- Orchestrator loop integration tests ---
 
-func TestOrchestratorLoop_UsageLimitActive_SkipsAsyncDispatch(t *testing.T) {
-	database := orchestratorTestDB(t)
-	issue := orchestratorTestIssue(t, database, "queued")
-
-	var actionCalled bool
-	sm := orchestrator.New(database)
-	sm.Register(orchestrator.Transition{
-		From: orchestrator.StateQueued,
-		To:   orchestrator.StateRefining,
-		Action: func(i db.Issue, d *db.DB) error {
-			actionCalled = true
-			return nil
-		},
-	})
-
-	dispatcher := worker.New(worker.Config{
-		DB:         database,
-		MaxWorkers: 2,
-		Logger:     slog.Default(),
-	})
-
-	hub := server.NewHub(slog.Default())
-	logger := slog.Default()
-	ulState := usagelimit.NewState(logger)
-	ulState.Set(time.Now().Add(10 * time.Minute))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	wake := make(chan struct{}, 1)
-
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, ulState)
-
-	// Trigger a tick.
-	wake <- struct{}{}
-	time.Sleep(100 * time.Millisecond)
-
-	cancel()
-	dispatcher.Wait()
-
-	if actionCalled {
-		t.Error("expected async transition NOT to be dispatched during usage limit")
-	}
-
-	// Verify issue state unchanged.
-	updated, err := database.GetIssue(issue.ID)
-	if err != nil {
-		t.Fatalf("reading issue: %v", err)
-	}
-	if updated.State != "queued" {
-		t.Errorf("expected state queued, got %s", updated.State)
-	}
-}
-
-func TestOrchestratorLoop_UsageLimitActive_SkipsBuildingRedispatch(t *testing.T) {
-	database := orchestratorTestDB(t)
-	_ = orchestratorTestIssue(t, database, "building")
-
-	sm := orchestrator.New(database)
-
-	dispatcher := worker.New(worker.Config{
-		DB:         database,
-		MaxWorkers: 2,
-		Logger:     slog.Default(),
-	})
-
-	hub := server.NewHub(slog.Default())
-	logger := slog.Default()
-	ulState := usagelimit.NewState(logger)
-	ulState.Set(time.Now().Add(10 * time.Minute))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	wake := make(chan struct{}, 1)
-
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, ulState)
-
-	// Trigger a tick.
-	wake <- struct{}{}
-	time.Sleep(100 * time.Millisecond)
-
-	cancel()
-	dispatcher.Wait()
-
-	if dispatcher.ActiveCount() != 0 {
-		t.Error("expected no active workers during usage limit")
-	}
-}
-
-func TestOrchestratorLoop_UsageLimitActive_SyncTransitionContinues(t *testing.T) {
+func TestOrchestratorLoop_SyncTransitionExecutes(t *testing.T) {
 	database := orchestratorTestDB(t)
 	issue := orchestratorTestIssue(t, database, "refining")
 
@@ -501,13 +414,11 @@ func TestOrchestratorLoop_UsageLimitActive_SyncTransitionContinues(t *testing.T)
 
 	hub := server.NewHub(slog.Default())
 	logger := slog.Default()
-	ulState := usagelimit.NewState(logger)
-	ulState.Set(time.Now().Add(10 * time.Minute))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	wake := make(chan struct{}, 1)
 
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, ulState)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake)
 
 	// Trigger a tick.
 	wake <- struct{}{}
@@ -516,7 +427,7 @@ func TestOrchestratorLoop_UsageLimitActive_SyncTransitionContinues(t *testing.T)
 	cancel()
 
 	if !actionCalled {
-		t.Error("expected sync transition (REFINING→APPROVED) to execute during usage limit")
+		t.Error("expected sync transition (REFINING→APPROVED) to execute")
 	}
 
 	updated, err := database.GetIssue(issue.ID)
@@ -528,51 +439,7 @@ func TestOrchestratorLoop_UsageLimitActive_SyncTransitionContinues(t *testing.T)
 	}
 }
 
-func TestOrchestratorLoop_UsageLimitExpired_ResumesDispatch(t *testing.T) {
-	database := orchestratorTestDB(t)
-	_ = orchestratorTestIssue(t, database, "queued")
-
-	var actionCalled bool
-	sm := orchestrator.New(database)
-	sm.Register(orchestrator.Transition{
-		From: orchestrator.StateQueued,
-		To:   orchestrator.StateRefining,
-		Action: func(i db.Issue, d *db.DB) error {
-			actionCalled = true
-			return nil
-		},
-	})
-
-	dispatcher := worker.New(worker.Config{
-		DB:         database,
-		MaxWorkers: 2,
-		Logger:     slog.Default(),
-	})
-
-	hub := server.NewHub(slog.Default())
-	logger := slog.Default()
-	ulState := usagelimit.NewState(logger)
-	// Set usage limit already expired.
-	ulState.Set(time.Now().Add(-1 * time.Second))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	wake := make(chan struct{}, 1)
-
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, ulState)
-
-	// Trigger a tick.
-	wake <- struct{}{}
-	time.Sleep(200 * time.Millisecond)
-
-	cancel()
-	dispatcher.Wait()
-
-	if !actionCalled {
-		t.Error("expected async transition to be dispatched after usage limit expired")
-	}
-}
-
-func TestOrchestratorLoop_NilUsageLimitState_WorksNormally(t *testing.T) {
+func TestOrchestratorLoop_AsyncTransitionDispatches(t *testing.T) {
 	database := orchestratorTestDB(t)
 	_ = orchestratorTestIssue(t, database, "queued")
 
@@ -599,7 +466,7 @@ func TestOrchestratorLoop_NilUsageLimitState_WorksNormally(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wake := make(chan struct{}, 1)
 
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake)
 
 	// Trigger a tick.
 	wake <- struct{}{}
@@ -609,6 +476,7 @@ func TestOrchestratorLoop_NilUsageLimitState_WorksNormally(t *testing.T) {
 	dispatcher.Wait()
 
 	if !actionCalled {
-		t.Error("expected dispatch to work normally when usage limit state is nil")
+		t.Error("expected async transition to be dispatched")
 	}
 }
+
