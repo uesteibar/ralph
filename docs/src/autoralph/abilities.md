@@ -68,26 +68,51 @@ upstream changes, it retries with a fresh rebase.
 When a GitHub reviewer requests changes, AutoRalph feeds the review comments
 to AI and commits fixes.
 
-- Detects `CHANGES_REQUESTED` reviews via the GitHub poller
+- Detects `CHANGES_REQUESTED` or `COMMENTED` reviews via the GitHub poller
 - Loads the review comments and diff context
 - Renders an AI prompt with the feedback details
 - Invokes Claude in the workspace worktree to make fixes
+- Runs pre-commit and post-commit [hooks](../ralph/configuration.md#hooks)
+  if configured
 - Commits changes, pushes, and replies to each review comment on GitHub
+- Updates the PR description to reflect the changes
 - Transitions back to `IN_REVIEW`
 
 The feedback loop repeats each time new changes are requested, until the
-reviewer approves.
+reviewer approves. Only reviews from [trusted users](security.md#trusted-reviewer)
+are acted upon when `github_user_id` is configured.
 
 ## Fix Checks
 
-When CI checks fail on a pull request, AutoRalph can automatically analyze
-the failures and push fixes.
+**Transition**: `IN_REVIEW` → `FIXING_CHECKS`
 
-- Fetches check run results and logs from the GitHub API
-- Renders a prompt with the failure details for AI analysis
+When CI checks fail on a pull request, AutoRalph automatically analyzes the
+failures and pushes fixes.
+
+- The GitHub poller monitors check runs on the PR head SHA
+- When all checks complete and at least one has failed, the issue transitions
+  to `FIXING_CHECKS`
+- Fetches check run results and logs from the GitHub API (logs truncated to
+  200 lines: 30 head + 170 tail)
+- Renders a prompt with the failure details and the project's `quality_checks`
+  for AI analysis
 - Invokes Claude in the workspace worktree to apply fixes
+- Runs pre-commit and post-commit [hooks](../ralph/configuration.md#hooks)
+  if configured
 - Commits and pushes the changes
-- The PR's checks re-run automatically
+- Updates the PR description to reflect the fixes
+- Transitions back to `IN_REVIEW` where checks re-run automatically
+
+### Loop Protection
+
+To prevent infinite fix loops, AutoRalph tracks the number of fix attempts
+per issue. After 3 attempts (configurable), it:
+
+1. Posts a comment on the PR asking for human help
+2. Pauses the issue
+
+The attempt counter resets when the head SHA changes externally (e.g., someone
+pushes a manual fix or feedback is addressed).
 
 ## Complete
 

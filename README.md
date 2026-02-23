@@ -784,6 +784,15 @@ quality_checks:
   - "npm run lint"
   - "npm run typecheck"
 
+# Lifecycle hooks (optional)
+# Commands that run at specific points during the build process
+hooks:
+  pre_commit:
+    - "npm run format"
+  post_commit: []
+  pre_pr:
+    - "npm run build"
+
 # Files/patterns to copy from repo root into workspace worktrees (optional)
 # Supports literal paths, wildcards (*), and recursive globs (**)
 copy_to_worktree:
@@ -800,6 +809,20 @@ copy_to_worktree:
 | `repo.default_base` | Base branch (e.g., `main`, `develop`) |
 
 All other fields are optional with sensible defaults.
+
+### `hooks`
+
+Lifecycle hooks that run at specific points during the build process. Each
+hook runs via `sh -c` in the workspace directory. If a hook modifies files,
+those changes are auto-committed.
+
+| Hook | When it runs | Use case |
+|------|-------------|----------|
+| `pre_commit` | Before each commit | Formatters, linters with auto-fix, code generators |
+| `post_commit` | After each successful commit | Notifications, cache invalidation |
+| `pre_pr` | Before opening a pull request | Full builds, release preparation |
+
+Hook failures are logged as warnings but do not block the build.
 
 ### `copy_to_worktree`
 
@@ -949,7 +972,7 @@ drives them through a complete lifecycle without human intervention:
 ```
 Linear issue assigned  -->  AI refinement  -->  User approves plan
   -->  Workspace created  -->  Ralph builds feature  -->  PR opened
-  -->  Review feedback addressed  -->  PR merged  -->  Done
+  -->  CI checks fixed  -->  Review feedback addressed  -->  PR merged  -->  Done
 ```
 
 It includes a **web dashboard** at `http://127.0.0.1:7749` with real-time
@@ -1006,6 +1029,7 @@ internal/
   workspace/                   Workspace lifecycle (create, remove, registry, resolve)
   claude/                      Claude CLI invocation + streaming output parsing
   prompts/                     Embedded prompt templates (go:embed)
+  hooks/                       Lifecycle hook runner (pre-commit, post-commit, pre-PR)
   loop/                        The execution loop (stories -> QA -> done)
   events/                      Event system (EventHandler interface + event types)
   tui/                         BubbleTea-based terminal UI
@@ -1017,17 +1041,19 @@ internal/
     linear/                      Linear GraphQL client
     github/                      GitHub REST client
     poller/                      Linear issue poller
-    ghpoller/                    GitHub review/merge poller
+    ghpoller/                    GitHub review/merge/check-run poller
     worker/                      Build worker pool
     refine/                      AI refinement action
     approve/                     Approval detection action
     build/                       Workspace + PRD creation action
     pr/                          PR creation action
     feedback/                    Review feedback action
+    checks/                      CI check failure detection + auto-fix action
     complete/                    Cleanup action
     credentials/                 Credential profile management
     projects/                    Project config loading
     ai/                          AI prompt templates
+    usagelimit/                  Global AI usage limit tracking + wait-and-retry
     retry/                       Retry with exponential backoff
 web/                           React SPA for AutoRalph dashboard
 test/e2e/                      E2E tests + mock servers + playground

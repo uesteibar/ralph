@@ -35,6 +35,15 @@ quality_checks:
   - "npm run lint"
   - "npm run typecheck"
 
+# Lifecycle hooks (optional)
+# Commands that run at specific points during the build process
+hooks:
+  pre_commit:
+    - "npm run format"
+  post_commit: []
+  pre_pr:
+    - "npm run build"
+
 # Files/patterns to copy from repo root into workspace worktrees (optional)
 # Supports literal paths, wildcards (*), and recursive globs (**)
 copy_to_worktree:
@@ -65,6 +74,34 @@ quality_checks:
   - "go test ./..."
   - "cargo clippy"
 ```
+
+### hooks
+
+Lifecycle hooks that run at specific points during the build process. Each hook runs via `sh -c` in the workspace working directory. If a hook produces file changes, they are auto-committed.
+
+```yaml
+hooks:
+  # Run before committing changes (e.g., formatters, code generators)
+  pre_commit:
+    - "npm run format"
+    - "go generate ./..."
+
+  # Run after a successful commit
+  post_commit:
+    - "npm run post-build"
+
+  # Run before creating a pull request
+  pre_pr:
+    - "npm run build"
+```
+
+| Hook | When it runs | Use case |
+|------|-------------|----------|
+| `pre_commit` | Before each commit | Formatters, linters with auto-fix, code generators |
+| `post_commit` | After each successful commit | Notifications, cache invalidation |
+| `pre_pr` | Before opening a pull request | Full builds, release preparation |
+
+Hooks run sequentially in the order listed. If a hook fails, the failure is logged as a warning and the next hook runs -- hook failures do not block the build. If a hook modifies files in the working tree, those changes are automatically committed with the hook command as the commit message.
 
 ### copy_to_worktree
 

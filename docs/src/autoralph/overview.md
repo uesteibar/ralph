@@ -2,13 +2,14 @@
 
 AutoRalph is an autonomous agent that watches Linear for assigned issues and
 drives them through a complete development lifecycle — from refinement and
-planning to building, opening pull requests, and addressing review feedback —
-without human intervention.
+planning to building, opening pull requests, fixing CI failures, and addressing
+review feedback — without human intervention.
 
 AutoRalph wraps Ralph's execution loop in a long-running daemon. It polls
 Linear for new issues, uses AI to refine requirements, creates workspaces,
-invokes Ralph to build features, opens GitHub pull requests, responds to code
-review feedback, and marks issues as done when PRs are merged.
+invokes Ralph to build features, opens GitHub pull requests, automatically
+fixes failing CI checks, responds to code review feedback, and marks issues as
+done when PRs are merged.
 
 ## How It Works
 
@@ -22,6 +23,9 @@ review feedback, and marks issues as done when PRs are merged.
                          Create workspace + PRD (BUILDING)
                          Run Ralph loop (stories, QA)
                          Push branch                  ------>  Create PR
+                         Monitor checks               <------  Check results
+                         Fix failing checks (FIXING_CHECKS)
+                         Push fixes                   ------>  Checks re-run
                          Wait for review              <------  Review comments
                          Address feedback (ADDRESSING_FEEDBACK)
                          Push fixes                   ------>  Updated PR

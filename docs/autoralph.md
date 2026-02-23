@@ -43,6 +43,9 @@ feedback, and marks issues as done when PRs are merged.
                          Create workspace + PRD (BUILDING)
                          Run Ralph loop (stories, QA)
                          Push branch                  ------>  Create PR
+                         Monitor checks               <------  Check results
+                         Fix failing checks (FIXING_CHECKS)
+                         Push fixes                   ------>  Checks re-run
                          Wait for review              <------  Review comments
                          Address feedback (ADDRESSING_FEEDBACK)
                          Push fixes                   ------>  Updated PR
@@ -73,12 +76,17 @@ feedback, and marks issues as done when PRs are merged.
    a GitHub pull request with an AI-generated description. The issue moves to
    `IN_REVIEW`.
 
-7. **Address Feedback**: If reviewers request changes, AutoRalph detects the
+7. **Fix Checks**: If CI checks fail on the PR, AutoRalph fetches the check
+   run logs, feeds them to AI, and commits fixes. The issue moves to
+   `FIXING_CHECKS` and back to `IN_REVIEW`. If the checks cannot be fixed
+   after 3 attempts, the issue is paused with a comment on the PR.
+
+8. **Address Feedback**: If reviewers request changes, AutoRalph detects the
    `CHANGES_REQUESTED` review, feeds the comments to AI, commits fixes, pushes,
    and replies to each review comment. The issue moves to `ADDRESSING_FEEDBACK`
    and back to `IN_REVIEW`.
 
-8. **Complete**: When the PR is merged, AutoRalph cleans up the workspace,
+9. **Complete**: When the PR is merged, AutoRalph cleans up the workspace,
    updates the Linear issue state to "Done", and marks the issue as `COMPLETED`.
 
 ---
@@ -87,9 +95,9 @@ feedback, and marks issues as done when PRs are merged.
 
 ```
 QUEUED -------> REFINING -------> APPROVED -------> BUILDING -------> IN_REVIEW
-                  |   ^                                |                |   ^
-                  |   |                                v                |   |
-                  +---+                             FAILED             v   |
+                  |   ^                                |                |   ^   ^
+                  |   |                                v                |   |   |
+                  +---+                             FAILED             v   | FIXING_CHECKS
                (iteration)                            ^         ADDRESSING_FEEDBACK
                                                       |
                                                    PAUSED
@@ -104,8 +112,11 @@ QUEUED -------> REFINING -------> APPROVED -------> BUILDING -------> IN_REVIEW
 | `building` | `in_review` | Build succeeds, PR opened |
 | `building` | `failed` | Build fails (error stored in DB) |
 | `in_review` | `addressing_feedback` | GitHub review with changes requested |
+| `in_review` | `fixing_checks` | CI check runs fail on the PR head SHA |
 | `in_review` | `completed` | PR merged |
 | `addressing_feedback` | `in_review` | Feedback addressed, changes pushed |
+| `fixing_checks` | `in_review` | Checks fixed, changes pushed |
+| `fixing_checks` | `paused` | Max fix attempts exhausted (default: 3) |
 | any active | `paused` | User pauses via API or merge conflict |
 | `paused` | (previous state) | User resumes via API |
 | `failed` | (previous state) | User retries via API |
@@ -410,7 +421,7 @@ autoralph help            # Show usage
 3. Syncs project configs to the database
 4. Resolves credentials for each project
 5. Starts the Linear poller (polls every 30s for new assigned issues)
-6. Starts the GitHub poller (polls every 30s for PR reviews and merges)
+6. Starts the GitHub poller (polls every 30s for PR reviews, check runs, and merges)
 7. Starts the orchestrator loop (evaluates state transitions)
 8. Starts the build worker pool
 9. Recovers any BUILDING issues from a previous run
@@ -632,14 +643,16 @@ internal/autoralph/
   projects/                          Project config loading + validation + sync
   ai/                                AI prompt templates (go:embed)
   poller/                            Linear poller (new issue ingestion)
-  ghpoller/                          GitHub poller (review + merge detection)
+  ghpoller/                          GitHub poller (review + check run + merge detection)
   worker/                            Build worker pool (Ralph loop runner)
   refine/                            QUEUED -> REFINING action
   approve/                           REFINING -> APPROVED action
   build/                             APPROVED -> BUILDING action
   pr/                                PR creation action
   feedback/                          ADDRESSING_FEEDBACK action
+  checks/                            FIXING_CHECKS action (CI failure auto-fix)
   complete/                          COMPLETED action (cleanup)
+  usagelimit/                        Global AI usage limit tracking + wait-and-retry
   retry/                             Retry with exponential backoff
 web/
   src/pages/Dashboard.tsx            Dashboard page

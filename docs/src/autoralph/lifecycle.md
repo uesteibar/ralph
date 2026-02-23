@@ -17,8 +17,11 @@ stateDiagram-v2
     BUILDING --> IN_REVIEW : Build succeeds, PR opened
     BUILDING --> FAILED : Build error
     IN_REVIEW --> ADDRESSING_FEEDBACK : Review requests changes
+    IN_REVIEW --> FIXING_CHECKS : CI checks fail
     IN_REVIEW --> COMPLETED : PR merged
     ADDRESSING_FEEDBACK --> IN_REVIEW : Feedback addressed, pushed
+    FIXING_CHECKS --> IN_REVIEW : Checks fixed, pushed
+    FIXING_CHECKS --> PAUSED : Max fix attempts exhausted
     COMPLETED --> [*]
 
     PAUSED --> QUEUED : Resume
@@ -46,6 +49,7 @@ stateDiagram-v2
 | `BUILDING` | Workspace created, PRD generated, Ralph execution loop running |
 | `IN_REVIEW` | Branch pushed, PR opened on GitHub, awaiting review |
 | `ADDRESSING_FEEDBACK` | Reviewer requested changes, AI is addressing review comments |
+| `FIXING_CHECKS` | CI checks failed on the PR, AI is analyzing logs and pushing fixes |
 | `COMPLETED` | PR merged, workspace cleaned up, Linear issue moved to Done |
 | `FAILED` | An error occurred; can be retried via the API or dashboard |
 | `PAUSED` | Issue paused by user or due to merge conflict; can be resumed |
@@ -61,8 +65,11 @@ stateDiagram-v2
 | `BUILDING` | `IN_REVIEW` | Build succeeds, PR opened |
 | `BUILDING` | `FAILED` | Build fails (error stored in DB) |
 | `IN_REVIEW` | `ADDRESSING_FEEDBACK` | GitHub review with changes requested |
+| `IN_REVIEW` | `FIXING_CHECKS` | CI check runs fail on the PR head SHA |
 | `IN_REVIEW` | `COMPLETED` | PR merged |
 | `ADDRESSING_FEEDBACK` | `IN_REVIEW` | Feedback addressed, changes pushed |
+| `FIXING_CHECKS` | `IN_REVIEW` | Checks fixed, changes pushed |
+| `FIXING_CHECKS` | `PAUSED` | Max fix attempts exhausted (default: 3) |
 | any active | `PAUSED` | User pauses via API or merge conflict |
 | `PAUSED` | (previous state) | User resumes via API |
 | `FAILED` | (previous state) | User retries via API |
@@ -95,7 +102,13 @@ stateDiagram-v2
    and replies to each review comment. The issue moves to
    `ADDRESSING_FEEDBACK` and back to `IN_REVIEW`.
 
-8. **Complete**: When the PR is merged, AutoRalph cleans up the workspace,
+8. **Fix Checks**: If CI checks fail on the PR, AutoRalph fetches the check
+   run logs from GitHub, feeds them to AI, and commits fixes. The issue moves
+   to `FIXING_CHECKS` and back to `IN_REVIEW`. If the checks cannot be fixed
+   after 3 attempts, the issue is paused with a comment on the PR asking for
+   human help.
+
+9. **Complete**: When the PR is merged, AutoRalph cleans up the workspace,
    updates the Linear issue state to "Done", and marks the issue as
    `COMPLETED`.
 

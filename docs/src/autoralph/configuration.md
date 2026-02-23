@@ -23,6 +23,7 @@ profiles:
   personal:
     linear_api_key: lin_api_xxxxxxxxxxxxx
     github_token: ghp_xxxxxxxxxxxxx
+    github_user_id: 12345678              # optional: restrict to your reviews
     git_author_name: autoralph-personal
     git_author_email: autoralph-personal@example.com
 
@@ -32,6 +33,7 @@ profiles:
     github_app_client_id: "Iv23liXXXXXX"
     github_app_installation_id: 12345678
     github_app_private_key_path: ~/.autoralph/my-app.pem
+    github_user_id: 87654321              # optional: restrict to your reviews
     git_author_name: autoralph-work
     git_author_email: autoralph@myorg.com
 ```
@@ -50,6 +52,19 @@ used directly.
 > **Note**: When the `GITHUB_TOKEN` environment variable is set, it takes
 > precedence over GitHub App credentials. This is useful for temporarily
 > overriding app auth during development.
+
+### Trusted Reviewer
+
+Set `github_user_id` to restrict which reviewer's feedback AutoRalph acts on.
+When set, only reviews from that GitHub user (or reviewers they explicitly
+requested) trigger the feedback cycle. See [Security](security.md#trusted-reviewer)
+for details.
+
+Find your GitHub user ID with:
+
+```bash
+gh api /user --jq .id
+```
 
 ### Git Identity
 
@@ -155,7 +170,7 @@ autoralph help            # Show usage
 3. Syncs project configs to the database
 4. Resolves credentials for each project
 5. Starts the Linear poller (polls every 30s for new assigned issues)
-6. Starts the GitHub poller (polls every 30s for PR reviews and merges)
+6. Starts the GitHub poller (polls every 30s for PR reviews, check runs, and merges)
 7. Starts the orchestrator loop (evaluates state transitions)
 8. Starts the build worker pool
 9. Recovers any BUILDING issues from a previous run
