@@ -205,6 +205,21 @@ func (c *Client) CreatePullRequest(ctx context.Context, owner, repo, head, base,
 	}, c.retryOpts()...)
 }
 
+// EditPullRequest updates the title and body of an existing pull request.
+// Only title and body are set; other fields are left nil so they are not modified.
+func (c *Client) EditPullRequest(ctx context.Context, owner, repo string, prNumber int, title, body string) (PR, error) {
+	return retry.DoVal(ctx, func() (PR, error) {
+		pr, _, err := c.gh.PullRequests.Edit(ctx, owner, repo, prNumber, &gh.PullRequest{
+			Title: gh.Ptr(title),
+			Body:  gh.Ptr(body),
+		})
+		if err != nil {
+			return PR{}, classifyErr(fmt.Errorf("editing pull request: %w", err))
+		}
+		return prFromGH(pr), nil
+	}, c.retryOpts()...)
+}
+
 // FetchPRReviews returns all reviews on the given pull request.
 func (c *Client) FetchPRReviews(ctx context.Context, owner, repo string, prNumber int) ([]Review, error) {
 	return retry.DoVal(ctx, func() ([]Review, error) {

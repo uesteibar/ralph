@@ -835,6 +835,273 @@ func TestCapDiffStats_SummaryOnly(t *testing.T) {
 	}
 }
 
+// --- GenerateDescription tests ---
+
+func TestGenerateDescription_ReturnsCorrectTitleAndBody(t *testing.T) {
+	inv := &mockInvoker{response: "feat(avatars): add user avatar upload\n\n## Summary\nAdds avatar upload support."}
+	diff := &mockDiffStatter{stats: " 3 files changed, 120 insertions(+), 5 deletions(-)"}
+	prdReader := &mockPRDReader{info: PRDInfo{
+		Description: "Add user avatar functionality",
+		Stories: []StoryInfo{
+			{ID: "US-001", Title: "Avatar upload"},
+		},
+	}}
+	cfgLoader := &mockConfigLoader{base: "main"}
+
+	title, body, err := GenerateDescription(context.Background(), inv, diff, prdReader, cfgLoader, DescriptionInput{
+		TreePath:    "/tmp/test/tree",
+		DefaultBase: "main",
+		PRDPath:     "/tmp/test/prd.json",
+		Identifier:  "PROJ-42",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if title != "feat(avatars): add user avatar upload" {
+		t.Errorf("expected title %q, got %q", "feat(avatars): add user avatar upload", title)
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Errorf("expected body to contain ## Summary, got: %s", body)
+	}
+}
+
+func TestGenerateDescription_PromptContainsDiffStatsAndPRDAndIdentifier(t *testing.T) {
+	inv := &mockInvoker{response: "title\nbody"}
+	diff := &mockDiffStatter{stats: " 3 files changed, 120 insertions(+), 5 deletions(-)"}
+	prdReader := &mockPRDReader{info: PRDInfo{
+		Description: "Add user avatar functionality",
+		Stories: []StoryInfo{
+			{ID: "US-001", Title: "Avatar upload"},
+		},
+	}}
+	cfgLoader := &mockConfigLoader{base: "main"}
+
+	_, _, err := GenerateDescription(context.Background(), inv, diff, prdReader, cfgLoader, DescriptionInput{
+		TreePath:    "/tmp/test/tree",
+		DefaultBase: "main",
+		PRDPath:     "/tmp/test/prd.json",
+		Identifier:  "PROJ-42",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(inv.lastPrompt, "3 files changed") {
+		t.Error("expected prompt to contain diff stats")
+	}
+	if !strings.Contains(inv.lastPrompt, "Add user avatar functionality") {
+		t.Error("expected prompt to contain PRD summary")
+	}
+	if !strings.Contains(inv.lastPrompt, "PROJ-42") {
+		t.Error("expected prompt to contain issue identifier")
+	}
+	if !strings.Contains(inv.lastPrompt, "US-001") {
+		t.Error("expected prompt to contain story ID")
+	}
+}
+
+func TestGenerateDescription_DiffStatsErrorFallback(t *testing.T) {
+	inv := &mockInvoker{response: "title\nbody"}
+	diff := &mockDiffStatter{err: errors.New("no upstream")}
+	prdReader := &mockPRDReader{info: PRDInfo{Description: "desc"}}
+	cfgLoader := &mockConfigLoader{base: "main"}
+
+	_, _, err := GenerateDescription(context.Background(), inv, diff, prdReader, cfgLoader, DescriptionInput{
+		TreePath:    "/tmp/test/tree",
+		DefaultBase: "main",
+		PRDPath:     "/tmp/test/prd.json",
+		Identifier:  "PROJ-42",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(inv.lastPrompt, "(diff stats unavailable)") {
+		t.Error("expected fallback diff stats message in prompt")
+	}
+}
+
+func TestGenerateDescription_PRDReadError(t *testing.T) {
+	inv := &mockInvoker{response: "title\nbody"}
+	diff := &mockDiffStatter{stats: "stats"}
+	prdReader := &mockPRDReader{err: errors.New("prd not found")}
+	cfgLoader := &mockConfigLoader{base: "main"}
+
+	_, _, err := GenerateDescription(context.Background(), inv, diff, prdReader, cfgLoader, DescriptionInput{
+		TreePath:    "/tmp/test/tree",
+		DefaultBase: "main",
+		PRDPath:     "/tmp/test/prd.json",
+		Identifier:  "PROJ-42",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "reading PRD") {
+		t.Errorf("expected 'reading PRD' in error, got: %s", err.Error())
+	}
+}
+
+func TestGenerateDescription_AIError(t *testing.T) {
+	inv := &mockInvoker{err: errors.New("AI timeout")}
+	diff := &mockDiffStatter{stats: "stats"}
+	prdReader := &mockPRDReader{info: PRDInfo{Description: "desc"}}
+	cfgLoader := &mockConfigLoader{base: "main"}
+
+	_, _, err := GenerateDescription(context.Background(), inv, diff, prdReader, cfgLoader, DescriptionInput{
+		TreePath:    "/tmp/test/tree",
+		DefaultBase: "main",
+		PRDPath:     "/tmp/test/prd.json",
+		Identifier:  "PROJ-42",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "invoking AI") {
+		t.Errorf("expected 'invoking AI' in error, got: %s", err.Error())
+	}
+}
+
+// --- UpdateDescription tests ---
+
+type mockGitHubPREditor struct {
+	calls []editCall
+	err   error
+}
+
+type editCall struct {
+	owner, repo   string
+	prNumber      int
+	title, body   string
+}
+
+func (m *mockGitHubPREditor) EditPullRequest(_ context.Context, owner, repo string, prNumber int, title, body string) error {
+	m.calls = append(m.calls, editCall{owner: owner, repo: repo, prNumber: prNumber, title: title, body: body})
+	return m.err
+}
+
+func TestUpdateDescription_CallsEditPullRequestWithGeneratedTitleAndBody(t *testing.T) {
+	inv := &mockInvoker{response: "feat: new title\n\n## Summary\nUpdated body"}
+	diff := &mockDiffStatter{stats: " 3 files changed"}
+	prdReader := &mockPRDReader{info: PRDInfo{Description: "desc"}}
+	cfgLoader := &mockConfigLoader{base: "main"}
+	editor := &mockGitHubPREditor{}
+
+	issue := db.Issue{
+		Identifier:    "PROJ-42",
+		WorkspaceName: "proj-42",
+		PRNumber:      10,
+	}
+	project := db.Project{
+		LocalPath:       "/tmp/test",
+		GithubOwner:     "owner",
+		GithubRepo:      "repo",
+		RalphConfigPath: ".ralph/ralph.yaml",
+	}
+
+	UpdateDescription(context.Background(), inv, diff, prdReader, cfgLoader, editor, issue, project)
+
+	if len(editor.calls) != 1 {
+		t.Fatalf("expected 1 edit call, got %d", len(editor.calls))
+	}
+	call := editor.calls[0]
+	if call.owner != "owner" {
+		t.Errorf("expected owner %q, got %q", "owner", call.owner)
+	}
+	if call.repo != "repo" {
+		t.Errorf("expected repo %q, got %q", "repo", call.repo)
+	}
+	if call.prNumber != 10 {
+		t.Errorf("expected prNumber %d, got %d", 10, call.prNumber)
+	}
+	if call.title != "feat: new title" {
+		t.Errorf("expected title %q, got %q", "feat: new title", call.title)
+	}
+	if !strings.Contains(call.body, "## Summary") {
+		t.Errorf("expected body to contain ## Summary, got: %s", call.body)
+	}
+}
+
+func TestUpdateDescription_DoesNotFailWhenEditReturnsError(t *testing.T) {
+	inv := &mockInvoker{response: "title\nbody"}
+	diff := &mockDiffStatter{stats: " 3 files changed"}
+	prdReader := &mockPRDReader{info: PRDInfo{Description: "desc"}}
+	cfgLoader := &mockConfigLoader{base: "main"}
+	editor := &mockGitHubPREditor{err: errors.New("GitHub 500")}
+
+	issue := db.Issue{
+		Identifier:    "PROJ-42",
+		WorkspaceName: "proj-42",
+		PRNumber:      10,
+	}
+	project := db.Project{
+		LocalPath:       "/tmp/test",
+		GithubOwner:     "owner",
+		GithubRepo:      "repo",
+		RalphConfigPath: ".ralph/ralph.yaml",
+	}
+
+	// Should not panic or return error — UpdateDescription is non-fatal
+	UpdateDescription(context.Background(), inv, diff, prdReader, cfgLoader, editor, issue, project)
+
+	// Verify EditPullRequest was still called
+	if len(editor.calls) != 1 {
+		t.Fatalf("expected 1 edit call, got %d", len(editor.calls))
+	}
+}
+
+func TestUpdateDescription_DoesNotCallEditWhenGenerationFails(t *testing.T) {
+	inv := &mockInvoker{err: errors.New("AI timeout")}
+	diff := &mockDiffStatter{stats: "stats"}
+	prdReader := &mockPRDReader{info: PRDInfo{Description: "desc"}}
+	cfgLoader := &mockConfigLoader{base: "main"}
+	editor := &mockGitHubPREditor{}
+
+	issue := db.Issue{
+		Identifier:    "PROJ-42",
+		WorkspaceName: "proj-42",
+		PRNumber:      10,
+	}
+	project := db.Project{
+		LocalPath:       "/tmp/test",
+		GithubOwner:     "owner",
+		GithubRepo:      "repo",
+		RalphConfigPath: ".ralph/ralph.yaml",
+	}
+
+	UpdateDescription(context.Background(), inv, diff, prdReader, cfgLoader, editor, issue, project)
+
+	if len(editor.calls) != 0 {
+		t.Errorf("expected 0 edit calls when generation fails, got %d", len(editor.calls))
+	}
+}
+
+func TestUpdateDescription_DoesNotCallEditWhenConfigLoadFails(t *testing.T) {
+	inv := &mockInvoker{response: "title\nbody"}
+	diff := &mockDiffStatter{stats: "stats"}
+	prdReader := &mockPRDReader{info: PRDInfo{Description: "desc"}}
+	cfgLoader := &mockConfigLoader{err: errors.New("config not found")}
+	editor := &mockGitHubPREditor{}
+
+	issue := db.Issue{
+		Identifier:    "PROJ-42",
+		WorkspaceName: "proj-42",
+		PRNumber:      10,
+	}
+	project := db.Project{
+		LocalPath:       "/tmp/test",
+		GithubOwner:     "owner",
+		GithubRepo:      "repo",
+		RalphConfigPath: ".ralph/ralph.yaml",
+	}
+
+	UpdateDescription(context.Background(), inv, diff, prdReader, cfgLoader, editor, issue, project)
+
+	if len(editor.calls) != 0 {
+		t.Errorf("expected 0 edit calls when config load fails, got %d", len(editor.calls))
+	}
+}
+
 func TestNewAction_CapsDiffStats(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)

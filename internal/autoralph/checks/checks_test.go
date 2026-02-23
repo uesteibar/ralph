@@ -1044,5 +1044,103 @@ func TestNewAction_PassesMaxTurns(t *testing.T) {
 	}
 }
 
+// --- PRUpdater mock ---
+
+type mockPRUpdater struct {
+	calls []prUpdaterCall
+}
+
+type prUpdaterCall struct {
+	issue   db.Issue
+	project db.Project
+}
+
+func (m *mockPRUpdater) UpdateDescription(_ context.Context, issue db.Issue, project db.Project) {
+	m.calls = append(m.calls, prUpdaterCall{issue: issue, project: project})
+}
+
+// --- PRUpdater tests ---
+
+func TestNewAction_PRUpdater_CalledAfterCommitPush(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, _, _, _, _, _, _ := defaultMocks(project)
+
+	updater := &mockPRUpdater{}
+	cfg.PRUpdater = updater
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(updater.calls) != 1 {
+		t.Fatalf("expected 1 UpdateDescription call, got %d", len(updater.calls))
+	}
+	if updater.calls[0].issue.PRNumber != 10 {
+		t.Errorf("expected PRNumber 10, got %d", updater.calls[0].issue.PRNumber)
+	}
+	if updater.calls[0].project.GithubOwner != "owner" {
+		t.Errorf("expected GithubOwner 'owner', got %q", updater.calls[0].project.GithubOwner)
+	}
+}
+
+func TestNewAction_PRUpdater_NotCalledWhenNothingCommitted(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, _, _, _, _, _, git := defaultMocks(project)
+	git.commitErr = errors.New("nothing to commit")
+
+	updater := &mockPRUpdater{}
+	cfg.PRUpdater = updater
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(updater.calls) != 0 {
+		t.Errorf("expected 0 UpdateDescription calls when nothing committed, got %d", len(updater.calls))
+	}
+}
+
+func TestNewAction_PRUpdater_NilSafe(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, _, _, _, _, _, _ := defaultMocks(project)
+	cfg.PRUpdater = nil // should not crash
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error with nil PRUpdater, got: %v", err)
+	}
+}
+
+func TestNewAction_PRUpdater_NotCalledOnLoopExhaustion(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 2) // attempt 3 = max
+
+	cfg, _, _, _, _, _, _ := defaultMocks(project)
+	updater := &mockPRUpdater{}
+	cfg.PRUpdater = updater
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(updater.calls) != 0 {
+		t.Errorf("expected 0 UpdateDescription calls on loop exhaustion, got %d", len(updater.calls))
+	}
+}
+
 // Suppress unused import warning for ai package
 var _ = ai.FixChecksData{}
