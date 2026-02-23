@@ -52,6 +52,7 @@ var (
 	_ feedback.IssueCommentReactor = (*ghclient.Client)(nil)
 	_ feedback.BranchPuller        = (*branchPullerAdapter)(nil)
 	_ feedback.HookRunner          = (*hooks.Runner)(nil)
+	_ checks.HookRunner            = (*hooks.Runner)(nil)
 	_ feedback.PRUpdater           = (*prUpdaterAdapter)(nil)
 	_ checks.PRUpdater             = (*prUpdaterAdapter)(nil)
 	_ pr.GitHubPREditor            = (*ghPREditorAdapter)(nil)
