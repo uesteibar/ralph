@@ -49,6 +49,11 @@ type PRCreator interface {
 	CreatePR(issue db.Issue, database *db.DB) error
 }
 
+// HookRunner runs lifecycle hooks at specific points in the build lifecycle.
+type HookRunner interface {
+	RunPrePR(ctx context.Context, workDir string) error
+}
+
 // Config holds the dependencies for the build worker dispatcher.
 type Config struct {
 	DB           *db.DB
@@ -75,6 +80,18 @@ type Config struct {
 	// UsageLimitSetter is called when a UsageLimitWait event is received
 	// from the ralph loop, bridging loop-level detection to global state.
 	UsageLimitSetter eventlog.UsageLimitSetter
+
+	// HookRunner runs pre-PR hooks after the build loop completes but
+	// before PR creation. When nil, no hooks are executed.
+	// For multi-project setups, prefer HookRunnerFn which creates
+	// per-project runners.
+	HookRunner HookRunner
+
+	// HookRunnerFn creates a HookRunner for a given project. When set,
+	// this takes precedence over HookRunner in the run() method, allowing
+	// per-project hook configuration. The function receives the project
+	// and returns a HookRunner (or nil for no hooks).
+	HookRunnerFn func(project db.Project) HookRunner
 }
 
 // Dispatcher manages build worker goroutines. It limits the number of
@@ -90,6 +107,9 @@ type Dispatcher struct {
 	ulSetter         eventlog.UsageLimitSetter
 	logger           *slog.Logger
 	gitIdentityFn    func(projectID string) (name, email string)
+
+	hookRunner       HookRunner
+	hookRunnerFn     func(project db.Project) HookRunner
 
 	mu       sync.Mutex
 	active   map[string]context.CancelFunc // issue ID → cancel func
@@ -118,6 +138,8 @@ func New(cfg Config) *Dispatcher {
 		ulSetter:       cfg.UsageLimitSetter,
 		logger:         logger,
 		gitIdentityFn:  cfg.GitIdentityFn,
+		hookRunner:     cfg.HookRunner,
+		hookRunnerFn:   cfg.HookRunnerFn,
 		active:         make(map[string]context.CancelFunc),
 		sem:            make(chan struct{}, maxWorkers),
 	}
@@ -360,7 +382,13 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 	}
 
 	if runErr == nil {
-		d.handleSuccess(issue)
+		// Resolve the hook runner for this project. HookRunnerFn (per-project)
+		// takes precedence over the static HookRunner.
+		hr := d.hookRunner
+		if d.hookRunnerFn != nil {
+			hr = d.hookRunnerFn(project)
+		}
+		d.handleSuccess(ctx, issue, workDir, hr)
 		return
 	}
 
@@ -373,7 +401,14 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 	d.handleFailure(issue, runErr)
 }
 
-func (d *Dispatcher) handleSuccess(issue db.Issue) {
+func (d *Dispatcher) handleSuccess(ctx context.Context, issue db.Issue, workDir string, hookRunner HookRunner) {
+	// Run pre-PR hooks (e.g. code generators, formatters) before creating the PR.
+	if hookRunner != nil {
+		if err := hookRunner.RunPrePR(ctx, workDir); err != nil {
+			d.logger.Warn("pre-PR hooks failed", "issue", issue.ID, "error", err)
+		}
+	}
+
 	if d.pr != nil {
 		if err := d.pr.CreatePR(issue, d.db); err != nil {
 			d.logger.Error("creating PR", "issue", issue.ID, "error", err)

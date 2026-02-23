@@ -1142,5 +1142,150 @@ func TestNewAction_PRUpdater_NotCalledOnLoopExhaustion(t *testing.T) {
 	}
 }
 
+// --- HookRunner mock ---
+
+type hookRunnerCall struct {
+	method  string
+	workDir string
+}
+
+type mockHookRunner struct {
+	calls []hookRunnerCall
+}
+
+func (m *mockHookRunner) RunPreCommit(_ context.Context, workDir string) error {
+	m.calls = append(m.calls, hookRunnerCall{method: "RunPreCommit", workDir: workDir})
+	return nil
+}
+
+func (m *mockHookRunner) RunPostCommit(_ context.Context, workDir string) error {
+	m.calls = append(m.calls, hookRunnerCall{method: "RunPostCommit", workDir: workDir})
+	return nil
+}
+
+// --- HookRunner tests ---
+
+func TestNewAction_Hooks_PreCommitCalledBeforeCommit(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, _, _, _, _, _, _ := defaultMocks(project)
+
+	hooks := &mockHookRunner{}
+	cfg.Hooks = hooks
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var preCommitCalls int
+	for _, c := range hooks.calls {
+		if c.method == "RunPreCommit" {
+			preCommitCalls++
+		}
+	}
+	if preCommitCalls != 1 {
+		t.Errorf("expected 1 RunPreCommit call, got %d", preCommitCalls)
+	}
+}
+
+func TestNewAction_Hooks_PostCommitCalledAfterSuccessfulCommit(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, _, _, _, _, _, _ := defaultMocks(project)
+
+	hooks := &mockHookRunner{}
+	cfg.Hooks = hooks
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var postCommitCalls int
+	for _, c := range hooks.calls {
+		if c.method == "RunPostCommit" {
+			postCommitCalls++
+		}
+	}
+	if postCommitCalls != 1 {
+		t.Errorf("expected 1 RunPostCommit call, got %d", postCommitCalls)
+	}
+}
+
+func TestNewAction_Hooks_PostCommitSkippedWhenNothingCommitted(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, _, _, _, _, _, git := defaultMocks(project)
+	git.commitErr = errors.New("nothing to commit")
+
+	hooks := &mockHookRunner{}
+	cfg.Hooks = hooks
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var preCommitCalls, postCommitCalls int
+	for _, c := range hooks.calls {
+		switch c.method {
+		case "RunPreCommit":
+			preCommitCalls++
+		case "RunPostCommit":
+			postCommitCalls++
+		}
+	}
+	if preCommitCalls != 1 {
+		t.Errorf("expected 1 RunPreCommit call, got %d", preCommitCalls)
+	}
+	if postCommitCalls != 0 {
+		t.Errorf("expected 0 RunPostCommit calls when nothing committed, got %d", postCommitCalls)
+	}
+}
+
+func TestNewAction_Hooks_CorrectWorkDir(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, _, _, _, _, _, _ := defaultMocks(project)
+
+	hooks := &mockHookRunner{}
+	cfg.Hooks = hooks
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedDir := filepath.Join("/tmp/test", ".ralph", "workspaces", "proj-42", "tree")
+	for _, c := range hooks.calls {
+		if c.workDir != expectedDir {
+			t.Errorf("expected workDir %q for %s, got %q", expectedDir, c.method, c.workDir)
+		}
+	}
+}
+
+func TestNewAction_Hooks_NilHooks_Safe(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, 0)
+	cfg, _, _, _, _, _, _ := defaultMocks(project)
+	cfg.Hooks = nil
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error with nil Hooks, got: %v", err)
+	}
+}
+
 // Suppress unused import warning for ai package
 var _ = ai.FixChecksData{}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"os/signal"
 	"syscall"
@@ -31,7 +32,9 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/server"
 	"github.com/uesteibar/ralph/internal/autoralph/usagelimit"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
+	"github.com/uesteibar/ralph/internal/config"
 	"github.com/uesteibar/ralph/internal/gitops"
+	"github.com/uesteibar/ralph/internal/hooks"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
 
@@ -440,6 +443,17 @@ func runServe(args []string) error {
 						gitAuthorName:  gitName,
 						gitAuthorEmail: gitEmail,
 					}
+
+					// Load hooks config for the project.
+					var hookRunner feedback.HookRunner
+					proj, projErr := database.GetProject(issue.ProjectID)
+					if projErr == nil {
+						cfgPath := filepath.Join(proj.LocalPath, proj.RalphConfigPath)
+						if ralphCfg, cfgErr := config.Load(cfgPath); cfgErr == nil {
+							hookRunner = hooks.New(ralphCfg.Hooks, gitOps.gitEnv())
+						}
+					}
+
 					return feedback.NewAction(feedback.Config{
 						Invoker:       invoker,
 						Comments:      gc,
@@ -448,6 +462,7 @@ func runServe(args []string) error {
 						Replier:       gc,
 						PRCommenter:   gc,
 						Git:           gitOps,
+						Hooks:         hookRunner,
 						Projects:      database,
 						ConfigLoad:    &configLoaderAdapter{},
 						Reactor:       gc,
@@ -480,6 +495,17 @@ func runServe(args []string) error {
 						gitAuthorName:  gitName,
 						gitAuthorEmail: gitEmail,
 					}
+
+					// Load hooks config for the project.
+					var hookRunner checks.HookRunner
+					proj, projErr := database.GetProject(issue.ProjectID)
+					if projErr == nil {
+						cfgPath := filepath.Join(proj.LocalPath, proj.RalphConfigPath)
+						if ralphCfg, cfgErr := config.Load(cfgPath); cfgErr == nil {
+							hookRunner = hooks.New(ralphCfg.Hooks, gitOps.gitEnv())
+						}
+					}
+
 					return checks.NewAction(checks.Config{
 						Invoker:      invoker,
 						CheckRuns:    gc,
@@ -487,6 +513,7 @@ func runServe(args []string) error {
 						PRs:          gc,
 						Comments:     gc,
 						Git:          gitOps,
+						Hooks:        hookRunner,
 						Projects:     database,
 						ConfigLoad:   &configLoaderAdapter{},
 						PRUpdater: &prUpdaterAdapter{
@@ -578,6 +605,19 @@ func runServe(args []string) error {
 		GitIdentityFn:    registry.gitIdentity,
 		UsageLimitSetter: ulState,
 		Logger:           logger,
+		HookRunnerFn: func(project db.Project) worker.HookRunner {
+			cfgPath := filepath.Join(project.LocalPath, project.RalphConfigPath)
+			ralphCfg, err := config.Load(cfgPath)
+			if err != nil {
+				return nil
+			}
+			gitName, gitEmail := registry.gitIdentity(project.ID)
+			gitOps := &gitOpsAdapter{
+				gitAuthorName:  gitName,
+				gitAuthorEmail: gitEmail,
+			}
+			return hooks.New(ralphCfg.Hooks, gitOps.gitEnv())
+		},
 		OnBuildEvent: func(issueID, detail string) {
 			if hub == nil {
 				return

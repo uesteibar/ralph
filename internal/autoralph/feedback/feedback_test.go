@@ -2442,3 +2442,176 @@ func TestNewAction_PRUpdater_NilSafe(t *testing.T) {
 		t.Fatalf("expected no error with nil PRUpdater, got: %v", err)
 	}
 }
+
+// --- HookRunner mock ---
+
+type hookRunnerCall struct {
+	method  string
+	workDir string
+}
+
+type mockHookRunner struct {
+	calls []hookRunnerCall
+}
+
+func (m *mockHookRunner) RunPreCommit(_ context.Context, workDir string) error {
+	m.calls = append(m.calls, hookRunnerCall{method: "RunPreCommit", workDir: workDir})
+	return nil
+}
+
+func (m *mockHookRunner) RunPostCommit(_ context.Context, workDir string) error {
+	m.calls = append(m.calls, hookRunnerCall{method: "RunPostCommit", workDir: workDir})
+	return nil
+}
+
+// --- HookRunner tests ---
+
+func TestNewAction_Hooks_PreCommitCalledBeforeCommit(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+
+	hooks := &mockHookRunner{}
+	cfg.Hooks = hooks
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Pre-commit should have been called.
+	var preCommitCalls int
+	for _, c := range hooks.calls {
+		if c.method == "RunPreCommit" {
+			preCommitCalls++
+		}
+	}
+	if preCommitCalls != 1 {
+		t.Errorf("expected 1 RunPreCommit call, got %d", preCommitCalls)
+	}
+}
+
+func TestNewAction_Hooks_PostCommitCalledAfterSuccessfulCommit(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+
+	hooks := &mockHookRunner{}
+	cfg.Hooks = hooks
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var postCommitCalls int
+	for _, c := range hooks.calls {
+		if c.method == "RunPostCommit" {
+			postCommitCalls++
+		}
+	}
+	if postCommitCalls != 1 {
+		t.Errorf("expected 1 RunPostCommit call, got %d", postCommitCalls)
+	}
+}
+
+func TestNewAction_Hooks_PostCommitSkippedWhenNothingCommitted(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, git := defaultMocks(project)
+	git.commitErr = errors.New("nothing to commit")
+
+	hooks := &mockHookRunner{}
+	cfg.Hooks = hooks
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Pre-commit should still have been called.
+	var preCommitCalls, postCommitCalls int
+	for _, c := range hooks.calls {
+		switch c.method {
+		case "RunPreCommit":
+			preCommitCalls++
+		case "RunPostCommit":
+			postCommitCalls++
+		}
+	}
+	if preCommitCalls != 1 {
+		t.Errorf("expected 1 RunPreCommit call, got %d", preCommitCalls)
+	}
+	if postCommitCalls != 0 {
+		t.Errorf("expected 0 RunPostCommit calls when nothing committed, got %d", postCommitCalls)
+	}
+}
+
+func TestNewAction_Hooks_CorrectWorkDir(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+
+	hooks := &mockHookRunner{}
+	cfg.Hooks = hooks
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedTreePath := filepath.Join("/tmp/test", ".ralph", "workspaces", "proj-42", "tree")
+	for _, c := range hooks.calls {
+		if c.workDir != expectedTreePath {
+			t.Errorf("expected workDir %q, got %q", expectedTreePath, c.workDir)
+		}
+	}
+}
+
+func TestNewAction_Hooks_NilHooks_Safe(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, _ := defaultMocks(project)
+	cfg.Hooks = nil // no hooks configured — should not crash
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error with nil Hooks, got: %v", err)
+	}
+}
+
+func TestNewAction_Hooks_PreCommitAutoCommitDoesNotBlockMainCommit(t *testing.T) {
+	// When pre-commit hooks produce file changes and auto-commit,
+	// the main commit should still proceed normally.
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, _, git := defaultMocks(project)
+
+	hooks := &mockHookRunner{}
+	cfg.Hooks = hooks
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The main commit should still happen after pre-commit hooks.
+	if len(git.commitCalls) != 1 {
+		t.Fatalf("expected 1 main commit call, got %d", len(git.commitCalls))
+	}
+	if len(git.pushCalls) != 1 {
+		t.Fatalf("expected 1 push call, got %d", len(git.pushCalls))
+	}
+}

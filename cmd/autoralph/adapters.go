@@ -21,6 +21,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
+	"github.com/uesteibar/ralph/internal/hooks"
 	"log/slog"
 
 	"github.com/uesteibar/ralph/internal/claude"
@@ -50,8 +51,11 @@ var (
 	_ feedback.CommentReactor      = (*ghclient.Client)(nil)
 	_ feedback.IssueCommentReactor = (*ghclient.Client)(nil)
 	_ feedback.BranchPuller        = (*branchPullerAdapter)(nil)
+	_ feedback.HookRunner          = (*hooks.Runner)(nil)
+	_ checks.HookRunner            = (*hooks.Runner)(nil)
 	_ feedback.PRUpdater           = (*prUpdaterAdapter)(nil)
 	_ checks.PRUpdater             = (*prUpdaterAdapter)(nil)
+	_ worker.HookRunner            = (*hooks.Runner)(nil)
 	_ pr.GitHubPREditor            = (*ghPREditorAdapter)(nil)
 	_ rebase.BranchPuller          = (*branchPullerAdapter)(nil)
 	_ ghpoller.GitHubClient        = (*ghclient.Client)(nil)

@@ -1742,3 +1742,412 @@ func TestDispatcher_Dispatch_PassesKnowledgePath(t *testing.T) {
 		t.Errorf("expected knowledgePath %q, got %q", expectedKnowledge, calls[0].knowledgePath)
 	}
 }
+
+// --- HookRunner mock ---
+
+type mockHookRunner struct {
+	mu         sync.Mutex
+	preCalls   []string // workDir values passed to RunPrePR
+	preErr     error
+}
+
+func (m *mockHookRunner) RunPrePR(ctx context.Context, workDir string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.preCalls = append(m.preCalls, workDir)
+	return m.preErr
+}
+
+func (m *mockHookRunner) getPrePRCalls() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	calls := make([]string, len(m.preCalls))
+	copy(calls, m.preCalls)
+	return calls
+}
+
+// --- HookRunner tests ---
+
+func TestDispatcher_Dispatch_PrePRHooksRunBeforeCreatePR(t *testing.T) {
+	d := testDB(t)
+	projectPath := t.TempDir()
+	wsName := "proj-42"
+
+	initTreeRepo(t, projectPath, wsName)
+
+	p, err := d.CreateProject(db.Project{
+		Name:             "hooks-test",
+		LocalPath:        projectPath,
+		LinearTeamID:     "team-abc",
+		LinearAssigneeID: "user-xyz",
+		RalphConfigPath:  ".ralph/ralph.yaml",
+		BranchPrefix:     "autoralph/",
+		MaxIterations:    5,
+	})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	issue := createTestIssue(t, d, p, "building")
+
+	hookRunner := &mockHookRunner{}
+
+	// Track order of operations: hooks should run before PR creation.
+	var order []string
+	var orderMu sync.Mutex
+
+	orderedHookRunner := &orderTrackingHookRunner{
+		inner: hookRunner,
+		recordFn: func(op string) {
+			orderMu.Lock()
+			order = append(order, op)
+			orderMu.Unlock()
+		},
+	}
+
+	prCreator := &orderTrackingPRCreator{
+		inner: &mockPRCreator{},
+		recordFn: func(op string) {
+			orderMu.Lock()
+			order = append(order, op)
+			orderMu.Unlock()
+		},
+	}
+
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+		PR:         prCreator,
+		HookRunner: orderedHookRunner,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	orderMu.Lock()
+	ops := make([]string, len(order))
+	copy(ops, order)
+	orderMu.Unlock()
+
+	if len(ops) < 2 {
+		t.Fatalf("expected at least 2 operations, got %d: %v", len(ops), ops)
+	}
+	if ops[0] != "pre_pr" {
+		t.Errorf("expected first operation to be 'pre_pr', got %q", ops[0])
+	}
+	if ops[1] != "create_pr" {
+		t.Errorf("expected second operation to be 'create_pr', got %q", ops[1])
+	}
+}
+
+func TestDispatcher_Dispatch_PrePRHooksRunInWorktreeDir(t *testing.T) {
+	d := testDB(t)
+	projectPath := t.TempDir()
+	wsName := "proj-42"
+
+	initTreeRepo(t, projectPath, wsName)
+
+	p, err := d.CreateProject(db.Project{
+		Name:             "hooks-dir-test",
+		LocalPath:        projectPath,
+		LinearTeamID:     "team-abc",
+		LinearAssigneeID: "user-xyz",
+		RalphConfigPath:  ".ralph/ralph.yaml",
+		BranchPrefix:     "autoralph/",
+		MaxIterations:    5,
+	})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	issue := createTestIssue(t, d, p, "building")
+
+	hookRunner := &mockHookRunner{}
+
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+		HookRunner: hookRunner,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	calls := hookRunner.getPrePRCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 RunPrePR call, got %d", len(calls))
+	}
+
+	expectedTreePath := filepath.Join(projectPath, ".ralph", "workspaces", wsName, "tree")
+	if calls[0] != expectedTreePath {
+		t.Errorf("expected workDir %q, got %q", expectedTreePath, calls[0])
+	}
+}
+
+func TestDispatcher_Dispatch_PrePRHookFailure_DoesNotBlockPR(t *testing.T) {
+	d := testDB(t)
+	projectPath := t.TempDir()
+	wsName := "proj-42"
+
+	initTreeRepo(t, projectPath, wsName)
+
+	p, err := d.CreateProject(db.Project{
+		Name:             "hooks-fail-test",
+		LocalPath:        projectPath,
+		LinearTeamID:     "team-abc",
+		LinearAssigneeID: "user-xyz",
+		RalphConfigPath:  ".ralph/ralph.yaml",
+		BranchPrefix:     "autoralph/",
+		MaxIterations:    5,
+	})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	issue := createTestIssue(t, d, p, "building")
+
+	hookRunner := &mockHookRunner{preErr: errors.New("hook failed")}
+
+	prCreator := &mockPRCreator{}
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+		PR:         prCreator,
+		HookRunner: hookRunner,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	// Issue should still transition to in_review despite hook failure.
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != "in_review" {
+		t.Errorf("expected state %q, got %q", "in_review", updated.State)
+	}
+}
+
+func TestDispatcher_Dispatch_NoHookRunner_ExistingBehaviorUnchanged(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "building")
+
+	prCreator := &mockPRCreator{}
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+		PR:         prCreator,
+		// HookRunner intentionally nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != "in_review" {
+		t.Errorf("expected state %q, got %q", "in_review", updated.State)
+	}
+}
+
+func TestDispatcher_Dispatch_HookRunnerFn_TakesPrecedenceOverStaticHookRunner(t *testing.T) {
+	d := testDB(t)
+	projectPath := t.TempDir()
+	wsName := "proj-42"
+
+	initTreeRepo(t, projectPath, wsName)
+
+	p, err := d.CreateProject(db.Project{
+		Name:             "hooks-fn-test",
+		LocalPath:        projectPath,
+		LinearTeamID:     "team-abc",
+		LinearAssigneeID: "user-xyz",
+		RalphConfigPath:  ".ralph/ralph.yaml",
+		BranchPrefix:     "autoralph/",
+		MaxIterations:    5,
+	})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	issue := createTestIssue(t, d, p, "building")
+
+	staticHookRunner := &mockHookRunner{}
+	fnHookRunner := &mockHookRunner{}
+
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+		HookRunner: staticHookRunner,
+		HookRunnerFn: func(project db.Project) HookRunner {
+			return fnHookRunner
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	// HookRunnerFn should have been used, not the static HookRunner.
+	fnCalls := fnHookRunner.getPrePRCalls()
+	if len(fnCalls) != 1 {
+		t.Errorf("expected 1 RunPrePR call via HookRunnerFn, got %d", len(fnCalls))
+	}
+
+	staticCalls := staticHookRunner.getPrePRCalls()
+	if len(staticCalls) != 0 {
+		t.Errorf("expected 0 RunPrePR calls via static HookRunner, got %d", len(staticCalls))
+	}
+}
+
+func TestDispatcher_Dispatch_HookRunnerFn_ReceivesCorrectProject(t *testing.T) {
+	d := testDB(t)
+	projectPath := t.TempDir()
+	wsName := "proj-42"
+
+	initTreeRepo(t, projectPath, wsName)
+
+	p, err := d.CreateProject(db.Project{
+		Name:             "hooks-fn-project-test",
+		LocalPath:        projectPath,
+		LinearTeamID:     "team-abc",
+		LinearAssigneeID: "user-xyz",
+		RalphConfigPath:  ".ralph/ralph.yaml",
+		BranchPrefix:     "autoralph/",
+		MaxIterations:    5,
+	})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	issue := createTestIssue(t, d, p, "building")
+
+	var capturedProject db.Project
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+		HookRunnerFn: func(project db.Project) HookRunner {
+			capturedProject = project
+			return &mockHookRunner{}
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	if capturedProject.ID != p.ID {
+		t.Errorf("expected project ID %q, got %q", p.ID, capturedProject.ID)
+	}
+	if capturedProject.Name != p.Name {
+		t.Errorf("expected project name %q, got %q", p.Name, capturedProject.Name)
+	}
+}
+
+func TestDispatcher_Dispatch_HookRunnerFn_NilReturn_NoHooksRun(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project, "building")
+
+	prCreator := &mockPRCreator{}
+	runner := &mockLoopRunner{}
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: runner,
+		Projects:   d,
+		PR:         prCreator,
+		HookRunnerFn: func(project db.Project) HookRunner {
+			return nil // no hooks for this project
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := disp.Dispatch(ctx, issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	disp.Wait()
+
+	// Should still succeed — transitions to in_review.
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
+	}
+	if updated.State != "in_review" {
+		t.Errorf("expected state %q, got %q", "in_review", updated.State)
+	}
+}
+
+// orderTrackingHookRunner wraps a HookRunner and records when RunPrePR is called.
+type orderTrackingHookRunner struct {
+	inner    HookRunner
+	recordFn func(string)
+}
+
+func (o *orderTrackingHookRunner) RunPrePR(ctx context.Context, workDir string) error {
+	o.recordFn("pre_pr")
+	return o.inner.RunPrePR(ctx, workDir)
+}
+
+// orderTrackingPRCreator wraps a PRCreator and records when CreatePR is called.
+type orderTrackingPRCreator struct {
+	inner    PRCreator
+	recordFn func(string)
+}
+
+func (o *orderTrackingPRCreator) CreatePR(issue db.Issue, database *db.DB) error {
+	o.recordFn("create_pr")
+	return o.inner.CreatePR(issue, database)
+}

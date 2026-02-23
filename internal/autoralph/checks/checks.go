@@ -63,6 +63,12 @@ type PRUpdater interface {
 	UpdateDescription(ctx context.Context, issue db.Issue, project db.Project)
 }
 
+// HookRunner runs lifecycle hooks around commits.
+type HookRunner interface {
+	RunPreCommit(ctx context.Context, workDir string) error
+	RunPostCommit(ctx context.Context, workDir string) error
+}
+
 // ConfigLoader loads a Ralph config from a file path.
 type ConfigLoader interface {
 	Load(path string) (*config.Config, error)
@@ -79,7 +85,8 @@ type Config struct {
 	BranchPuller BranchPuller
 	Projects     ProjectGetter
 	ConfigLoad   ConfigLoader
-	PRUpdater    PRUpdater // optional: updates PR description after commit+push
+	Hooks        HookRunner // optional: runs pre/post commit hooks
+	PRUpdater    PRUpdater  // optional: updates PR description after commit+push
 	EventHandler events.EventHandler
 	OnBuildEvent func(issueID, detail string)
 	OverrideDir  string
@@ -186,12 +193,21 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 		}
 		commitMsg := fmt.Sprintf("Fix failing checks: %s", strings.Join(checkNames, ", "))
 
+		// Run pre-commit hooks (e.g. formatters, generators).
+		if cfg.Hooks != nil {
+			_ = cfg.Hooks.RunPreCommit(ctx, treePath)
+		}
+
 		committed := false
 		if err := cfg.Git.Commit(ctx, treePath, commitMsg); err != nil {
 			if !isNothingToCommit(err) {
 				return fmt.Errorf("committing changes: %w", err)
 			}
 		} else {
+			// Run post-commit hooks after a successful commit.
+			if cfg.Hooks != nil {
+				_ = cfg.Hooks.RunPostCommit(ctx, treePath)
+			}
 			if err := cfg.Git.PushBranch(ctx, treePath, issue.BranchName); err != nil {
 				return fmt.Errorf("pushing changes: %w", err)
 			}
