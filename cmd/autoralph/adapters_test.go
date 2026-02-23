@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +21,9 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/autoralph/orchestrator"
 	"github.com/uesteibar/ralph/internal/autoralph/rebase"
+	"github.com/uesteibar/ralph/internal/autoralph/usagelimit"
+	"github.com/uesteibar/ralph/internal/claude"
+	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/shell"
 	"github.com/uesteibar/ralph/internal/workspace"
 )
@@ -27,6 +33,9 @@ var _ checks.GitOps = (*gitOpsAdapter)(nil)
 
 // Compile-time check: claudeInvoker satisfies invoker.EventInvoker.
 var _ invoker.EventInvoker = (*claudeInvoker)(nil)
+
+// Compile-time check: usagelimitInvoker satisfies invoker.EventInvoker.
+var _ invoker.EventInvoker = (*usagelimitInvoker)(nil)
 
 // Compile-time checks: branchPullerAdapter satisfies all three BranchPuller interfaces.
 var (
@@ -639,4 +648,327 @@ func runSinglePollCycle(t *testing.T, p *ghpoller.Poller, ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 	p.Run(ctx)
+}
+
+// --- usagelimitInvoker tests ---
+
+// mockInvoker records calls and returns configurable results.
+type mockInvoker struct {
+	mu      sync.Mutex
+	calls   int
+	results []mockResult
+}
+
+type mockResult struct {
+	output string
+	err    error
+}
+
+func (m *mockInvoker) Invoke(ctx context.Context, prompt, dir string, maxTurns int) (string, error) {
+	m.mu.Lock()
+	i := m.calls
+	m.calls++
+	m.mu.Unlock()
+
+	if i < len(m.results) {
+		return m.results[i].output, m.results[i].err
+	}
+	return "ok", nil
+}
+
+func (m *mockInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
+	return m.Invoke(ctx, prompt, dir, maxTurns)
+}
+
+func (m *mockInvoker) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+func TestUsageLimitInvoker_Invoke_Success(t *testing.T) {
+	mock := &mockInvoker{results: []mockResult{{output: "done", err: nil}}}
+	state := usagelimit.NewState(slog.Default())
+	inv := &usagelimitInvoker{inner: mock, state: state}
+
+	out, err := inv.Invoke(context.Background(), "prompt", "/dir", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("expected output 'done', got %q", out)
+	}
+	if mock.callCount() != 1 {
+		t.Fatalf("expected 1 call, got %d", mock.callCount())
+	}
+}
+
+func TestUsageLimitInvoker_Invoke_NonUsageLimitError_PropagatesImmediately(t *testing.T) {
+	want := errors.New("network error")
+	mock := &mockInvoker{results: []mockResult{{err: want}}}
+	state := usagelimit.NewState(slog.Default())
+	inv := &usagelimitInvoker{inner: mock, state: state}
+
+	_, err := inv.Invoke(context.Background(), "prompt", "/dir", 10)
+	if !errors.Is(err, want) {
+		t.Fatalf("expected %v, got %v", want, err)
+	}
+	if mock.callCount() != 1 {
+		t.Fatalf("expected 1 call, got %d", mock.callCount())
+	}
+}
+
+func TestUsageLimitInvoker_Invoke_UsageLimitError_WaitsAndRetries(t *testing.T) {
+	resetAt := time.Now().Add(200 * time.Millisecond)
+	mock := &mockInvoker{results: []mockResult{
+		{err: &claude.UsageLimitError{ResetAt: resetAt, Message: "limit hit"}},
+		{output: "retried", err: nil},
+	}}
+	state := usagelimit.NewState(slog.Default())
+	inv := &usagelimitInvoker{inner: mock, state: state}
+
+	start := time.Now()
+	out, err := inv.Invoke(context.Background(), "prompt", "/dir", 10)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "retried" {
+		t.Fatalf("expected output 'retried', got %q", out)
+	}
+	if mock.callCount() != 2 {
+		t.Fatalf("expected 2 calls, got %d", mock.callCount())
+	}
+	if elapsed < 150*time.Millisecond {
+		t.Fatalf("expected wait of ~200ms, only waited %v", elapsed)
+	}
+}
+
+func TestUsageLimitInvoker_Invoke_SetsStateOnUsageLimitError(t *testing.T) {
+	resetAt := time.Now().Add(100 * time.Millisecond)
+	mock := &mockInvoker{results: []mockResult{
+		{err: &claude.UsageLimitError{ResetAt: resetAt, Message: "limit"}},
+		{output: "ok", err: nil},
+	}}
+	state := usagelimit.NewState(slog.Default())
+	inv := &usagelimitInvoker{inner: mock, state: state}
+
+	_, _ = inv.Invoke(context.Background(), "prompt", "/dir", 10)
+
+	// After successful retry, the state should no longer be active (resetAt in the past).
+	if state.IsActive() {
+		t.Error("expected state to be inactive after retry completes")
+	}
+	if !state.ResetAt().Equal(resetAt) {
+		t.Errorf("expected state.ResetAt = %v, got %v", resetAt, state.ResetAt())
+	}
+}
+
+func TestUsageLimitInvoker_Invoke_PreChecksWait(t *testing.T) {
+	// Set a usage limit that's already known before the call.
+	state := usagelimit.NewState(slog.Default())
+	state.Set(time.Now().Add(200 * time.Millisecond))
+
+	mock := &mockInvoker{results: []mockResult{{output: "after-wait", err: nil}}}
+	inv := &usagelimitInvoker{inner: mock, state: state}
+
+	start := time.Now()
+	out, err := inv.Invoke(context.Background(), "prompt", "/dir", 10)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "after-wait" {
+		t.Fatalf("expected 'after-wait', got %q", out)
+	}
+	if elapsed < 150*time.Millisecond {
+		t.Fatalf("expected pre-check wait of ~200ms, only waited %v", elapsed)
+	}
+}
+
+func TestUsageLimitInvoker_Invoke_ContextCancellationDuringWait(t *testing.T) {
+	state := usagelimit.NewState(slog.Default())
+	state.Set(time.Now().Add(10 * time.Second))
+
+	mock := &mockInvoker{}
+	inv := &usagelimitInvoker{inner: mock, state: state}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := inv.Invoke(ctx, "prompt", "/dir", 10)
+		done <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Invoke did not return after context cancellation")
+	}
+
+	if mock.callCount() != 0 {
+		t.Fatalf("expected 0 calls (blocked during pre-check), got %d", mock.callCount())
+	}
+}
+
+func TestUsageLimitInvoker_InvokeWithEvents_UsageLimitError_WaitsAndRetries(t *testing.T) {
+	resetAt := time.Now().Add(100 * time.Millisecond)
+	mock := &mockInvoker{results: []mockResult{
+		{err: &claude.UsageLimitError{ResetAt: resetAt, Message: "limit"}},
+		{output: "ok-events", err: nil},
+	}}
+	state := usagelimit.NewState(slog.Default())
+	inv := &usagelimitInvoker{inner: mock, state: state}
+
+	out, err := inv.InvokeWithEvents(context.Background(), "prompt", "/dir", 10, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "ok-events" {
+		t.Fatalf("expected 'ok-events', got %q", out)
+	}
+	if mock.callCount() != 2 {
+		t.Fatalf("expected 2 calls, got %d", mock.callCount())
+	}
+}
+
+// IT-001: Non-loop action waits and retries on usage limit.
+func TestUsageLimitInvoker_Integration_WaitAndRetry(t *testing.T) {
+	resetAt := time.Now().Add(200 * time.Millisecond)
+	mock := &mockInvoker{results: []mockResult{
+		{err: &claude.UsageLimitError{ResetAt: resetAt, Message: "limit"}},
+		{output: "success", err: nil},
+	}}
+	state := usagelimit.NewState(slog.Default())
+	inv := &usagelimitInvoker{inner: mock, state: state}
+
+	start := time.Now()
+	out, err := inv.Invoke(context.Background(), "prompt", "/dir", 10)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "success" {
+		t.Fatalf("expected 'success', got %q", out)
+	}
+	// Should have waited ~200ms.
+	if elapsed < 150*time.Millisecond {
+		t.Fatalf("expected wait, only elapsed %v", elapsed)
+	}
+	// State should no longer be active.
+	if state.IsActive() {
+		t.Error("expected state inactive after completion")
+	}
+}
+
+// IT-003: Multiple concurrent workers coordinate via shared state.
+func TestUsageLimitInvoker_Integration_ConcurrentWorkersShareState(t *testing.T) {
+	resetAt := time.Now().Add(200 * time.Millisecond)
+	var totalCalls atomic.Int32
+
+	// This mock returns UsageLimitError on the first call only, then succeeds.
+	// We use atomic to ensure only one UsageLimitError is returned across
+	// all goroutines.
+	var hitLimit atomic.Bool
+	mock := &mockInvoker{}
+	// Override the mock with a custom function via a wrapper.
+	state := usagelimit.NewState(slog.Default())
+
+	// Create a custom invoker that tracks calls atomically.
+	customInner := &atomicMockInvoker{
+		hitLimit:   &hitLimit,
+		totalCalls: &totalCalls,
+		resetAt:    resetAt,
+	}
+	inv := &usagelimitInvoker{inner: customInner, state: state}
+	_ = mock // suppress unused
+
+	var wg sync.WaitGroup
+	results := make([]string, 2)
+	errs := make([]error, 2)
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			results[idx], errs[idx] = inv.Invoke(context.Background(), "prompt", "/dir", 10)
+		}(i)
+	}
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: unexpected error: %v", i, err)
+		}
+	}
+	for i, out := range results {
+		if out != "ok" {
+			t.Fatalf("goroutine %d: expected 'ok', got %q", i, out)
+		}
+	}
+
+	// At most one extra failed invocation should occur (the one that triggered the limit).
+	calls := int(totalCalls.Load())
+	if calls > 3 {
+		t.Fatalf("expected at most 3 total calls (1 fail + 2 success), got %d", calls)
+	}
+}
+
+// atomicMockInvoker returns UsageLimitError exactly once across all goroutines.
+type atomicMockInvoker struct {
+	hitLimit   *atomic.Bool
+	totalCalls *atomic.Int32
+	resetAt    time.Time
+}
+
+func (m *atomicMockInvoker) Invoke(ctx context.Context, prompt, dir string, maxTurns int) (string, error) {
+	m.totalCalls.Add(1)
+	if m.hitLimit.CompareAndSwap(false, true) {
+		return "", &claude.UsageLimitError{ResetAt: m.resetAt, Message: "limit"}
+	}
+	return "ok", nil
+}
+
+func (m *atomicMockInvoker) InvokeWithEvents(ctx context.Context, prompt, dir string, maxTurns int, handler events.EventHandler) (string, error) {
+	return m.Invoke(ctx, prompt, dir, maxTurns)
+}
+
+// IT-005: Context cancellation during usage limit wait returns cleanly.
+func TestUsageLimitInvoker_Integration_ContextCancellation(t *testing.T) {
+	state := usagelimit.NewState(slog.Default())
+	state.Set(time.Now().Add(10 * time.Second))
+
+	mock := &mockInvoker{}
+	inv := &usagelimitInvoker{inner: mock, state: state}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := inv.Invoke(ctx, "prompt", "/dir", 10)
+		done <- err
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("did not return after cancellation")
+	}
 }

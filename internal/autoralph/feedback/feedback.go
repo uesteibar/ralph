@@ -216,7 +216,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("rendering feedback prompt: %w", err)
 		}
 
-		handler := eventlog.New(database, issue.ID, cfg.EventHandler, cfg.OnBuildEvent)
+		handler := eventlog.New(database, issue.ID, cfg.EventHandler, cfg.OnBuildEvent, nil)
 		aiResponse, err := cfg.Invoker.InvokeWithEvents(ctx, prompt, treePath, maxTurnsFeedback, handler)
 		if err != nil {
 			return fmt.Errorf("invoking AI: %w", err)

@@ -2,6 +2,7 @@ package eventlog_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/eventlog"
@@ -98,6 +99,17 @@ func TestFormatDetail_InvocationDone_ZeroTokens(t *testing.T) {
 	}
 }
 
+func TestFormatDetail_UsageLimitWait(t *testing.T) {
+	got := eventlog.FormatDetail(events.UsageLimitWait{
+		WaitDuration: 5 * time.Minute,
+		ResetAt:      time.Date(2026, 2, 20, 15, 30, 0, 0, time.UTC),
+	})
+	want := "Usage limit hit, waiting 5m0s (resets at 2026-02-20 15:30:00 +0000 UTC)"
+	if got != want {
+		t.Errorf("FormatDetail(UsageLimitWait) = %q, want %q", got, want)
+	}
+}
+
 func TestFormatDetail_UnknownEvent_ReturnsEmpty(t *testing.T) {
 	got := eventlog.FormatDetail(events.PRDRefresh{})
 	if got != "" {
@@ -135,7 +147,7 @@ func setupTestDB(t *testing.T) *db.DB {
 func TestHandler_Handle_LogsActivity(t *testing.T) {
 	d := setupTestDB(t)
 
-	h := eventlog.New(d, "issue-1", nil, nil)
+	h := eventlog.New(d, "issue-1", nil, nil, nil)
 	h.Handle(events.ToolUse{Name: "Read", Detail: "file.go"})
 
 	entries, err := d.ListBuildActivity("issue-1", 10, 0)
@@ -162,7 +174,7 @@ func TestHandler_Handle_CallsOnBuildEvent(t *testing.T) {
 		callbackDetail = detail
 	}
 
-	h := eventlog.New(d, "issue-1", nil, onBuildEvent)
+	h := eventlog.New(d, "issue-1", nil, onBuildEvent, nil)
 	h.Handle(events.InvocationDone{NumTurns: 3, DurationMS: 5000})
 
 	if callbackIssueID != "issue-1" {
@@ -180,7 +192,7 @@ func TestHandler_Handle_ForwardsToUpstream(t *testing.T) {
 	var received []events.Event
 	upstream := &recordingHandler{events: &received}
 
-	h := eventlog.New(d, "issue-1", upstream, nil)
+	h := eventlog.New(d, "issue-1", upstream, nil, nil)
 	e := events.ToolUse{Name: "Edit"}
 	h.Handle(e)
 
@@ -198,7 +210,7 @@ func TestHandler_Handle_SkipsLoggingForUnknownEvent(t *testing.T) {
 	var received []events.Event
 	upstream := &recordingHandler{events: &received}
 
-	h := eventlog.New(d, "issue-1", upstream, onBuildEvent)
+	h := eventlog.New(d, "issue-1", upstream, onBuildEvent, nil)
 	h.Handle(events.PRDRefresh{})
 
 	entries, err := d.ListBuildActivity("issue-1", 10, 0)
@@ -220,7 +232,7 @@ func TestHandler_Handle_SkipsLoggingForUnknownEvent(t *testing.T) {
 func TestHandler_Handle_NilUpstreamAndCallback(t *testing.T) {
 	d := setupTestDB(t)
 
-	h := eventlog.New(d, "issue-1", nil, nil)
+	h := eventlog.New(d, "issue-1", nil, nil, nil)
 	// Should not panic with nil upstream and callback
 	h.Handle(events.ToolUse{Name: "Bash"})
 
@@ -236,7 +248,7 @@ func TestHandler_Handle_NilUpstreamAndCallback(t *testing.T) {
 func TestHandler_Handle_IncrementsTokensOnNonZero(t *testing.T) {
 	d := setupTestDB(t)
 
-	h := eventlog.New(d, "issue-1", nil, nil)
+	h := eventlog.New(d, "issue-1", nil, nil, nil)
 	h.Handle(events.InvocationDone{
 		NumTurns:     5,
 		DurationMS:   2345,
@@ -259,7 +271,7 @@ func TestHandler_Handle_IncrementsTokensOnNonZero(t *testing.T) {
 func TestHandler_Handle_SkipsIncrementOnZeroTokens(t *testing.T) {
 	d := setupTestDB(t)
 
-	h := eventlog.New(d, "issue-1", nil, nil)
+	h := eventlog.New(d, "issue-1", nil, nil, nil)
 	h.Handle(events.InvocationDone{
 		NumTurns:     3,
 		DurationMS:   1000,
@@ -282,7 +294,7 @@ func TestHandler_Handle_SkipsIncrementOnZeroTokens(t *testing.T) {
 func TestHandler_Handle_CumulativeTokenIncrement(t *testing.T) {
 	d := setupTestDB(t)
 
-	h := eventlog.New(d, "issue-1", nil, nil)
+	h := eventlog.New(d, "issue-1", nil, nil, nil)
 	h.Handle(events.InvocationDone{NumTurns: 1, DurationMS: 100, InputTokens: 500, OutputTokens: 300})
 	h.Handle(events.InvocationDone{NumTurns: 2, DurationMS: 200, InputTokens: 700, OutputTokens: 400})
 
@@ -296,6 +308,87 @@ func TestHandler_Handle_CumulativeTokenIncrement(t *testing.T) {
 	if issue.OutputTokens != 700 {
 		t.Errorf("OutputTokens = %d, want 700 (cumulative)", issue.OutputTokens)
 	}
+}
+
+func TestHandler_Handle_UsageLimitWait_CallsSetter(t *testing.T) {
+	d := setupTestDB(t)
+	setter := &recordingSetter{}
+
+	h := eventlog.New(d, "issue-1", nil, nil, setter)
+	resetAt := time.Now().Add(5 * time.Minute)
+	h.Handle(events.UsageLimitWait{WaitDuration: 5 * time.Minute, ResetAt: resetAt})
+
+	if !setter.called {
+		t.Fatal("setter.Set was not called")
+	}
+	if !setter.resetAt.Equal(resetAt) {
+		t.Errorf("setter.Set received %v, want %v", setter.resetAt, resetAt)
+	}
+}
+
+func TestHandler_Handle_UsageLimitWait_NilSetter(t *testing.T) {
+	d := setupTestDB(t)
+
+	h := eventlog.New(d, "issue-1", nil, nil, nil)
+	// Should not panic with nil setter
+	h.Handle(events.UsageLimitWait{WaitDuration: 5 * time.Minute, ResetAt: time.Now().Add(5 * time.Minute)})
+
+	entries, err := d.ListBuildActivity("issue-1", 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d activity entries, want 1", len(entries))
+	}
+}
+
+func TestHandler_Handle_UsageLimitWait_LogsActivity(t *testing.T) {
+	d := setupTestDB(t)
+
+	h := eventlog.New(d, "issue-1", nil, nil, nil)
+	h.Handle(events.UsageLimitWait{
+		WaitDuration: 5 * time.Minute,
+		ResetAt:      time.Date(2026, 2, 20, 15, 30, 0, 0, time.UTC),
+	})
+
+	entries, err := d.ListBuildActivity("issue-1", 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d activity entries, want 1", len(entries))
+	}
+	if entries[0].EventType != "build_event" {
+		t.Errorf("event type = %q, want %q", entries[0].EventType, "build_event")
+	}
+	want := "Usage limit hit, waiting 5m0s (resets at 2026-02-20 15:30:00 +0000 UTC)"
+	if entries[0].Detail != want {
+		t.Errorf("detail = %q, want %q", entries[0].Detail, want)
+	}
+}
+
+func TestHandler_Handle_UsageLimitWait_ForwardsUpstream(t *testing.T) {
+	d := setupTestDB(t)
+	var received []events.Event
+	upstream := &recordingHandler{events: &received}
+
+	h := eventlog.New(d, "issue-1", upstream, nil, nil)
+	ev := events.UsageLimitWait{WaitDuration: 5 * time.Minute, ResetAt: time.Now().Add(5 * time.Minute)}
+	h.Handle(ev)
+
+	if len(received) != 1 {
+		t.Fatalf("upstream received %d events, want 1", len(received))
+	}
+}
+
+type recordingSetter struct {
+	called  bool
+	resetAt time.Time
+}
+
+func (r *recordingSetter) Set(resetAt time.Time) {
+	r.called = true
+	r.resetAt = resetAt
 }
 
 type recordingHandler struct {
