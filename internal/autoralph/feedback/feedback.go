@@ -57,6 +57,12 @@ type IssueCommentReactor interface {
 	ReactToIssueComment(ctx context.Context, owner, repo string, commentID int64, reaction string) error
 }
 
+// HookRunner runs lifecycle hooks around commits.
+type HookRunner interface {
+	RunPreCommit(ctx context.Context, workDir string) error
+	RunPostCommit(ctx context.Context, workDir string) error
+}
+
 // PRUpdater updates the PR description after changes are pushed.
 type PRUpdater interface {
 	UpdateDescription(ctx context.Context, issue db.Issue, project db.Project)
@@ -98,6 +104,7 @@ type Config struct {
 	ConfigLoad    ConfigLoader
 	Reactor       CommentReactor       // for line comment reactions
 	IssueReactor  IssueCommentReactor  // optional: for issue comment reactions
+	Hooks         HookRunner           // optional: runs pre/post commit hooks
 	PRUpdater     PRUpdater            // optional: updates PR description after commit+push
 	EventHandler  events.EventHandler
 	OnBuildEvent  func(issueID, detail string)
@@ -235,6 +242,11 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			commitMessage = commitTitle + "\n\n" + commitBody
 		}
 
+		// Run pre-commit hooks (e.g. formatters, generators).
+		if cfg.Hooks != nil {
+			_ = cfg.Hooks.RunPreCommit(ctx, treePath)
+		}
+
 		// Try to commit and push. If nothing changed (e.g., AI only
 		// provided explanations), skip commit/push gracefully.
 		committed := false
@@ -243,6 +255,10 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 				return fmt.Errorf("committing changes: %w", err)
 			}
 		} else {
+			// Run post-commit hooks after a successful commit.
+			if cfg.Hooks != nil {
+				_ = cfg.Hooks.RunPostCommit(ctx, treePath)
+			}
 			if err := cfg.Git.PushBranch(ctx, treePath, issue.BranchName); err != nil {
 				return fmt.Errorf("pushing changes: %w", err)
 			}
