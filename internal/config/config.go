@@ -15,6 +15,13 @@ type Config struct {
 	Paths          PathsConfig `yaml:"paths"`
 	QualityChecks  []string    `yaml:"quality_checks"`
 	CopyToWorktree []string    `yaml:"copy_to_worktree,omitempty"`
+	Hooks          HooksConfig `yaml:"hooks"`
+}
+
+type HooksConfig struct {
+	PreCommit  []string `yaml:"pre_commit"`
+	PostCommit []string `yaml:"post_commit"`
+	PrePR      []string `yaml:"pre_pr"`
 }
 
 type RepoConfig struct {

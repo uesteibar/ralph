@@ -327,6 +327,117 @@ func TestDiscover_ExplicitWorkDir(t *testing.T) {
 	}
 }
 
+func TestLoad_Hooks_ParsesAllFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ralph.yaml")
+	content := `project: Test
+repo:
+  default_base: main
+hooks:
+  pre_commit:
+    - "go fmt ./..."
+    - "go vet ./..."
+  post_commit:
+    - "echo done"
+  pre_pr:
+    - "make generate"
+    - "npm run build"
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if len(cfg.Hooks.PreCommit) != 2 {
+		t.Fatalf("Hooks.PreCommit length = %d, want 2", len(cfg.Hooks.PreCommit))
+	}
+	if cfg.Hooks.PreCommit[0] != "go fmt ./..." {
+		t.Errorf("Hooks.PreCommit[0] = %q, want %q", cfg.Hooks.PreCommit[0], "go fmt ./...")
+	}
+	if cfg.Hooks.PreCommit[1] != "go vet ./..." {
+		t.Errorf("Hooks.PreCommit[1] = %q, want %q", cfg.Hooks.PreCommit[1], "go vet ./...")
+	}
+
+	if len(cfg.Hooks.PostCommit) != 1 {
+		t.Fatalf("Hooks.PostCommit length = %d, want 1", len(cfg.Hooks.PostCommit))
+	}
+	if cfg.Hooks.PostCommit[0] != "echo done" {
+		t.Errorf("Hooks.PostCommit[0] = %q, want %q", cfg.Hooks.PostCommit[0], "echo done")
+	}
+
+	if len(cfg.Hooks.PrePR) != 2 {
+		t.Fatalf("Hooks.PrePR length = %d, want 2", len(cfg.Hooks.PrePR))
+	}
+	if cfg.Hooks.PrePR[0] != "make generate" {
+		t.Errorf("Hooks.PrePR[0] = %q, want %q", cfg.Hooks.PrePR[0], "make generate")
+	}
+	if cfg.Hooks.PrePR[1] != "npm run build" {
+		t.Errorf("Hooks.PrePR[1] = %q, want %q", cfg.Hooks.PrePR[1], "npm run build")
+	}
+}
+
+func TestLoad_Hooks_OptionalField(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ralph.yaml")
+	content := `project: Test
+repo:
+  default_base: main
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.Hooks.PreCommit != nil {
+		t.Errorf("Hooks.PreCommit = %v, want nil", cfg.Hooks.PreCommit)
+	}
+	if cfg.Hooks.PostCommit != nil {
+		t.Errorf("Hooks.PostCommit = %v, want nil", cfg.Hooks.PostCommit)
+	}
+	if cfg.Hooks.PrePR != nil {
+		t.Errorf("Hooks.PrePR = %v, want nil", cfg.Hooks.PrePR)
+	}
+}
+
+func TestLoad_Hooks_EmptyLists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ralph.yaml")
+	content := `project: Test
+repo:
+  default_base: main
+hooks:
+  pre_commit: []
+  post_commit: []
+  pre_pr: []
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if len(cfg.Hooks.PreCommit) != 0 {
+		t.Errorf("Hooks.PreCommit length = %d, want 0", len(cfg.Hooks.PreCommit))
+	}
+	if len(cfg.Hooks.PostCommit) != 0 {
+		t.Errorf("Hooks.PostCommit length = %d, want 0", len(cfg.Hooks.PostCommit))
+	}
+	if len(cfg.Hooks.PrePR) != 0 {
+		t.Errorf("Hooks.PrePR length = %d, want 0", len(cfg.Hooks.PrePR))
+	}
+}
+
 func TestDiscover_EmptyWorkDir_DefaultsToCwd(t *testing.T) {
 	// When workDir is empty, Discover falls back to os.Getwd.
 	// We can't easily test the cwd path without os.Chdir, so just verify
