@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -162,7 +163,7 @@ func TestShellInit_BashOutput_ContainsNewAlias(t *testing.T) {
 	}
 	out := buf.String()
 
-	// The shell function should handle "ralph new" identically to "ralph workspaces new".
+	// The shell function should handle "ralph new" with PRD creation.
 	mustContain := []string{
 		`new)`,               // outer case for new alias
 		"RALPH_WORKSPACE",    // sets workspace env var
@@ -171,6 +172,78 @@ func TestShellInit_BashOutput_ContainsNewAlias(t *testing.T) {
 	for _, s := range mustContain {
 		if !containsSubstring(out, s) {
 			t.Errorf("bash output missing %q for new alias", s)
+		}
+	}
+}
+
+func TestShellInit_WorkspacesNew_DoesNotContainPRDCreation(t *testing.T) {
+	var buf bytes.Buffer
+	err := shellInit("/bin/bash", &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+
+	// Extract the "workspaces new" block: from "new)" inside the workspaces case
+	// to the next ";;" terminator.
+	wsBlock := extractCaseBlock(out, "workspaces)", "new)")
+	if wsBlock == "" {
+		t.Fatal("could not extract workspaces new block from shell output")
+	}
+
+	// workspaces new should NOT contain PRD creation
+	if containsSubstring(wsBlock, "prd new") {
+		t.Error("workspaces new block should NOT contain 'prd new'")
+	}
+	if containsSubstring(wsBlock, "prd.json") {
+		t.Error("workspaces new block should NOT contain 'prd.json'")
+	}
+
+	// workspaces new should still create workspace, cd, and set RALPH_WORKSPACE
+	mustContain := []string{
+		"command ralph",
+		"cd \"$__path\"",
+		"RALPH_WORKSPACE",
+	}
+	for _, s := range mustContain {
+		if !containsSubstring(wsBlock, s) {
+			t.Errorf("workspaces new block missing %q", s)
+		}
+	}
+}
+
+func TestShellInit_RalphNew_ContainsPRDCreation(t *testing.T) {
+	var buf bytes.Buffer
+	err := shellInit("/bin/bash", &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+
+	// Extract the outer "new)" block (ralph new, not workspaces new).
+	// This is the "new)" case at the outer level, after the "workspaces)" block ends.
+	outerNewBlock := extractOuterCaseBlock(out, "new)")
+	if outerNewBlock == "" {
+		t.Fatal("could not extract outer new block from shell output")
+	}
+
+	// ralph new SHOULD contain PRD creation
+	if !containsSubstring(outerNewBlock, "prd new") {
+		t.Error("ralph new block should contain 'prd new'")
+	}
+	if !containsSubstring(outerNewBlock, "prd.json") {
+		t.Error("ralph new block should contain 'prd.json'")
+	}
+
+	// ralph new should also create workspace, cd, and set RALPH_WORKSPACE
+	mustContain := []string{
+		"command ralph",
+		"cd \"$__path\"",
+		"RALPH_WORKSPACE",
+	}
+	for _, s := range mustContain {
+		if !containsSubstring(outerNewBlock, s) {
+			t.Errorf("ralph new block missing %q", s)
 		}
 	}
 }
@@ -187,3 +260,66 @@ func bytesContains(s, sub string) bool {
 	}
 	return false
 }
+
+// extractCaseBlock extracts a nested case block from inside an outer case.
+// It finds outerCase first, then finds innerCase within it, and returns
+// the content up to the next ";;".
+func extractCaseBlock(s, outerCase, innerCase string) string {
+	lines := splitLines(s)
+	inOuter := false
+	for i, line := range lines {
+		trimmed := trimSpace(line)
+		if trimmed == outerCase {
+			inOuter = true
+			continue
+		}
+		if inOuter && trimmed == innerCase {
+			// Found the nested case; collect until ";;"
+			var b strings.Builder
+			for j := i; j < len(lines); j++ {
+				b.WriteString(lines[j])
+				b.WriteByte('\n')
+				if trimSpace(lines[j]) == ";;" {
+					return b.String()
+				}
+			}
+		}
+		// Stop if we leave the outer case (hit another top-level case)
+		if inOuter && trimmed == "esac" {
+			break
+		}
+	}
+	return ""
+}
+
+// extractOuterCaseBlock extracts a top-level case block from the shell function.
+// It skips nested occurrences (those inside a "workspaces)" block) and returns
+// the first top-level match.
+func extractOuterCaseBlock(s, caseLabel string) string {
+	lines := splitLines(s)
+	depth := 0 // track case/esac nesting
+	for i, line := range lines {
+		trimmed := trimSpace(line)
+		if trimmed == "case \"$2\" in" || trimmed == "case \"$1\" in" {
+			depth++
+			continue
+		}
+		if trimmed == "esac" {
+			depth--
+			continue
+		}
+		// Only match at the outermost case level (depth == 1 = inside the $1 case)
+		if depth == 1 && trimmed == caseLabel {
+			var b strings.Builder
+			for j := i; j < len(lines); j++ {
+				b.WriteString(lines[j])
+				b.WriteByte('\n')
+				if trimSpace(lines[j]) == ";;" {
+					return b.String()
+				}
+			}
+		}
+	}
+	return ""
+}
+
