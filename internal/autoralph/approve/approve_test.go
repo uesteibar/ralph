@@ -1397,6 +1397,41 @@ func (f *fetchCountingClient) PostReply(ctx context.Context, issueID, parentID, 
 	return f.inner.PostReply(ctx, issueID, parentID, body)
 }
 
+func TestCachedCommentClient_Reset_InvalidatesCache(t *testing.T) {
+	fetchCount := 0
+	inner := &mockCommentClient{
+		comments: []linear.Comment{
+			{ID: "c1", Body: "draft plan", UserName: "autoralph"},
+		},
+	}
+
+	counter := &fetchCountingClient{inner: inner, count: &fetchCount}
+	cached := NewCachedCommentClient(counter)
+
+	issue := db.Issue{LinearIssueID: "lin-123", LastCommentID: ""}
+
+	// First call fetches from inner.
+	IsApproval(cached)(issue)
+	if fetchCount != 1 {
+		t.Fatalf("expected 1 fetch call, got %d", fetchCount)
+	}
+
+	// Same issue, still cached.
+	IsApproval(cached)(issue)
+	if fetchCount != 1 {
+		t.Fatalf("expected 1 fetch call (cached), got %d", fetchCount)
+	}
+
+	// Reset the cache.
+	cached.Reset()
+
+	// Same issue now re-fetches from inner.
+	IsApproval(cached)(issue)
+	if fetchCount != 2 {
+		t.Errorf("expected 2 fetch calls after Reset, got %d", fetchCount)
+	}
+}
+
 // --- Incremental iteration tests ---
 
 func TestIterationAction_IncrementalSendsOnlyNewComments(t *testing.T) {

@@ -83,6 +83,15 @@ func (c *CachedCommentClient) FetchIssueComments(ctx context.Context, issueID st
 	return c.lastCs, c.lastErr
 }
 
+// Reset clears the cached result so the next FetchIssueComments call
+// hits the underlying client. Call this at the start of each orchestrator
+// tick to avoid serving stale comments across evaluation cycles.
+func (c *CachedCommentClient) Reset() {
+	c.lastID = ""
+	c.lastCs = nil
+	c.lastErr = nil
+}
+
 func (c *CachedCommentClient) PostComment(ctx context.Context, issueID, body string) (linear.Comment, error) {
 	return c.inner.PostComment(ctx, issueID, body)
 }

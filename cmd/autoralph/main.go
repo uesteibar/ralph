@@ -287,6 +287,13 @@ func runServe(args []string) error {
 	// Shared usage limit state so all workers coordinate around rate limits.
 	ulState := usagelimit.NewState(logger)
 
+	// commentCaches holds one CachedCommentClient per project so that
+	// IsApproval and IsIteration share a single FetchIssueComments call
+	// when evaluated sequentially for the same issue. Declared here
+	// (outside the hasLinear block) so the orchestrator loop can reset
+	// caches each tick.
+	commentCaches := map[string]*approve.CachedCommentClient{}
+
 	if hasLinear {
 		invoker := &usagelimitInvoker{
 			inner: &claudeInvoker{},
@@ -339,10 +346,8 @@ func runServe(args []string) error {
 			},
 		})
 
-		// commentCaches holds one CachedCommentClient per project so that
-		// IsApproval and IsIteration share a single FetchIssueComments call
-		// when evaluated sequentially for the same issue.
-		commentCaches := map[string]*approve.CachedCommentClient{}
+		// cachedComments lazily creates or retrieves a CachedCommentClient
+		// for the given project.
 		cachedComments := func(projectID string) (*approve.CachedCommentClient, error) {
 			if cc, ok := commentCaches[projectID]; ok {
 				return cc, nil
@@ -643,7 +648,7 @@ func runServe(args []string) error {
 
 	// --- 10. Orchestrator evaluation loop ---
 	wake := make(chan struct{}, 1)
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, commentCaches)
 
 	// --- 11. Recover BUILDING issues from previous run ---
 	if count, err := dispatcher.RecoverBuilding(ctx); err != nil {
@@ -716,6 +721,7 @@ func runOrchestratorLoop(
 	hub *server.Hub,
 	logger *slog.Logger,
 	wake <-chan struct{},
+	commentCaches map[string]*approve.CachedCommentClient,
 ) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -726,6 +732,13 @@ func runOrchestratorLoop(
 			return
 		case <-ticker.C:
 		case <-wake:
+		}
+
+		// Invalidate comment caches so this tick fetches fresh data
+		// from Linear. The cache only deduplicates within a single tick
+		// (IsApproval + IsIteration for the same issue).
+		for _, cc := range commentCaches {
+			cc.Reset()
 		}
 
 		issues, err := database.ListIssues(db.IssueFilter{})

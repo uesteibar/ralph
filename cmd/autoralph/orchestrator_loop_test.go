@@ -418,7 +418,7 @@ func TestOrchestratorLoop_SyncTransitionExecutes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wake := make(chan struct{}, 1)
 
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil)
 
 	// Trigger a tick.
 	wake <- struct{}{}
@@ -466,7 +466,7 @@ func TestOrchestratorLoop_AsyncTransitionDispatches(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wake := make(chan struct{}, 1)
 
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil)
 
 	// Trigger a tick.
 	wake <- struct{}{}
