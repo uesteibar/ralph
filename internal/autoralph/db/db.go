@@ -48,12 +48,15 @@ type Issue struct {
 	ErrorMessage     string
 	LastCommentID    string
 	LastReviewID     string
-	LastCheckSHA     string
-	CheckFixAttempts int
-	InputTokens      int
-	OutputTokens     int
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	LastCheckSHA              string
+	CheckFixAttempts          int
+	LastAddressedCommentID    string
+	LastAddressedReviewID     string
+	LastAddressedIssueCommentID string
+	InputTokens               int
+	OutputTokens              int
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
 }
 
 type ActivityEntry struct {
@@ -159,6 +162,9 @@ func Open(path string) (*DB, error) {
 	conn.Exec(`ALTER TABLE issues ADD COLUMN check_fix_attempts INTEGER NOT NULL DEFAULT 0`)
 	conn.Exec(`ALTER TABLE issues ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0`)
 	conn.Exec(`ALTER TABLE issues ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`)
+	conn.Exec(`ALTER TABLE issues ADD COLUMN last_addressed_comment_id TEXT NOT NULL DEFAULT ''`)
+	conn.Exec(`ALTER TABLE issues ADD COLUMN last_addressed_review_id TEXT NOT NULL DEFAULT ''`)
+	conn.Exec(`ALTER TABLE issues ADD COLUMN last_addressed_issue_comment_id TEXT NOT NULL DEFAULT ''`)
 
 	return &DB{conn: conn}, nil
 }
