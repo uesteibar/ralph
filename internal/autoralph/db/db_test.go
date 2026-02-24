@@ -1438,3 +1438,275 @@ func TestOpen_MigratesCheckTrackingColumns(t *testing.T) {
 	}
 	d.Close()
 }
+
+// --- Feedback Cursor Columns ---
+
+func TestOpen_MigratesFeedbackCursorColumns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer d.Close()
+
+	columns := []string{
+		"last_addressed_comment_id",
+		"last_addressed_review_id",
+		"last_addressed_issue_comment_id",
+	}
+	for _, col := range columns {
+		var count int
+		err = d.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('issues') WHERE name=?`, col).Scan(&count)
+		if err != nil {
+			t.Fatalf("querying column info for %s: %v", col, err)
+		}
+		if count != 1 {
+			t.Errorf("expected %s column to exist", col)
+		}
+	}
+}
+
+func TestCreateIssue_FeedbackCursorColumns_DefaultValues(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, err := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "No cursor fields set",
+		State:     "queued",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.LastAddressedCommentID != "" {
+		t.Errorf("expected empty LastAddressedCommentID, got %q", got.LastAddressedCommentID)
+	}
+	if got.LastAddressedReviewID != "" {
+		t.Errorf("expected empty LastAddressedReviewID, got %q", got.LastAddressedReviewID)
+	}
+	if got.LastAddressedIssueCommentID != "" {
+		t.Errorf("expected empty LastAddressedIssueCommentID, got %q", got.LastAddressedIssueCommentID)
+	}
+}
+
+func TestCreateIssue_FeedbackCursorColumns_SetValues(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, err := d.CreateIssue(Issue{
+		ProjectID:                  p.ID,
+		Title:                      "With cursor fields",
+		State:                      "addressing_feedback",
+		LastAddressedCommentID:     "101",
+		LastAddressedReviewID:      "200",
+		LastAddressedIssueCommentID: "300",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.LastAddressedCommentID != "101" {
+		t.Errorf("expected LastAddressedCommentID %q, got %q", "101", got.LastAddressedCommentID)
+	}
+	if got.LastAddressedReviewID != "200" {
+		t.Errorf("expected LastAddressedReviewID %q, got %q", "200", got.LastAddressedReviewID)
+	}
+	if got.LastAddressedIssueCommentID != "300" {
+		t.Errorf("expected LastAddressedIssueCommentID %q, got %q", "300", got.LastAddressedIssueCommentID)
+	}
+}
+
+func TestUpdateIssue_FeedbackCursorColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Update cursor fields",
+		State:     "addressing_feedback",
+	})
+	issue.LastAddressedCommentID = "102"
+	issue.LastAddressedReviewID = "201"
+	issue.LastAddressedIssueCommentID = "301"
+
+	if err := d.UpdateIssue(issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.LastAddressedCommentID != "102" {
+		t.Errorf("expected LastAddressedCommentID %q, got %q", "102", got.LastAddressedCommentID)
+	}
+	if got.LastAddressedReviewID != "201" {
+		t.Errorf("expected LastAddressedReviewID %q, got %q", "201", got.LastAddressedReviewID)
+	}
+	if got.LastAddressedIssueCommentID != "301" {
+		t.Errorf("expected LastAddressedIssueCommentID %q, got %q", "301", got.LastAddressedIssueCommentID)
+	}
+}
+
+func TestListIssues_FeedbackCursorColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:                  p.ID,
+		Title:                      "Cursor issue",
+		State:                      "addressing_feedback",
+		LastAddressedCommentID:     "50",
+		LastAddressedReviewID:      "60",
+		LastAddressedIssueCommentID: "70",
+	})
+
+	issues, err := d.ListIssues(IssueFilter{ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(issues))
+	}
+	if issues[0].LastAddressedCommentID != "50" {
+		t.Errorf("expected LastAddressedCommentID %q, got %q", "50", issues[0].LastAddressedCommentID)
+	}
+	if issues[0].LastAddressedReviewID != "60" {
+		t.Errorf("expected LastAddressedReviewID %q, got %q", "60", issues[0].LastAddressedReviewID)
+	}
+	if issues[0].LastAddressedIssueCommentID != "70" {
+		t.Errorf("expected LastAddressedIssueCommentID %q, got %q", "70", issues[0].LastAddressedIssueCommentID)
+	}
+}
+
+func TestGetIssueByLinearID_FeedbackCursorColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:                  p.ID,
+		LinearIssueID:              "lin-cursor-1",
+		Title:                      "Cursor by linear ID",
+		State:                      "addressing_feedback",
+		LastAddressedCommentID:     "80",
+		LastAddressedReviewID:      "90",
+		LastAddressedIssueCommentID: "100",
+	})
+
+	got, err := d.GetIssueByLinearID("lin-cursor-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.LastAddressedCommentID != "80" {
+		t.Errorf("expected LastAddressedCommentID %q, got %q", "80", got.LastAddressedCommentID)
+	}
+	if got.LastAddressedReviewID != "90" {
+		t.Errorf("expected LastAddressedReviewID %q, got %q", "90", got.LastAddressedReviewID)
+	}
+	if got.LastAddressedIssueCommentID != "100" {
+		t.Errorf("expected LastAddressedIssueCommentID %q, got %q", "100", got.LastAddressedIssueCommentID)
+	}
+}
+
+func TestGetIssueByLinearIDAndProject_FeedbackCursorColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:                  p.ID,
+		LinearIssueID:              "lin-cursor-2",
+		Title:                      "Cursor by linear ID and project",
+		State:                      "addressing_feedback",
+		LastAddressedCommentID:     "110",
+		LastAddressedReviewID:      "120",
+		LastAddressedIssueCommentID: "130",
+	})
+
+	got, err := d.GetIssueByLinearIDAndProject("lin-cursor-2", p.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.LastAddressedCommentID != "110" {
+		t.Errorf("expected LastAddressedCommentID %q, got %q", "110", got.LastAddressedCommentID)
+	}
+	if got.LastAddressedReviewID != "120" {
+		t.Errorf("expected LastAddressedReviewID %q, got %q", "120", got.LastAddressedReviewID)
+	}
+	if got.LastAddressedIssueCommentID != "130" {
+		t.Errorf("expected LastAddressedIssueCommentID %q, got %q", "130", got.LastAddressedIssueCommentID)
+	}
+}
+
+func TestTxUpdateIssue_FeedbackCursorColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Tx cursor fields",
+		State:     "addressing_feedback",
+	})
+
+	err := d.Tx(func(tx *Tx) error {
+		issue.LastAddressedCommentID = "150"
+		issue.LastAddressedReviewID = "160"
+		issue.LastAddressedIssueCommentID = "170"
+		return tx.UpdateIssue(issue)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.LastAddressedCommentID != "150" {
+		t.Errorf("expected LastAddressedCommentID %q, got %q", "150", got.LastAddressedCommentID)
+	}
+	if got.LastAddressedReviewID != "160" {
+		t.Errorf("expected LastAddressedReviewID %q, got %q", "160", got.LastAddressedReviewID)
+	}
+	if got.LastAddressedIssueCommentID != "170" {
+		t.Errorf("expected LastAddressedIssueCommentID %q, got %q", "170", got.LastAddressedIssueCommentID)
+	}
+}
+
+func TestTxGetIssue_FeedbackCursorColumns(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID:                  p.ID,
+		Title:                      "Tx get cursor fields",
+		State:                      "addressing_feedback",
+		LastAddressedCommentID:     "180",
+		LastAddressedReviewID:      "190",
+		LastAddressedIssueCommentID: "200",
+	})
+
+	err := d.Tx(func(tx *Tx) error {
+		got, err := tx.GetIssue(issue.ID)
+		if err != nil {
+			return err
+		}
+		if got.LastAddressedCommentID != "180" {
+			t.Errorf("expected LastAddressedCommentID %q, got %q", "180", got.LastAddressedCommentID)
+		}
+		if got.LastAddressedReviewID != "190" {
+			t.Errorf("expected LastAddressedReviewID %q, got %q", "190", got.LastAddressedReviewID)
+		}
+		if got.LastAddressedIssueCommentID != "200" {
+			t.Errorf("expected LastAddressedIssueCommentID %q, got %q", "200", got.LastAddressedIssueCommentID)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

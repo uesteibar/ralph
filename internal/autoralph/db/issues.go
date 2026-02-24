@@ -27,14 +27,17 @@ func (db *DB) CreateIssue(issue Issue) (Issue, error) {
 		INSERT INTO issues (id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
 			error_message, last_comment_id, last_review_id,
-			last_check_sha, check_fix_attempts, input_tokens, output_tokens,
+			last_check_sha, check_fix_attempts,
+			last_addressed_comment_id, last_addressed_review_id, last_addressed_issue_comment_id,
+			input_tokens, output_tokens,
 			created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		issue.ID, issue.ProjectID, issue.LinearIssueID, issue.Identifier,
 		issue.Title, issue.Description, issue.State, issue.PlanText,
 		issue.WorkspaceName, issue.BranchName, issue.PRNumber, issue.PRURL,
 		issue.ErrorMessage, issue.LastCommentID, issue.LastReviewID,
 		issue.LastCheckSHA, issue.CheckFixAttempts,
+		issue.LastAddressedCommentID, issue.LastAddressedReviewID, issue.LastAddressedIssueCommentID,
 		issue.InputTokens, issue.OutputTokens,
 		issue.CreatedAt.Format(time.RFC3339), issue.UpdatedAt.Format(time.RFC3339),
 	)
@@ -49,7 +52,9 @@ func (db *DB) ListIssues(filter IssueFilter) ([]Issue, error) {
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
 			error_message, last_comment_id, last_review_id,
-			last_check_sha, check_fix_attempts, input_tokens, output_tokens,
+			last_check_sha, check_fix_attempts,
+			last_addressed_comment_id, last_addressed_review_id, last_addressed_issue_comment_id,
+			input_tokens, output_tokens,
 			created_at, updated_at
 		FROM issues`
 
@@ -102,7 +107,9 @@ func (db *DB) GetIssueByLinearID(linearIssueID string) (Issue, error) {
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
 			error_message, last_comment_id, last_review_id,
-			last_check_sha, check_fix_attempts, input_tokens, output_tokens,
+			last_check_sha, check_fix_attempts,
+			last_addressed_comment_id, last_addressed_review_id, last_addressed_issue_comment_id,
+			input_tokens, output_tokens,
 			created_at, updated_at
 		FROM issues WHERE linear_issue_id = ?`, linearIssueID)
 
@@ -123,7 +130,9 @@ func (db *DB) GetIssueByLinearIDAndProject(linearIssueID, projectID string) (Iss
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
 			error_message, last_comment_id, last_review_id,
-			last_check_sha, check_fix_attempts, input_tokens, output_tokens,
+			last_check_sha, check_fix_attempts,
+			last_addressed_comment_id, last_addressed_review_id, last_addressed_issue_comment_id,
+			input_tokens, output_tokens,
 			created_at, updated_at
 		FROM issues WHERE linear_issue_id = ? AND project_id = ?`, linearIssueID, projectID)
 
@@ -142,7 +151,9 @@ func (db *DB) GetIssue(id string) (Issue, error) {
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
 			error_message, last_comment_id, last_review_id,
-			last_check_sha, check_fix_attempts, input_tokens, output_tokens,
+			last_check_sha, check_fix_attempts,
+			last_addressed_comment_id, last_addressed_review_id, last_addressed_issue_comment_id,
+			input_tokens, output_tokens,
 			created_at, updated_at
 		FROM issues WHERE id = ?`, id)
 
@@ -164,6 +175,7 @@ func (db *DB) UpdateIssue(issue Issue) error {
 			workspace_name = ?, branch_name = ?, pr_number = ?, pr_url = ?,
 			error_message = ?, last_comment_id = ?, last_review_id = ?,
 			last_check_sha = ?, check_fix_attempts = ?,
+			last_addressed_comment_id = ?, last_addressed_review_id = ?, last_addressed_issue_comment_id = ?,
 			input_tokens = ?, output_tokens = ?, updated_at = ?
 		WHERE id = ?`,
 		issue.ProjectID, issue.LinearIssueID, issue.Identifier,
@@ -171,6 +183,7 @@ func (db *DB) UpdateIssue(issue Issue) error {
 		issue.WorkspaceName, issue.BranchName, issue.PRNumber, issue.PRURL,
 		issue.ErrorMessage, issue.LastCommentID, issue.LastReviewID,
 		issue.LastCheckSHA, issue.CheckFixAttempts,
+		issue.LastAddressedCommentID, issue.LastAddressedReviewID, issue.LastAddressedIssueCommentID,
 		issue.InputTokens, issue.OutputTokens,
 		issue.UpdatedAt.Format(time.RFC3339), issue.ID,
 	)
@@ -192,6 +205,7 @@ func (tx *Tx) UpdateIssue(issue Issue) error {
 			workspace_name = ?, branch_name = ?, pr_number = ?, pr_url = ?,
 			error_message = ?, last_comment_id = ?, last_review_id = ?,
 			last_check_sha = ?, check_fix_attempts = ?,
+			last_addressed_comment_id = ?, last_addressed_review_id = ?, last_addressed_issue_comment_id = ?,
 			input_tokens = ?, output_tokens = ?, updated_at = ?
 		WHERE id = ?`,
 		issue.ProjectID, issue.LinearIssueID, issue.Identifier,
@@ -199,6 +213,7 @@ func (tx *Tx) UpdateIssue(issue Issue) error {
 		issue.WorkspaceName, issue.BranchName, issue.PRNumber, issue.PRURL,
 		issue.ErrorMessage, issue.LastCommentID, issue.LastReviewID,
 		issue.LastCheckSHA, issue.CheckFixAttempts,
+		issue.LastAddressedCommentID, issue.LastAddressedReviewID, issue.LastAddressedIssueCommentID,
 		issue.InputTokens, issue.OutputTokens,
 		issue.UpdatedAt.Format(time.RFC3339), issue.ID,
 	)
@@ -219,7 +234,9 @@ func (tx *Tx) GetIssue(id string) (Issue, error) {
 		SELECT id, project_id, linear_issue_id, identifier, title, description,
 			state, plan_text, workspace_name, branch_name, pr_number, pr_url,
 			error_message, last_comment_id, last_review_id,
-			last_check_sha, check_fix_attempts, input_tokens, output_tokens,
+			last_check_sha, check_fix_attempts,
+			last_addressed_comment_id, last_addressed_review_id, last_addressed_issue_comment_id,
+			input_tokens, output_tokens,
 			created_at, updated_at
 		FROM issues WHERE id = ?`, id)
 
@@ -270,6 +287,7 @@ func scanIssue(rows *sql.Rows) (Issue, error) {
 		&issue.PRNumber, &issue.PRURL, &issue.ErrorMessage,
 		&issue.LastCommentID, &issue.LastReviewID,
 		&issue.LastCheckSHA, &issue.CheckFixAttempts,
+		&issue.LastAddressedCommentID, &issue.LastAddressedReviewID, &issue.LastAddressedIssueCommentID,
 		&issue.InputTokens, &issue.OutputTokens,
 		&createdAt, &updatedAt)
 	if err != nil {
@@ -289,6 +307,7 @@ func scanIssueRow(row *sql.Row) (Issue, error) {
 		&issue.PRNumber, &issue.PRURL, &issue.ErrorMessage,
 		&issue.LastCommentID, &issue.LastReviewID,
 		&issue.LastCheckSHA, &issue.CheckFixAttempts,
+		&issue.LastAddressedCommentID, &issue.LastAddressedReviewID, &issue.LastAddressedIssueCommentID,
 		&issue.InputTokens, &issue.OutputTokens,
 		&createdAt, &updatedAt)
 	if err != nil {

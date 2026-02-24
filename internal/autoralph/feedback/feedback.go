@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
@@ -179,8 +180,13 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			qualityChecks = ralphCfg.QualityChecks
 		}
 
-		// Gather feedback from all sources (line comments, review bodies, issue comments).
-		items, err := gatherFeedback(ctx, cfg, project.GithubOwner, project.GithubRepo, issue.PRNumber)
+		// Gather feedback from all sources, filtering out already-addressed items.
+		cursors := feedbackCursors{
+			commentID:      issue.LastAddressedCommentID,
+			reviewID:       issue.LastAddressedReviewID,
+			issueCommentID: issue.LastAddressedIssueCommentID,
+		}
+		items, err := gatherFeedback(ctx, cfg, project.GithubOwner, project.GithubRepo, issue.PRNumber, cursors)
 		if err != nil {
 			return err
 		}
@@ -286,6 +292,23 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return err
 		}
 
+		// Update cursor fields to the max IDs from each source so the next
+		// feedback cycle skips these items. This happens only after successful
+		// reply posting — if the action failed above, cursors are not updated.
+		maxComment, maxReview, maxIssueComment := maxIDsBySource(items)
+		if maxComment > 0 {
+			issue.LastAddressedCommentID = strconv.FormatInt(maxComment, 10)
+		}
+		if maxReview > 0 {
+			issue.LastAddressedReviewID = strconv.FormatInt(maxReview, 10)
+		}
+		if maxIssueComment > 0 {
+			issue.LastAddressedIssueCommentID = strconv.FormatInt(maxIssueComment, 10)
+		}
+		if err := database.UpdateIssue(issue); err != nil {
+			return fmt.Errorf("updating feedback cursors: %w", err)
+		}
+
 		detail := fmt.Sprintf("Addressed %d comments", len(items))
 		if replyRef != "" {
 			detail += " in " + replyRef
@@ -298,17 +321,35 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	}
 }
 
+// feedbackCursors holds the last-addressed ID for each feedback source.
+// Empty strings mean "no cursor" (first run), so all items pass.
+type feedbackCursors struct {
+	commentID      string // line-specific review comments
+	reviewID       string // review submission bodies
+	issueCommentID string // general PR/issue comments
+}
+
 // gatherFeedback collects feedback from all configured sources into a
-// normalized list of feedbackItems.
-func gatherFeedback(ctx context.Context, cfg Config, owner, repo string, prNumber int) ([]feedbackItem, error) {
+// normalized list of feedbackItems, filtering out items already addressed
+// (IDs at or below the corresponding cursor value).
+func gatherFeedback(ctx context.Context, cfg Config, owner, repo string, prNumber int, cursors feedbackCursors) ([]feedbackItem, error) {
 	var items []feedbackItem
+
+	commentCursor := parseCursor(cursors.commentID)
+	reviewCursor := parseCursor(cursors.reviewID)
+	issueCommentCursor := parseCursor(cursors.issueCommentID)
 
 	// 1. Line-specific review comments (grouped with reply threads).
 	comments, err := cfg.Comments.FetchPRComments(ctx, owner, repo, prNumber)
 	if err != nil {
 		return nil, fmt.Errorf("fetching PR comments: %w", err)
 	}
-	items = append(items, groupThreads(comments)...)
+	for _, item := range groupThreads(comments) {
+		if commentCursor > 0 && item.id <= commentCursor {
+			continue
+		}
+		items = append(items, item)
+	}
 
 	// 2. Review submission bodies (optional).
 	if cfg.Reviews != nil {
@@ -321,6 +362,9 @@ func gatherFeedback(ctx context.Context, cfg Config, owner, repo string, prNumbe
 				continue
 			}
 			if r.State != "CHANGES_REQUESTED" && r.State != "COMMENTED" {
+				continue
+			}
+			if reviewCursor > 0 && r.ID <= reviewCursor {
 				continue
 			}
 			items = append(items, feedbackItem{
@@ -342,6 +386,9 @@ func gatherFeedback(ctx context.Context, cfg Config, owner, repo string, prNumbe
 			if isBot(c.User) {
 				continue
 			}
+			if issueCommentCursor > 0 && c.ID <= issueCommentCursor {
+				continue
+			}
 			items = append(items, feedbackItem{
 				id:     c.ID,
 				author: c.User,
@@ -352,6 +399,41 @@ func gatherFeedback(ctx context.Context, cfg Config, owner, repo string, prNumbe
 	}
 
 	return items, nil
+}
+
+// parseCursor parses a cursor string to int64. Returns 0 if empty or invalid,
+// which means "no cursor" — all items pass the filter.
+func parseCursor(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// maxIDsBySource returns the maximum ID for each feedback source among the
+// given items. A return value of 0 means no items from that source.
+func maxIDsBySource(items []feedbackItem) (comment, review, issueComment int64) {
+	for _, item := range items {
+		switch item.source {
+		case sourceLineComment:
+			if item.id > comment {
+				comment = item.id
+			}
+		case sourceReviewBody:
+			if item.id > review {
+				review = item.id
+			}
+		case sourceIssueComment:
+			if item.id > issueComment {
+				issueComment = item.id
+			}
+		}
+	}
+	return
 }
 
 // reactToFeedback adds 👀 reactions to feedback items before AI invocation.

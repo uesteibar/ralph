@@ -2615,3 +2615,612 @@ func TestNewAction_Hooks_PreCommitAutoCommitDoesNotBlockMainCommit(t *testing.T)
 		t.Fatalf("expected 1 push call, got %d", len(git.pushCalls))
 	}
 }
+
+// --- Cursor filtering unit tests ---
+
+func TestGatherFeedback_EmptyCursors_AllItemsGathered(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &mockCommentFetcher{
+		comments: []github.Comment{
+			{ID: 100, Path: "main.go", Body: "Fix this", User: "reviewer"},
+			{ID: 101, Path: "utils.go", Body: "Add tests", User: "reviewer"},
+		},
+	}
+	reviewFetcher := &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 200, State: "COMMENTED", Body: "Overall looks good", User: "reviewer"},
+		},
+	}
+	issueCommentFetcher := &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 300, Body: "CI is broken", User: "tester"},
+		},
+	}
+
+	cfg := Config{
+		Comments:      fetcher,
+		Reviews:       reviewFetcher,
+		IssueComments: issueCommentFetcher,
+	}
+	cursors := feedbackCursors{} // empty = first run
+
+	items, err := gatherFeedback(ctx, cfg, "owner", "repo", 1, cursors)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 4 {
+		t.Fatalf("expected 4 items on first run (empty cursors), got %d", len(items))
+	}
+}
+
+func TestGatherFeedback_WithCursors_FiltersOldItems(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &mockCommentFetcher{
+		comments: []github.Comment{
+			{ID: 100, Path: "main.go", Body: "Old comment", User: "reviewer"},
+			{ID: 101, Path: "main.go", Body: "Old comment 2", User: "reviewer"},
+			{ID: 102, Path: "utils.go", Body: "New comment", User: "reviewer"},
+		},
+	}
+	reviewFetcher := &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 200, State: "COMMENTED", Body: "Old review", User: "reviewer"},
+			{ID: 201, State: "CHANGES_REQUESTED", Body: "New review", User: "reviewer"},
+		},
+	}
+	issueCommentFetcher := &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 300, Body: "Old issue comment", User: "tester"},
+			{ID: 301, Body: "New issue comment", User: "tester"},
+		},
+	}
+
+	cfg := Config{
+		Comments:      fetcher,
+		Reviews:       reviewFetcher,
+		IssueComments: issueCommentFetcher,
+	}
+	cursors := feedbackCursors{
+		commentID:      "101",
+		reviewID:       "200",
+		issueCommentID: "300",
+	}
+
+	items, err := gatherFeedback(ctx, cfg, "owner", "repo", 1, cursors)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 new items after filtering, got %d", len(items))
+	}
+
+	// Verify only new items remain.
+	for _, item := range items {
+		switch item.source {
+		case sourceLineComment:
+			if item.id != 102 {
+				t.Errorf("expected only line comment 102, got %d", item.id)
+			}
+		case sourceReviewBody:
+			if item.id != 201 {
+				t.Errorf("expected only review 201, got %d", item.id)
+			}
+		case sourceIssueComment:
+			if item.id != 301 {
+				t.Errorf("expected only issue comment 301, got %d", item.id)
+			}
+		}
+	}
+}
+
+func TestGatherFeedback_AllFilteredOut_ReturnsEmpty(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &mockCommentFetcher{
+		comments: []github.Comment{
+			{ID: 100, Path: "main.go", Body: "Old comment", User: "reviewer"},
+		},
+	}
+	reviewFetcher := &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 200, State: "COMMENTED", Body: "Old review", User: "reviewer"},
+		},
+	}
+
+	cfg := Config{
+		Comments: fetcher,
+		Reviews:  reviewFetcher,
+	}
+	cursors := feedbackCursors{
+		commentID: "100",
+		reviewID:  "200",
+	}
+
+	items, err := gatherFeedback(ctx, cfg, "owner", "repo", 1, cursors)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items when all filtered, got %d", len(items))
+	}
+}
+
+// --- maxIDsBySource unit tests ---
+
+func TestMaxIDsBySource_MixedSources(t *testing.T) {
+	items := []feedbackItem{
+		{id: 100, source: sourceLineComment},
+		{id: 105, source: sourceLineComment},
+		{id: 200, source: sourceReviewBody},
+		{id: 300, source: sourceIssueComment},
+		{id: 310, source: sourceIssueComment},
+	}
+	comment, review, issueComment := maxIDsBySource(items)
+	if comment != 105 {
+		t.Errorf("expected max comment ID 105, got %d", comment)
+	}
+	if review != 200 {
+		t.Errorf("expected max review ID 200, got %d", review)
+	}
+	if issueComment != 310 {
+		t.Errorf("expected max issue comment ID 310, got %d", issueComment)
+	}
+}
+
+func TestMaxIDsBySource_EmptyItems(t *testing.T) {
+	comment, review, issueComment := maxIDsBySource(nil)
+	if comment != 0 || review != 0 || issueComment != 0 {
+		t.Errorf("expected all zeros for empty items, got %d, %d, %d", comment, review, issueComment)
+	}
+}
+
+func TestMaxIDsBySource_SingleSource(t *testing.T) {
+	items := []feedbackItem{
+		{id: 50, source: sourceLineComment},
+		{id: 60, source: sourceLineComment},
+	}
+	comment, review, issueComment := maxIDsBySource(items)
+	if comment != 60 {
+		t.Errorf("expected max comment ID 60, got %d", comment)
+	}
+	if review != 0 {
+		t.Errorf("expected max review ID 0 (no reviews), got %d", review)
+	}
+	if issueComment != 0 {
+		t.Errorf("expected max issue comment ID 0 (no issue comments), got %d", issueComment)
+	}
+}
+
+// --- NewAction cursor update tests ---
+
+func TestNewAction_UpdatesCursorsAfterSuccessfulReply(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, fetcher, _, _ := defaultMocks(project)
+
+	fetcher.comments = []github.Comment{
+		{ID: 100, Path: "main.go", Body: "Fix this", User: "reviewer"},
+		{ID: 101, Path: "utils.go", Body: "Add tests", User: "reviewer"},
+	}
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 200, State: "COMMENTED", Body: "Review body", User: "reviewer"},
+		},
+	}
+	cfg.IssueComments = &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 300, Body: "Issue comment", User: "tester"},
+		},
+	}
+	cfg.PRCommenter = &mockPRCommenter{}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Re-read the issue from the database to verify cursor persistence.
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting updated issue: %v", err)
+	}
+	if updated.LastAddressedCommentID != "101" {
+		t.Errorf("expected LastAddressedCommentID '101', got %q", updated.LastAddressedCommentID)
+	}
+	if updated.LastAddressedReviewID != "200" {
+		t.Errorf("expected LastAddressedReviewID '200', got %q", updated.LastAddressedReviewID)
+	}
+	if updated.LastAddressedIssueCommentID != "300" {
+		t.Errorf("expected LastAddressedIssueCommentID '300', got %q", updated.LastAddressedIssueCommentID)
+	}
+}
+
+func TestNewAction_CursorsNotUpdatedOnReplyError(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, _, _, replier, _ := defaultMocks(project)
+	replier.err = errors.New("github 403")
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err == nil {
+		t.Fatal("expected error from reply failure")
+	}
+
+	// Re-read the issue — cursors should remain empty.
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting updated issue: %v", err)
+	}
+	if updated.LastAddressedCommentID != "" {
+		t.Errorf("expected empty LastAddressedCommentID after failure, got %q", updated.LastAddressedCommentID)
+	}
+	if updated.LastAddressedReviewID != "" {
+		t.Errorf("expected empty LastAddressedReviewID after failure, got %q", updated.LastAddressedReviewID)
+	}
+	if updated.LastAddressedIssueCommentID != "" {
+		t.Errorf("expected empty LastAddressedIssueCommentID after failure, got %q", updated.LastAddressedIssueCommentID)
+	}
+}
+
+func TestNewAction_NoNewFeedback_ShortCircuitsWithoutAI(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+
+	// Create an issue with cursors already set to the max IDs.
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:                   project.ID,
+		LinearIssueID:               "lin-456",
+		Identifier:                  "PROJ-99",
+		Title:                       "Feature with cursors",
+		Description:                 "Already addressed feedback.",
+		State:                       "addressing_feedback",
+		WorkspaceName:               "proj-99",
+		BranchName:                  "autoralph/proj-99",
+		PRNumber:                    20,
+		PRURL:                       "https://github.com/owner/repo/pull/20",
+		LastAddressedCommentID:      "101",
+		LastAddressedReviewID:       "200",
+		LastAddressedIssueCommentID: "300",
+	})
+	if err != nil {
+		t.Fatalf("creating issue: %v", err)
+	}
+
+	cfg, inv, fetcher, replier, git := defaultMocks(project)
+
+	// Return old items that should all be filtered.
+	fetcher.comments = []github.Comment{
+		{ID: 100, Path: "main.go", Body: "Old comment", User: "reviewer"},
+		{ID: 101, Path: "utils.go", Body: "Old comment 2", User: "reviewer"},
+	}
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 200, State: "COMMENTED", Body: "Old review", User: "reviewer"},
+		},
+	}
+	cfg.IssueComments = &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 300, Body: "Old issue comment", User: "tester"},
+		},
+	}
+
+	action := NewAction(cfg)
+	err = action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// AI should NOT be invoked.
+	if inv.lastPrompt != "" {
+		t.Error("expected AI not to be invoked when all feedback is filtered")
+	}
+	// No git operations.
+	if len(git.commitCalls) != 0 {
+		t.Errorf("expected 0 commit calls, got %d", len(git.commitCalls))
+	}
+	if len(git.pushCalls) != 0 {
+		t.Errorf("expected 0 push calls, got %d", len(git.pushCalls))
+	}
+	// No replies posted.
+	if len(replier.calls) != 0 {
+		t.Errorf("expected 0 reply calls, got %d", len(replier.calls))
+	}
+}
+
+// --- Integration test IT-001: second feedback cycle only addresses new comments ---
+
+func TestIntegration_SecondFeedbackCycle_OnlyNewItems(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	// Issue starts with empty cursor fields (default).
+
+	commentFetcher := &mockCommentFetcher{
+		comments: []github.Comment{
+			{ID: 100, Path: "main.go", Body: "Fix error handling", User: "reviewer"},
+			{ID: 101, Path: "utils.go", Body: "Add validation", User: "reviewer"},
+		},
+	}
+	reviewFetcher := &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 200, State: "CHANGES_REQUESTED", Body: "Please refactor", User: "reviewer"},
+		},
+	}
+	inv := &mockInvoker{response: "AI addressed all feedback"}
+	replier := &mockReviewReplier{}
+	prCommenter := &mockPRCommenter{}
+	git := &mockGitOps{headSHA: "abc1234"}
+
+	cfg := Config{
+		Invoker:       inv,
+		Comments:      commentFetcher,
+		Reviews:       reviewFetcher,
+		Replier:       replier,
+		PRCommenter:   prCommenter,
+		Git:           git,
+		BranchPuller:  &mockBranchPuller{},
+		Projects:      &mockProjectGetter{project: project},
+	}
+
+	// --- First feedback cycle ---
+	action := NewAction(cfg)
+	if err := action(issue, d); err != nil {
+		t.Fatalf("first cycle: unexpected error: %v", err)
+	}
+
+	// AI invoked with all 3 items.
+	if !strings.Contains(inv.lastPrompt, "Fix error handling") {
+		t.Error("first cycle: expected prompt to contain line comment body")
+	}
+	if !strings.Contains(inv.lastPrompt, "Please refactor") {
+		t.Error("first cycle: expected prompt to contain review body")
+	}
+
+	// 2 inline replies + 1 PR comment.
+	if len(replier.calls) != 2 {
+		t.Fatalf("first cycle: expected 2 review reply calls, got %d", len(replier.calls))
+	}
+	if len(prCommenter.calls) != 1 {
+		t.Fatalf("first cycle: expected 1 PR comment call, got %d", len(prCommenter.calls))
+	}
+
+	// Verify cursors updated.
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting updated issue: %v", err)
+	}
+	if updated.LastAddressedCommentID != "101" {
+		t.Errorf("first cycle: expected LastAddressedCommentID '101', got %q", updated.LastAddressedCommentID)
+	}
+	if updated.LastAddressedReviewID != "200" {
+		t.Errorf("first cycle: expected LastAddressedReviewID '200', got %q", updated.LastAddressedReviewID)
+	}
+	if updated.LastAddressedIssueCommentID != "" {
+		t.Errorf("first cycle: expected empty LastAddressedIssueCommentID (none fetched), got %q", updated.LastAddressedIssueCommentID)
+	}
+
+	// --- Second feedback cycle ---
+	// Add new items to mocks (keep old items present too).
+	commentFetcher.comments = []github.Comment{
+		{ID: 100, Path: "main.go", Body: "Fix error handling", User: "reviewer"},
+		{ID: 101, Path: "utils.go", Body: "Add validation", User: "reviewer"},
+		{ID: 102, Path: "api.go", Body: "New comment on API", User: "reviewer"},
+	}
+	reviewFetcher.reviews = []github.Review{
+		{ID: 200, State: "CHANGES_REQUESTED", Body: "Please refactor", User: "reviewer"},
+		{ID: 201, State: "COMMENTED", Body: "New review feedback", User: "reviewer"},
+	}
+
+	// Reset mocks for second cycle.
+	inv.lastPrompt = ""
+	replier.calls = nil
+	prCommenter.calls = nil
+	git.commitCalls = nil
+	git.pushCalls = nil
+
+	action2 := NewAction(cfg)
+	if err := action2(updated, d); err != nil {
+		t.Fatalf("second cycle: unexpected error: %v", err)
+	}
+
+	// AI invoked with only 2 new items.
+	if !strings.Contains(inv.lastPrompt, "New comment on API") {
+		t.Error("second cycle: expected prompt to contain new line comment")
+	}
+	if !strings.Contains(inv.lastPrompt, "New review feedback") {
+		t.Error("second cycle: expected prompt to contain new review body")
+	}
+	// Old items should NOT be in the prompt.
+	if strings.Contains(inv.lastPrompt, "Fix error handling") {
+		t.Error("second cycle: old line comment should be filtered out")
+	}
+	if strings.Contains(inv.lastPrompt, "Please refactor") {
+		t.Error("second cycle: old review body should be filtered out")
+	}
+
+	// 1 inline reply (comment 102) + 1 PR comment (review 201).
+	if len(replier.calls) != 1 {
+		t.Fatalf("second cycle: expected 1 review reply call, got %d", len(replier.calls))
+	}
+	if replier.calls[0].commentID != 102 {
+		t.Errorf("second cycle: expected reply to comment 102, got %d", replier.calls[0].commentID)
+	}
+	if len(prCommenter.calls) != 1 {
+		t.Fatalf("second cycle: expected 1 PR comment call, got %d", len(prCommenter.calls))
+	}
+
+	// Verify updated cursors.
+	final, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting final issue: %v", err)
+	}
+	if final.LastAddressedCommentID != "102" {
+		t.Errorf("second cycle: expected LastAddressedCommentID '102', got %q", final.LastAddressedCommentID)
+	}
+	if final.LastAddressedReviewID != "201" {
+		t.Errorf("second cycle: expected LastAddressedReviewID '201', got %q", final.LastAddressedReviewID)
+	}
+}
+
+// --- Integration test IT-002: legacy issues with empty cursors gather all feedback ---
+
+func TestIntegration_LegacyIssue_EmptyCursors_AllFeedbackGathered(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project) // default empty cursors
+
+	commentFetcher := &mockCommentFetcher{
+		comments: []github.Comment{
+			{ID: 50, Path: "main.go", Body: "Comment 50", User: "reviewer"},
+			{ID: 60, Path: "utils.go", Body: "Comment 60", User: "reviewer"},
+		},
+	}
+	reviewFetcher := &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 70, State: "COMMENTED", Body: "Review 70", User: "reviewer"},
+		},
+	}
+	issueCommentFetcher := &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 80, Body: "Issue comment 80", User: "tester"},
+		},
+	}
+	inv := &mockInvoker{response: "Addressed"}
+	replier := &mockReviewReplier{}
+	prCommenter := &mockPRCommenter{}
+	git := &mockGitOps{headSHA: "def5678"}
+
+	cfg := Config{
+		Invoker:       inv,
+		Comments:      commentFetcher,
+		Reviews:       reviewFetcher,
+		IssueComments: issueCommentFetcher,
+		Replier:       replier,
+		PRCommenter:   prCommenter,
+		Git:           git,
+		BranchPuller:  &mockBranchPuller{},
+		Projects:      &mockProjectGetter{project: project},
+	}
+
+	action := NewAction(cfg)
+	if err := action(issue, d); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// All 4 items should be gathered and passed to AI.
+	if !strings.Contains(inv.lastPrompt, "Comment 50") {
+		t.Error("expected prompt to contain comment 50")
+	}
+	if !strings.Contains(inv.lastPrompt, "Comment 60") {
+		t.Error("expected prompt to contain comment 60")
+	}
+	if !strings.Contains(inv.lastPrompt, "Review 70") {
+		t.Error("expected prompt to contain review 70")
+	}
+	if !strings.Contains(inv.lastPrompt, "Issue comment 80") {
+		t.Error("expected prompt to contain issue comment 80")
+	}
+
+	// 2 inline replies + 1 consolidated PR comment (review + issue comment).
+	if len(replier.calls) != 2 {
+		t.Fatalf("expected 2 review reply calls, got %d", len(replier.calls))
+	}
+	if len(prCommenter.calls) != 1 {
+		t.Fatalf("expected 1 PR comment call, got %d", len(prCommenter.calls))
+	}
+
+	// Verify cursor updates.
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting updated issue: %v", err)
+	}
+	if updated.LastAddressedCommentID != "60" {
+		t.Errorf("expected LastAddressedCommentID '60', got %q", updated.LastAddressedCommentID)
+	}
+	if updated.LastAddressedReviewID != "70" {
+		t.Errorf("expected LastAddressedReviewID '70', got %q", updated.LastAddressedReviewID)
+	}
+	if updated.LastAddressedIssueCommentID != "80" {
+		t.Errorf("expected LastAddressedIssueCommentID '80', got %q", updated.LastAddressedIssueCommentID)
+	}
+}
+
+// --- Integration test IT-003: no new feedback short-circuits without AI ---
+
+func TestIntegration_NoNewFeedback_ShortCircuits(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+
+	// Issue with cursors set to max IDs of existing feedback.
+	issue, err := d.CreateIssue(db.Issue{
+		ProjectID:                   project.ID,
+		LinearIssueID:               "lin-789",
+		Identifier:                  "PROJ-55",
+		Title:                       "Fully addressed",
+		Description:                 "All feedback already addressed.",
+		State:                       "addressing_feedback",
+		WorkspaceName:               "proj-55",
+		BranchName:                  "autoralph/proj-55",
+		PRNumber:                    30,
+		PRURL:                       "https://github.com/owner/repo/pull/30",
+		LastAddressedCommentID:      "101",
+		LastAddressedReviewID:       "200",
+		LastAddressedIssueCommentID: "300",
+	})
+	if err != nil {
+		t.Fatalf("creating issue: %v", err)
+	}
+
+	commentFetcher := &mockCommentFetcher{
+		comments: []github.Comment{
+			{ID: 100, Path: "main.go", Body: "Old", User: "reviewer"},
+			{ID: 101, Path: "utils.go", Body: "Old 2", User: "reviewer"},
+		},
+	}
+	reviewFetcher := &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 200, State: "COMMENTED", Body: "Old review", User: "reviewer"},
+		},
+	}
+	issueCommentFetcher := &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 300, Body: "Old issue comment", User: "tester"},
+		},
+	}
+	inv := &mockInvoker{response: "Should not be called"}
+	replier := &mockReviewReplier{}
+	git := &mockGitOps{}
+
+	cfg := Config{
+		Invoker:       inv,
+		Comments:      commentFetcher,
+		Reviews:       reviewFetcher,
+		IssueComments: issueCommentFetcher,
+		Replier:       replier,
+		Git:           git,
+		BranchPuller:  &mockBranchPuller{},
+		Projects:      &mockProjectGetter{project: project},
+	}
+
+	action := NewAction(cfg)
+	err = action(issue, d)
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+
+	// AI should NOT be called.
+	if inv.lastPrompt != "" {
+		t.Error("expected AI not to be invoked")
+	}
+	// No replies posted.
+	if len(replier.calls) != 0 {
+		t.Errorf("expected 0 reply calls, got %d", len(replier.calls))
+	}
+	// No git operations.
+	if len(git.commitCalls) != 0 {
+		t.Errorf("expected 0 commit calls, got %d", len(git.commitCalls))
+	}
+}
