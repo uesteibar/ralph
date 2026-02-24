@@ -71,3 +71,8 @@ ralph done
 4. **`ralph run`** starts the autonomous execution loop. Ralph picks up stories one by one, implements them, runs quality checks, and commits. After all stories pass, a QA phase verifies integration tests.
 
 5. **`ralph done`** squash-merges the workspace branch into your base branch, archives the PRD, and cleans up the workspace.
+
+> **Advanced:** If you want to create a workspace without the interactive PRD
+> session (e.g., to write the PRD manually or import one), use
+> `ralph workspaces new <name>` instead of `ralph new`. This creates the
+> workspace only, without launching PRD creation.

@@ -103,7 +103,7 @@ ralph rebase [branch] [--project-config path] [--workspace name]
 
 ## `new`
 
-Create a new workspace (alias for `ralph workspaces new`)
+Create a new workspace and launch an interactive PRD creation session (via shell integration). Use `ralph workspaces new` if you only need the workspace without PRD creation.
 
 ```
 ralph new <name> [--project-config path]
@@ -243,11 +243,15 @@ ralph workspaces <subcommand> [args...]
 
 | Subcommand | Description |
 |------------|-------------|
-| `new <name>` | Create a new workspace |
+| `new <name>` | Create a new workspace only (without PRD creation) |
 | `list` | List all workspaces |
 | `switch <name>` | Switch to a workspace |
 | `remove <name>` | Remove a workspace |
 | `prune` | Remove all done workspaces |
+
+> **Note:** `ralph workspaces new` creates the workspace without launching PRD
+> creation. Use `ralph new` for the full experience (workspace + interactive PRD
+> session).
 
 ## `check`
 
