@@ -632,12 +632,16 @@ Requires [shell integration](#shell-integration).
 Workspace management subcommands:
 
 ```bash
-ralph workspaces new <name>       # Create a workspace (same as `ralph new`)
+ralph workspaces new <name>       # Create a workspace only (without PRD creation)
 ralph workspaces list             # List all workspaces
 ralph workspaces switch <name>    # Switch to a workspace
 ralph workspaces remove <name>    # Remove a workspace
 ralph workspaces prune            # Remove all completed workspaces
 ```
+
+> **Note:** `ralph workspaces new` creates the workspace without launching PRD
+> creation. Use `ralph new` instead if you want the full experience (workspace +
+> interactive PRD session). See [`ralph new`](#ralph-new).
 
 **`ralph workspaces prune`** identifies workspaces where all stories and
 integration tests pass (or the PRD is missing), prompts for confirmation,

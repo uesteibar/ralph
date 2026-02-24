@@ -43,6 +43,10 @@ Creates a new workspace — an isolated git worktree on a dedicated branch — a
 
 If the branch already exists from a previous attempt, Ralph asks whether to start fresh or resume.
 
+> **Tip:** If you want to create a workspace without launching PRD creation
+> (e.g., to import an existing PRD or skip the AI session), use
+> `ralph workspaces new <name>` instead.
+
 ## Phase 3: Build (`ralph run`)
 
 The core of Ralph. Runs the autonomous execution loop that implements your feature story by story.

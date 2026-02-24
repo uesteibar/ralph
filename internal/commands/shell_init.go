@@ -44,9 +44,6 @@ func shellFunction() string {
                     if [ -n "$__path" ] && [ -d "$__path" ]; then
                         cd "$__path" || return 1
                         export RALPH_WORKSPACE="$3"
-                        if [ ! -f "../prd.json" ]; then
-                            command ralph prd new
-                        fi
                     fi
                     ;;
                 switch)

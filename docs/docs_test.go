@@ -634,6 +634,82 @@ func TestSetup_NoBaseProgressTxt(t *testing.T) {
 	}
 }
 
+func TestReadme_DistinguishesNewFromWorkspacesNew(t *testing.T) {
+	path := filepath.Join(repoRoot(), "README.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("README.md not found: %v", err)
+	}
+	content := string(data)
+
+	newSection := extractReadmeSection(content, "### `ralph new`")
+	if newSection == "" {
+		t.Fatal("README.md missing ### `ralph new` section")
+	}
+	if !strings.Contains(newSection, "PRD") {
+		t.Error("README.md `ralph new` section should mention PRD creation")
+	}
+
+	wsSection := extractReadmeSection(content, "### `ralph workspaces`")
+	if wsSection == "" {
+		t.Fatal("README.md missing ### `ralph workspaces` section")
+	}
+	if !strings.Contains(wsSection, "workspace only") && !strings.Contains(wsSection, "workspace-only") && !strings.Contains(wsSection, "without") {
+		t.Error("README.md `ralph workspaces` section should clarify that `workspaces new` does not launch PRD creation")
+	}
+}
+
+func TestCommands_DistinguishesNewFromWorkspacesNew(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "commands.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("commands.md not found: %v", err)
+	}
+	content := string(data)
+
+	newSection := extractSection(content, "new")
+	if newSection == "" {
+		t.Fatal("commands.md missing `new` section")
+	}
+	if !strings.Contains(newSection, "PRD") {
+		t.Error("commands.md `new` section should mention PRD creation")
+	}
+
+	wsSection := extractSection(content, "workspaces")
+	if wsSection == "" {
+		t.Fatal("commands.md missing `workspaces` section")
+	}
+	if !strings.Contains(wsSection, "workspace only") && !strings.Contains(wsSection, "workspace-only") && !strings.Contains(wsSection, "without") {
+		t.Error("commands.md `workspaces` section should distinguish `new` as workspace-only (no PRD)")
+	}
+}
+
+func TestWorkflow_MentionsWorkspacesNewOption(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "workflow.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("workflow.md not found: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "ralph workspaces new") {
+		t.Error("workflow.md should mention `ralph workspaces new` as an option to skip PRD creation")
+	}
+}
+
+func TestGettingStarted_MentionsWorkspaceOnlyOption(t *testing.T) {
+	path := filepath.Join(docsDir(), "src", "ralph", "getting-started.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("getting-started.md not found: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "ralph workspaces new") {
+		t.Error("getting-started.md should mention `ralph workspaces new` as a workspace-only option")
+	}
+}
+
 func TestReadme_HasDocsLink(t *testing.T) {
 	path := filepath.Join(repoRoot(), "README.md")
 	data, err := os.ReadFile(path)
@@ -645,6 +721,25 @@ func TestReadme_HasDocsLink(t *testing.T) {
 	if !strings.Contains(content, "uesteibar.github.io/ralph") {
 		t.Error("README.md missing link to published documentation site")
 	}
+}
+
+// extractReadmeSection returns the content between a ### header and the next ### or ## heading.
+func extractReadmeSection(content, header string) string {
+	_, after, found := strings.Cut(content, header)
+	if !found {
+		return ""
+	}
+	// Find the next ### or ## heading
+	lines := strings.Split(after, "\n")
+	var sb strings.Builder
+	for _, line := range lines[1:] {
+		if strings.HasPrefix(line, "### ") || strings.HasPrefix(line, "## ") {
+			break
+		}
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // extractSection returns the content between ## `cmd` and the next ## heading.
