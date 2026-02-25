@@ -58,6 +58,8 @@ Use this format. You may omit any section that does not add value for this speci
 
 ## Output Format
 
+**CRITICAL: The very first line of your output must be the PR title. Do not include any preamble, thinking, chain-of-thought reasoning, or commentary before it.**
+
 Output the title on the first line, followed by a blank line, followed by the body. Example:
 
 ```
@@ -102,4 +104,4 @@ AuthService.validate(credentials)
 - Follow-up: add refresh token rotation.
 ```
 
-Output ONLY the title and body. No extra explanation.
+Output ONLY the title and body. No preamble, no extra explanation, no wrapper text.
