@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
@@ -287,14 +288,50 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	}
 }
 
-// parsePROutput splits the AI response into title (first line) and body (rest).
+// prTitleRe matches conventional commit prefixes used for PR titles.
+var prTitleRe = regexp.MustCompile(`^(feat|fix|refactor|chore|docs|test|style|perf|ci|build|revert)(\(.+\))?(!)?\:\s`)
+
+// looksLikePRTitle reports whether line matches a conventional commit title format.
+func looksLikePRTitle(line string) bool {
+	return prTitleRe.MatchString(line)
+}
+
+// parsePROutput splits the AI response into title and body.
+// It detects and skips AI preamble text by scanning for the first line that
+// matches conventional commit format. If no line matches, the first non-empty
+// line is used as the title (preserving original behavior).
 func parsePROutput(output string) (string, string) {
 	output = strings.TrimSpace(output)
-	parts := strings.SplitN(output, "\n", 2)
-	title := strings.TrimSpace(parts[0])
+	lines := strings.Split(output, "\n")
+
+	// Find the first non-empty line and the first conventional-commit line.
+	firstNonEmpty := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if firstNonEmpty == -1 {
+			firstNonEmpty = i
+		}
+		if looksLikePRTitle(trimmed) {
+			title := trimmed
+			var body string
+			if i+1 < len(lines) {
+				body = strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+			}
+			return title, body
+		}
+	}
+
+	// Fallback: no conventional commit line found — use first non-empty line.
+	if firstNonEmpty == -1 {
+		return "", ""
+	}
+	title := strings.TrimSpace(lines[firstNonEmpty])
 	var body string
-	if len(parts) > 1 {
-		body = strings.TrimSpace(parts[1])
+	if firstNonEmpty+1 < len(lines) {
+		body = strings.TrimSpace(strings.Join(lines[firstNonEmpty+1:], "\n"))
 	}
 	return title, body
 }

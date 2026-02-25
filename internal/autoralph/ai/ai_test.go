@@ -266,6 +266,26 @@ func TestRenderPRDescription_WithoutStories_OmitsSection(t *testing.T) {
 	}
 }
 
+func TestRenderPRDescription_ContainsAntiPreambleInstruction(t *testing.T) {
+	data := PRDescriptionData{
+		PRDSummary: "Test summary.",
+		DiffStats:  "1 file changed",
+	}
+
+	out, err := RenderPRDescription(data, "")
+	if err != nil {
+		t.Fatalf("RenderPRDescription failed: %v", err)
+	}
+
+	// The template must explicitly forbid preamble before the PR title
+	if !strings.Contains(out, "preamble") {
+		t.Error("output should contain anti-preamble instruction")
+	}
+	if !strings.Contains(out, "first line") || !strings.Contains(out, "must be") {
+		t.Error("output should instruct that the first line must be the PR title")
+	}
+}
+
 func TestRenderAddressFeedback_ContainsComments(t *testing.T) {
 	data := AddressFeedbackData{
 		Comments: []AddressFeedbackComment{
