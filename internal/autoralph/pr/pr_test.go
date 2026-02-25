@@ -608,6 +608,74 @@ func TestParsePROutput_TrimsWhitespace(t *testing.T) {
 	}
 }
 
+func TestParsePROutput_SingleLinePreamble(t *testing.T) {
+	input := "Here is the PR description:\nfeat(avatars): add user avatar upload\n\n## Summary\nAdds avatar upload support."
+	title, body := parsePROutput(input)
+	if title != "feat(avatars): add user avatar upload" {
+		t.Errorf("expected title %q, got %q", "feat(avatars): add user avatar upload", title)
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Errorf("expected body to contain ## Summary, got: %s", body)
+	}
+	if strings.Contains(body, "Here is the PR description") {
+		t.Error("expected body to not contain preamble text")
+	}
+}
+
+func TestParsePROutput_MultiLinePreamble(t *testing.T) {
+	input := "Let me analyze the changes.\nBased on the diff, here is the PR:\n\nfeat(avatars): add user avatar upload\n\n## Summary\nAdds avatar upload support."
+	title, body := parsePROutput(input)
+	if title != "feat(avatars): add user avatar upload" {
+		t.Errorf("expected title %q, got %q", "feat(avatars): add user avatar upload", title)
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Errorf("expected body to contain ## Summary, got: %s", body)
+	}
+}
+
+func TestParsePROutput_NoConventionalPrefix_FallsBackToFirstLine(t *testing.T) {
+	input := "Add user avatar upload\n\n## Summary\nAdds avatar upload support."
+	title, body := parsePROutput(input)
+	if title != "Add user avatar upload" {
+		t.Errorf("expected title %q, got %q", "Add user avatar upload", title)
+	}
+	if !strings.Contains(body, "## Summary") {
+		t.Errorf("expected body to contain ## Summary, got: %s", body)
+	}
+}
+
+func TestLooksLikePRTitle(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"feat: add login", true},
+		{"fix(auth): resolve token expiry", true},
+		{"refactor: clean up handler", true},
+		{"chore: update deps", true},
+		{"docs: add README", true},
+		{"test: add unit tests", true},
+		{"style: format code", true},
+		{"perf: optimize query", true},
+		{"ci: add workflow", true},
+		{"build: update Makefile", true},
+		{"revert: undo change", true},
+		{"feat!: breaking change", true},
+		{"feat(scope)!: breaking scoped", true},
+		{"Here is the PR description:", false},
+		{"Let me analyze the changes.", false},
+		{"Add user avatar upload", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := looksLikePRTitle(tt.line)
+		if got != tt.want {
+			t.Errorf("looksLikePRTitle(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
 func TestNewAction_ProjectNotFound(t *testing.T) {
 	d := testDB(t)
 	_ = createTestProject(t, d)
