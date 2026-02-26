@@ -62,6 +62,7 @@ func TestAttach_StalePID_Error(t *testing.T) {
 func TestAttach_BaseWorkspace_Error(t *testing.T) {
 	dir := realPath(t, t.TempDir())
 	initTestRepo(t, dir)
+	t.Setenv("RALPH_WORKSPACE", "")
 
 	oldWd, _ := os.Getwd()
 	defer os.Chdir(oldWd)
