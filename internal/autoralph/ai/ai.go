@@ -79,6 +79,7 @@ type CommentReply struct {
 
 // AddressFeedbackComment represents a single review comment.
 type AddressFeedbackComment struct {
+	ID        int64
 	Path      string
 	Line      int
 	Author    string

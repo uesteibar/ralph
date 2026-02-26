@@ -1198,7 +1198,7 @@ func TestNewAction_MultipleNonInline_SingleConsolidatedComment(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
 	issue := createTestIssue(t, d, project)
-	cfg, _, fetcher, replier, _ := defaultMocks(project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
 	fetcher.comments = nil // no line comments
 
 	cfg.Reviews = &mockReviewFetcher{
@@ -1214,6 +1214,9 @@ func TestNewAction_MultipleNonInline_SingleConsolidatedComment(t *testing.T) {
 	}
 	prCommenter := &mockPRCommenter{}
 	cfg.PRCommenter = prCommenter
+
+	// Return structured AI response with unique sections per non-inline item ID.
+	inv.response = "### General feedback (#100)\n**Action:** changed\n**Response:** Renamed variables to follow convention\n\n### General feedback (#101)\n**Action:** changed\n**Response:** Added unit tests for edge cases\n\n### General feedback (#200)\n**Action:** changed\n**Response:** Fixed CI pipeline configuration"
 
 	action := NewAction(cfg)
 	err := action(issue, d)
@@ -1235,6 +1238,28 @@ func TestNewAction_MultipleNonInline_SingleConsolidatedComment(t *testing.T) {
 	body := prCommenter.calls[0].body
 	if strings.Count(body, "---") < 2 {
 		t.Errorf("expected at least 2 '---' separators for 3 non-inline items, got body: %s", body)
+	}
+
+	// Verify distinct content: each non-inline item's response appears in the consolidated comment.
+	if !strings.Contains(body, "Renamed variables to follow convention") {
+		t.Errorf("expected consolidated comment to contain response for item #100, got body: %s", body)
+	}
+	if !strings.Contains(body, "Added unit tests for edge cases") {
+		t.Errorf("expected consolidated comment to contain response for item #101, got body: %s", body)
+	}
+	if !strings.Contains(body, "Fixed CI pipeline configuration") {
+		t.Errorf("expected consolidated comment to contain response for item #200, got body: %s", body)
+	}
+
+	// Verify no duplication: each response should appear exactly once.
+	if strings.Count(body, "Renamed variables to follow convention") != 1 {
+		t.Errorf("response for item #100 should appear exactly once, got body: %s", body)
+	}
+	if strings.Count(body, "Added unit tests for edge cases") != 1 {
+		t.Errorf("response for item #101 should appear exactly once, got body: %s", body)
+	}
+	if strings.Count(body, "Fixed CI pipeline configuration") != 1 {
+		t.Errorf("response for item #200 should appear exactly once, got body: %s", body)
 	}
 }
 
@@ -1736,7 +1761,7 @@ func (o *orderTrackingPuller) PullBranch(ctx context.Context, workDir, branch st
 
 func TestBuildReplyForComment_CommitRef_WithSection(t *testing.T) {
 	aiResponse := "### main.go\n**Action:** changed\n**Response:** Added error handling for nil pointer"
-	got := buildReplyForComment(aiResponse, "main.go", "abc1234")
+	got := buildReplyForComment(aiResponse, "main.go", 0, "abc1234")
 	if !strings.Contains(got, "abc1234") {
 		t.Errorf("expected commit SHA in reply, got: %s", got)
 	}
@@ -1746,15 +1771,15 @@ func TestBuildReplyForComment_CommitRef_WithSection(t *testing.T) {
 }
 
 func TestBuildReplyForComment_CommitRef_NoSection(t *testing.T) {
-	got := buildReplyForComment("unstructured response", "main.go", "abc1234")
+	got := buildReplyForComment("unstructured response", "main.go", 0, "abc1234")
 	if got != "Addressed in abc1234" {
 		t.Errorf("expected 'Addressed in abc1234', got: %s", got)
 	}
 }
 
 func TestBuildReplyForComment_NoCommit_GeneralFeedback_ExtractsSection(t *testing.T) {
-	aiResponse := "### General feedback\n**Action:** no_change\n**Response:** The naming convention is already consistent with the project style guide."
-	got := buildReplyForComment(aiResponse, "", "")
+	aiResponse := "### General feedback (#42)\n**Action:** no_change\n**Response:** The naming convention is already consistent with the project style guide."
+	got := buildReplyForComment(aiResponse, "", 42, "")
 	if !strings.Contains(got, "naming convention is already consistent") {
 		t.Errorf("expected AI explanation for general feedback, got: %s", got)
 	}
@@ -1762,14 +1787,14 @@ func TestBuildReplyForComment_NoCommit_GeneralFeedback_ExtractsSection(t *testin
 
 func TestBuildReplyForComment_NoCommit_NoSection_FallsBackToFullResponse(t *testing.T) {
 	aiResponse := "I reviewed the feedback and the code is correct as-is because the tests cover this edge case."
-	got := buildReplyForComment(aiResponse, "", "")
+	got := buildReplyForComment(aiResponse, "", 99, "")
 	if !strings.Contains(got, "reviewed the feedback") {
 		t.Errorf("expected full AI response as fallback, got: %s", got)
 	}
 }
 
 func TestBuildReplyForComment_NoCommit_EmptyAIResponse_FallsBackToCanned(t *testing.T) {
-	got := buildReplyForComment("", "", "")
+	got := buildReplyForComment("", "", 0, "")
 	if got != "Reviewed — no code changes needed." {
 		t.Errorf("expected canned message for empty AI response, got: %s", got)
 	}
@@ -1777,7 +1802,7 @@ func TestBuildReplyForComment_NoCommit_EmptyAIResponse_FallsBackToCanned(t *test
 
 func TestBuildReplyForComment_NoCommit_PathSpecific_ExtractsSection(t *testing.T) {
 	aiResponse := "### main.go\n**Action:** no_change\n**Response:** The function already handles this case on line 42."
-	got := buildReplyForComment(aiResponse, "main.go", "")
+	got := buildReplyForComment(aiResponse, "main.go", 0, "")
 	if !strings.Contains(got, "already handles this case") {
 		t.Errorf("expected AI explanation for file-specific feedback, got: %s", got)
 	}
@@ -1801,12 +1826,74 @@ func TestNewAction_PassesMaxTurns(t *testing.T) {
 
 func TestBuildReplyForComment_LongAIResponse_Truncated(t *testing.T) {
 	longResponse := strings.Repeat("x", 2000)
-	got := buildReplyForComment(longResponse, "", "")
+	got := buildReplyForComment(longResponse, "", 0, "")
 	if len(got) > 1100 {
 		t.Errorf("expected truncated response, got length %d", len(got))
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Error("expected truncation marker at end")
+	}
+}
+
+func TestExtractSection_MultipleGeneralFeedback_ReturnsDistinctContent(t *testing.T) {
+	aiResponse := `### General feedback (#100)
+**Action:** changed
+**Response:** Fixed naming convention across the codebase
+
+### General feedback (#101)
+**Action:** no_change
+**Response:** Tests are already comprehensive
+
+### General feedback (#200)
+**Action:** changed
+**Response:** CI configuration updated`
+
+	got100 := extractSection(aiResponse, "General feedback (#100)")
+	got101 := extractSection(aiResponse, "General feedback (#101)")
+	got200 := extractSection(aiResponse, "General feedback (#200)")
+
+	if !strings.Contains(got100, "Fixed naming convention") {
+		t.Errorf("expected section for #100 to contain 'Fixed naming convention', got: %s", got100)
+	}
+	if !strings.Contains(got101, "Tests are already comprehensive") {
+		t.Errorf("expected section for #101 to contain 'Tests are already comprehensive', got: %s", got101)
+	}
+	if !strings.Contains(got200, "CI configuration updated") {
+		t.Errorf("expected section for #200 to contain 'CI configuration updated', got: %s", got200)
+	}
+
+	// Ensure distinct content: no section should contain another section's response.
+	if strings.Contains(got100, "Tests are already comprehensive") {
+		t.Errorf("section #100 should not contain #101's content")
+	}
+	if strings.Contains(got100, "CI configuration updated") {
+		t.Errorf("section #100 should not contain #200's content")
+	}
+	if strings.Contains(got101, "Fixed naming convention") {
+		t.Errorf("section #101 should not contain #100's content")
+	}
+}
+
+func TestBuildReplyForComment_NonInline_ConstructsUniqueKey(t *testing.T) {
+	aiResponse := `### General feedback (#100)
+**Action:** changed
+**Response:** Fixed naming convention
+
+### General feedback (#200)
+**Action:** no_change
+**Response:** CI is fine, no changes needed`
+
+	got100 := buildReplyForComment(aiResponse, "", 100, "abc123")
+	got200 := buildReplyForComment(aiResponse, "", 200, "abc123")
+
+	if !strings.Contains(got100, "Fixed naming convention") {
+		t.Errorf("expected reply for item 100 to contain its response, got: %s", got100)
+	}
+	if !strings.Contains(got200, "CI is fine") {
+		t.Errorf("expected reply for item 200 to contain its response, got: %s", got200)
+	}
+	if got100 == got200 {
+		t.Errorf("replies for different non-inline items should be distinct, both got: %s", got100)
 	}
 }
 

@@ -211,6 +211,7 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 				})
 			}
 			aiComments = append(aiComments, ai.AddressFeedbackComment{
+				ID:        item.id,
 				Path:      item.path,
 				Author:    item.author,
 				Body:      item.body,
@@ -463,7 +464,7 @@ func reactToFeedback(ctx context.Context, cfg Config, owner, repo string, items 
 func replyToFeedback(ctx context.Context, cfg Config, owner, repo string, prNumber int, items []feedbackItem, aiResponse, replyRef string) error {
 	var nonInlineReplies []string
 	for _, item := range items {
-		replyMsg := buildReplyForComment(aiResponse, item.path, replyRef)
+		replyMsg := buildReplyForComment(aiResponse, item.path, item.id, replyRef)
 		if item.isInline() {
 			if _, err := cfg.Replier.PostReviewReply(ctx, owner, repo, prNumber, item.id, replyMsg); err != nil {
 				return fmt.Errorf("replying to comment %d: %w", item.id, err)
@@ -543,12 +544,14 @@ func isNothingToCommit(err error) bool {
 // buildReplyForComment constructs a reply message for a feedback item.
 // It always tries to extract the AI's explanation from its structured output.
 // When code was committed, the commit SHA is included alongside the explanation.
-func buildReplyForComment(aiResponse, path, commitRef string) string {
+// For non-inline items (path is empty), itemID is used to construct the unique
+// lookup key "General feedback (#<id>)".
+func buildReplyForComment(aiResponse, path string, itemID int64, commitRef string) string {
 	// Extract the AI's explanation for this item.
-	// For general (non-line) feedback, look up "General feedback" section.
+	// For general (non-line) feedback, look up the unique section by ID.
 	lookupKey := path
 	if lookupKey == "" {
-		lookupKey = "General feedback"
+		lookupKey = fmt.Sprintf("General feedback (#%d)", itemID)
 	}
 	section := extractSection(aiResponse, lookupKey)
 

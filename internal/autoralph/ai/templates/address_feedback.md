@@ -9,7 +9,7 @@ You are an autonomous software engineering agent addressing pull request review 
 {{- if .Path}}
 ### {{.Path}}{{if .Line}} (line {{.Line}}){{end}}
 {{- else}}
-### General feedback
+### General feedback (#{{.ID}})
 {{- end}}
 **{{.Author}}{{if .IsTrusted}} (trusted){{end}}:**
 {{.Body}}
@@ -69,7 +69,9 @@ You are working in a git worktree (workspace). Your current working directory is
 For each comment, output your response in this format:
 
 ```
-### <file_path_or_General_feedback>
+### <file_path_or_General_feedback_(#<ID>)>
 **Action:** <changed|no_change>
 **Response:** <description of change made, or explanation of why no change is needed>
 ```
+
+Use the exact section header from the review comment above (e.g. `### path/to/file.go` for inline comments, `### General feedback (#123)` for non-inline items).
