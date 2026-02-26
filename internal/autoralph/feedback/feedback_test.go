@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/github"
 	"github.com/uesteibar/ralph/internal/autoralph/invoker"
@@ -3309,5 +3310,487 @@ func TestIntegration_NoNewFeedback_ShortCircuits(t *testing.T) {
 	// No git operations.
 	if len(git.commitCalls) != 0 {
 		t.Errorf("expected 0 commit calls, got %d", len(git.commitCalls))
+	}
+}
+
+// --- QA Adversarial Tests: ID prefix collision in extractSection ---
+
+func TestExtractSection_IDPrefixCollision_ShortIDMatchesLongerID(t *testing.T) {
+	// BUG: "General feedback (#1)" is a substring of "General feedback (#100)".
+	// strings.Cut finds the FIRST occurrence, so looking up "#1" may incorrectly
+	// match the "#100" section if it appears first in the response.
+	aiResponse := `### General feedback (#100)
+**Action:** changed
+**Response:** Fixed naming for item 100
+
+### General feedback (#1)
+**Action:** changed
+**Response:** Fixed naming for item 1`
+
+	got1 := extractSection(aiResponse, "General feedback (#1)")
+	got100 := extractSection(aiResponse, "General feedback (#100)")
+
+	// Item #1 should get its own content, not item #100's content.
+	if !strings.Contains(got1, "Fixed naming for item 1") {
+		t.Errorf("BUG: extractSection for #1 got wrong content: %q (expected 'Fixed naming for item 1')", got1)
+	}
+	if strings.Contains(got1, "Fixed naming for item 100") {
+		t.Errorf("BUG: extractSection for #1 contains item #100's content: %q", got1)
+	}
+
+	// Item #100 should get its own content.
+	if !strings.Contains(got100, "Fixed naming for item 100") {
+		t.Errorf("extractSection for #100 got wrong content: %q", got100)
+	}
+}
+
+func TestExtractSection_IDPrefixCollision_ReversedOrder(t *testing.T) {
+	// Test with #1 appearing BEFORE #10 in the AI response.
+	// "General feedback (#1)" is a prefix of "General feedback (#10)".
+	aiResponse := `### General feedback (#1)
+**Action:** changed
+**Response:** Content for one
+
+### General feedback (#10)
+**Action:** changed
+**Response:** Content for ten`
+
+	got1 := extractSection(aiResponse, "General feedback (#1)")
+	got10 := extractSection(aiResponse, "General feedback (#10)")
+
+	if !strings.Contains(got1, "Content for one") {
+		t.Errorf("extractSection for #1 should contain 'Content for one', got: %q", got1)
+	}
+	// This is the critical check: #1 should NOT bleed into #10's content.
+	if strings.Contains(got1, "Content for ten") {
+		t.Errorf("BUG: extractSection for #1 bleeds into #10's content: %q", got1)
+	}
+
+	if !strings.Contains(got10, "Content for ten") {
+		t.Errorf("extractSection for #10 should contain 'Content for ten', got: %q", got10)
+	}
+}
+
+func TestBuildReplyForComment_IDPrefixCollision_DistinctReplies(t *testing.T) {
+	// End-to-end: buildReplyForComment with IDs 1 and 10 should get distinct replies.
+	aiResponse := `### General feedback (#1)
+**Action:** changed
+**Response:** Reply for item one
+
+### General feedback (#10)
+**Action:** changed
+**Response:** Reply for item ten`
+
+	got1 := buildReplyForComment(aiResponse, "", 1, "sha123")
+	got10 := buildReplyForComment(aiResponse, "", 10, "sha123")
+
+	if !strings.Contains(got1, "Reply for item one") {
+		t.Errorf("reply for item 1 should contain its content, got: %q", got1)
+	}
+	if strings.Contains(got1, "Reply for item ten") {
+		t.Errorf("BUG: reply for item 1 contains item 10's content: %q", got1)
+	}
+	if !strings.Contains(got10, "Reply for item ten") {
+		t.Errorf("reply for item 10 should contain its content, got: %q", got10)
+	}
+}
+
+// --- QA: Single non-inline item backward compatibility ---
+
+func TestExtractSection_SingleNonInlineItem_WorksCorrectly(t *testing.T) {
+	// A single non-inline item should still be extractable by its unique ID.
+	aiResponse := `### General feedback (#42)
+**Action:** no_change
+**Response:** The code is correct, no changes needed`
+
+	got := extractSection(aiResponse, "General feedback (#42)")
+	if !strings.Contains(got, "The code is correct") {
+		t.Errorf("single non-inline item extraction failed, got: %q", got)
+	}
+}
+
+func TestNewAction_SingleNonInline_BackwardCompatible(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 42, State: "CHANGES_REQUESTED", Body: "Please fix the naming", User: "reviewer"},
+		},
+	}
+	prCommenter := &mockPRCommenter{}
+	cfg.PRCommenter = prCommenter
+
+	// AI returns a response with the unique section header.
+	inv.response = "### General feedback (#42)\n**Action:** changed\n**Response:** Fixed naming convention"
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify prompt contains the unique header with ID.
+	if !strings.Contains(inv.lastPrompt, "General feedback (#42)") {
+		t.Error("expected prompt to contain 'General feedback (#42)'")
+	}
+
+	// Verify reply extracts the correct section.
+	if len(prCommenter.calls) != 1 {
+		t.Fatalf("expected 1 PR comment call, got %d", len(prCommenter.calls))
+	}
+	if !strings.Contains(prCommenter.calls[0].body, "Fixed naming convention") {
+		t.Errorf("expected reply to contain extracted section, got: %s", prCommenter.calls[0].body)
+	}
+
+	// No inline replies should be posted.
+	if len(replier.calls) != 0 {
+		t.Errorf("expected 0 inline reply calls, got %d", len(replier.calls))
+	}
+}
+
+// --- QA: AI response misses expected section headers ---
+
+func TestBuildReplyForComment_AIMissesIDInResponse_FallbackWorks(t *testing.T) {
+	// AI responds with "General feedback" instead of "General feedback (#42)".
+	// The system should fall back gracefully.
+	aiResponse := `### General feedback
+**Action:** changed
+**Response:** Fixed the issue`
+
+	got := buildReplyForComment(aiResponse, "", 42, "sha123")
+	// The lookup key is "General feedback (#42)" but the AI response has "General feedback" (no ID).
+	// extractSection should fail to find the match.
+	// With commitRef, it should fall back to "Addressed in sha123".
+	if got != "Addressed in sha123" {
+		// This is acceptable fallback behavior.
+		if !strings.Contains(got, "sha123") {
+			t.Errorf("expected reply to contain commit SHA as fallback when AI misses ID header, got: %q", got)
+		}
+	}
+}
+
+func TestBuildReplyForComment_AIMissesIDInResponse_NoCommit_FallbackToFullResponse(t *testing.T) {
+	aiResponse := `### General feedback
+**Action:** changed
+**Response:** Fixed the issue`
+
+	got := buildReplyForComment(aiResponse, "", 42, "")
+	// Without commitRef and no matching section, should fall back to full AI response.
+	if got == "" || got == "Reviewed — no code changes needed." {
+		t.Errorf("expected non-empty fallback when AI misses ID header, got: %q", got)
+	}
+	// The fallback should include some AI response text.
+	if !strings.Contains(got, "General feedback") || !strings.Contains(got, "Fixed the issue") {
+		t.Errorf("expected fallback to contain AI response text, got: %q", got)
+	}
+}
+
+// --- QA: ID=0 edge case ---
+
+func TestBuildReplyForComment_ZeroID_NonInline(t *testing.T) {
+	aiResponse := `### General feedback (#0)
+**Action:** no_change
+**Response:** Looks good, no changes needed`
+
+	got := buildReplyForComment(aiResponse, "", 0, "")
+	if !strings.Contains(got, "Looks good, no changes needed") {
+		t.Errorf("expected section extraction with ID=0, got: %q", got)
+	}
+}
+
+// --- QA: Template renders correct header format ---
+
+func TestRenderAddressFeedback_NonInlineItem_RendersIDInHeader(t *testing.T) {
+	data := ai.AddressFeedbackData{
+		Comments: []ai.AddressFeedbackComment{
+			{ID: 999, Author: "reviewer", Body: "General comment"},
+		},
+	}
+
+	out, err := ai.RenderAddressFeedback(data, "")
+	if err != nil {
+		t.Fatalf("RenderAddressFeedback failed: %v", err)
+	}
+
+	if !strings.Contains(out, "### General feedback (#999)") {
+		t.Errorf("expected template to render '### General feedback (#999)', got template output not containing it")
+	}
+	// Should NOT render a bare "### General feedback" without ID.
+	// Check that every "General feedback" occurrence has an ID.
+	idx := strings.Index(out, "### General feedback")
+	if idx >= 0 {
+		afterMarker := out[idx+len("### General feedback"):]
+		if len(afterMarker) < 2 || afterMarker[0:2] != " (" {
+			t.Errorf("expected '### General feedback' to be followed by ' (#<ID>)', got: %q", afterMarker[:min(20, len(afterMarker))])
+		}
+	}
+}
+
+func TestRenderAddressFeedback_InlineItem_RendersPathNotID(t *testing.T) {
+	data := ai.AddressFeedbackData{
+		Comments: []ai.AddressFeedbackComment{
+			{ID: 777, Path: "main.go", Line: 42, Author: "reviewer", Body: "Fix this line"},
+		},
+	}
+
+	out, err := ai.RenderAddressFeedback(data, "")
+	if err != nil {
+		t.Fatalf("RenderAddressFeedback failed: %v", err)
+	}
+
+	// Inline items should render with file path, not "General feedback (#ID)".
+	if !strings.Contains(out, "### main.go") {
+		t.Error("expected template to render '### main.go' for inline item")
+	}
+	if strings.Contains(out, "General feedback (#777)") {
+		t.Error("expected inline item NOT to render as 'General feedback (#777)'")
+	}
+}
+
+func TestRenderAddressFeedback_MixedInlineAndNonInline_CorrectHeaders(t *testing.T) {
+	data := ai.AddressFeedbackData{
+		Comments: []ai.AddressFeedbackComment{
+			{ID: 100, Path: "main.go", Line: 10, Author: "reviewer", Body: "Inline comment"},
+			{ID: 200, Author: "reviewer", Body: "General comment"},
+			{ID: 300, Author: "reviewer", Body: "Another general comment"},
+		},
+	}
+
+	out, err := ai.RenderAddressFeedback(data, "")
+	if err != nil {
+		t.Fatalf("RenderAddressFeedback failed: %v", err)
+	}
+
+	// Inline item → path header
+	if !strings.Contains(out, "### main.go") {
+		t.Error("expected '### main.go' for inline item")
+	}
+	// Non-inline items → unique ID headers
+	if !strings.Contains(out, "### General feedback (#200)") {
+		t.Error("expected '### General feedback (#200)' for first non-inline item")
+	}
+	if !strings.Contains(out, "### General feedback (#300)") {
+		t.Error("expected '### General feedback (#300)' for second non-inline item")
+	}
+}
+
+// --- QA: Output format instructions in template ---
+
+func TestRenderAddressFeedback_OutputFormatShowsIDPattern(t *testing.T) {
+	data := ai.AddressFeedbackData{
+		Comments: []ai.AddressFeedbackComment{
+			{ID: 1, Author: "reviewer", Body: "General"},
+		},
+	}
+
+	out, err := ai.RenderAddressFeedback(data, "")
+	if err != nil {
+		t.Fatalf("RenderAddressFeedback failed: %v", err)
+	}
+
+	// The output format section should show the ID pattern for non-inline items.
+	if !strings.Contains(out, "General_feedback_(#<ID>)") {
+		t.Error("expected output format instructions to contain 'General_feedback_(#<ID>)' pattern")
+	}
+	// Should also instruct to use exact section headers.
+	if !strings.Contains(out, "exact section header") {
+		t.Error("expected output format to instruct using exact section headers")
+	}
+}
+
+// --- QA: extractSection with adjacent IDs (#99, #999) ---
+
+func TestExtractSection_AdjacentIDs_NoBleed(t *testing.T) {
+	aiResponse := `### General feedback (#99)
+**Action:** changed
+**Response:** Content for ninety-nine
+
+### General feedback (#999)
+**Action:** changed
+**Response:** Content for nine-nine-nine`
+
+	got99 := extractSection(aiResponse, "General feedback (#99)")
+	got999 := extractSection(aiResponse, "General feedback (#999)")
+
+	if !strings.Contains(got99, "Content for ninety-nine") {
+		t.Errorf("expected #99 to get its content, got: %q", got99)
+	}
+	if strings.Contains(got99, "Content for nine-nine-nine") {
+		t.Errorf("BUG: #99 bleeds into #999's content: %q", got99)
+	}
+	if !strings.Contains(got999, "Content for nine-nine-nine") {
+		t.Errorf("expected #999 to get its content, got: %q", got999)
+	}
+}
+
+// --- QA: extractSection with newline variations ---
+
+func TestExtractSection_NoNewlineBeforeNextSection(t *testing.T) {
+	// AI response where sections are not separated by blank lines.
+	aiResponse := "### General feedback (#100)\n**Action:** changed\n**Response:** Fixed item 100\n### General feedback (#200)\n**Action:** changed\n**Response:** Fixed item 200"
+
+	got100 := extractSection(aiResponse, "General feedback (#100)")
+	got200 := extractSection(aiResponse, "General feedback (#200)")
+
+	if !strings.Contains(got100, "Fixed item 100") {
+		t.Errorf("expected #100 content, got: %q", got100)
+	}
+	if strings.Contains(got100, "Fixed item 200") {
+		t.Errorf("#100 should not contain #200's content, got: %q", got100)
+	}
+	if !strings.Contains(got200, "Fixed item 200") {
+		t.Errorf("expected #200 content, got: %q", got200)
+	}
+}
+
+// --- QA: Large ID values ---
+
+func TestBuildReplyForComment_LargeID(t *testing.T) {
+	var largeID int64 = 9999999999
+	aiResponse := fmt.Sprintf("### General feedback (#%d)\n**Action:** changed\n**Response:** Fixed with large ID", largeID)
+
+	got := buildReplyForComment(aiResponse, "", largeID, "sha456")
+	if !strings.Contains(got, "Fixed with large ID") {
+		t.Errorf("expected section extraction with large ID, got: %q", got)
+	}
+}
+
+// --- QA: extractCommitSummary with new ID-based headers ---
+
+func TestExtractCommitSummary_GeneralFeedbackWithID(t *testing.T) {
+	aiResponse := `### General feedback (#42)
+**Action:** changed
+**Response:** Updated naming convention across the module`
+
+	title, _ := extractCommitSummary(aiResponse)
+	if !strings.Contains(title, "Updated naming convention") {
+		t.Errorf("expected general feedback with ID change in title, got: %q", title)
+	}
+}
+
+// --- QA: End-to-end with prefix collision IDs ---
+
+func TestNewAction_PrefixCollisionIDs_DistinctReplies(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, replier, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	// Two reviews with IDs that are prefix-related: 1 and 10.
+	cfg.Reviews = &mockReviewFetcher{
+		reviews: []github.Review{
+			{ID: 1, State: "CHANGES_REQUESTED", Body: "Fix naming", User: "reviewer"},
+			{ID: 10, State: "COMMENTED", Body: "Add tests", User: "reviewer"},
+		},
+	}
+	prCommenter := &mockPRCommenter{}
+	cfg.PRCommenter = prCommenter
+
+	inv.response = "### General feedback (#1)\n**Action:** changed\n**Response:** Renamed variables\n\n### General feedback (#10)\n**Action:** changed\n**Response:** Added test cases"
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(prCommenter.calls) != 1 {
+		t.Fatalf("expected 1 consolidated PR comment call, got %d", len(prCommenter.calls))
+	}
+
+	body := prCommenter.calls[0].body
+	// Both distinct responses should appear.
+	if !strings.Contains(body, "Renamed variables") {
+		t.Errorf("expected reply to contain #1's response 'Renamed variables', got: %s", body)
+	}
+	if !strings.Contains(body, "Added test cases") {
+		t.Errorf("expected reply to contain #10's response 'Added test cases', got: %s", body)
+	}
+
+	// Each response should appear exactly once (no duplication from prefix collision).
+	if strings.Count(body, "Renamed variables") != 1 {
+		t.Errorf("BUG: #1's response should appear exactly once, got body: %s", body)
+	}
+	if strings.Count(body, "Added test cases") != 1 {
+		t.Errorf("BUG: #10's response should appear exactly once, got body: %s", body)
+	}
+
+	// No inline replies.
+	if len(replier.calls) != 0 {
+		t.Errorf("expected 0 inline reply calls, got %d", len(replier.calls))
+	}
+}
+
+// --- QA: Template ID field is populated from feedbackItem ---
+
+func TestNewAction_IDFieldPopulatedInPrompt(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+	issue := createTestIssue(t, d, project)
+	cfg, inv, fetcher, _, _ := defaultMocks(project)
+	fetcher.comments = nil
+
+	cfg.IssueComments = &mockIssueCommentFetcher{
+		comments: []github.Comment{
+			{ID: 12345, Body: "Please fix the flaky test", User: "reviewer"},
+		},
+	}
+	cfg.PRCommenter = &mockPRCommenter{}
+
+	action := NewAction(cfg)
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the prompt contains the ID in the header.
+	if !strings.Contains(inv.lastPrompt, "General feedback (#12345)") {
+		t.Errorf("expected prompt to contain 'General feedback (#12345)', got prompt snippet not containing it")
+	}
+}
+
+// --- QA: Inline items should NOT use ID-based lookup ---
+
+func TestBuildReplyForComment_InlineItem_UsesPathNotID(t *testing.T) {
+	aiResponse := `### main.go
+**Action:** changed
+**Response:** Fixed the null check
+
+### General feedback (#100)
+**Action:** changed
+**Response:** Something else`
+
+	// Inline item (has path) should use path-based lookup, not ID.
+	got := buildReplyForComment(aiResponse, "main.go", 100, "sha123")
+	if !strings.Contains(got, "Fixed the null check") {
+		t.Errorf("inline item should use path-based lookup, got: %q", got)
+	}
+	if strings.Contains(got, "Something else") {
+		t.Errorf("inline item should NOT pick up general feedback section, got: %q", got)
+	}
+}
+
+// --- QA: Multiple inline items with same path ---
+
+func TestExtractSection_SamePathMultipleComments_FirstMatch(t *testing.T) {
+	// Two comments on the same file — extractSection returns the first match.
+	// This is existing behavior but worth documenting.
+	aiResponse := `### main.go
+**Action:** changed
+**Response:** Fixed first issue
+
+### main.go
+**Action:** changed
+**Response:** Fixed second issue`
+
+	got := extractSection(aiResponse, "main.go")
+	// strings.Cut finds the first occurrence.
+	if !strings.Contains(got, "Fixed first issue") {
+		t.Errorf("extractSection should return first match for duplicate paths, got: %q", got)
 	}
 }
