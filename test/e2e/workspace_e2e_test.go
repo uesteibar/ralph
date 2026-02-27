@@ -576,6 +576,10 @@ func TestE2E_AgentEvaluation(t *testing.T) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("claude CLI not available, skipping agent evaluation")
 	}
+	// Cannot launch Claude Code inside another Claude Code session.
+	if os.Getenv("CLAUDECODE") != "" {
+		t.Skip("running inside Claude Code session, skipping agent evaluation")
+	}
 
 	// Run a full lifecycle collecting reports.
 	repoDir := setupTestRepo(t)

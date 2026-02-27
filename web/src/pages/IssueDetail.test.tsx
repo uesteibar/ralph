@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import IssueDetail from './IssueDetail'
 import type { IssueDetail as IssueDetailType } from '../api'
@@ -93,7 +93,12 @@ function renderIssueDetail(id = 'iss1') {
   )
 }
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
   vi.clearAllMocks()
   vi.mocked(fetchIssue).mockResolvedValue(mockIssue)
   vi.mocked(resumeIssue).mockResolvedValue({ status: 'resumed', state: 'building' })
@@ -703,6 +708,50 @@ describe('IssueDetail', () => {
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'in_review' } })
     await waitFor(() => {
       expect(screen.getByText('missing PR')).toBeInTheDocument()
+    })
+  })
+
+  describe('polling', () => {
+    it('calls loadIssue every 5 seconds', async () => {
+      renderIssueDetail()
+      await waitFor(() => {
+        expect(fetchIssue).toHaveBeenCalledTimes(1)
+      })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(fetchIssue).toHaveBeenCalledTimes(2)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(fetchIssue).toHaveBeenCalledTimes(3)
+    })
+
+    it('refreshes valid transitions on each poll', async () => {
+      renderIssueDetail()
+      await waitFor(() => {
+        expect(fetchValidTransitions).toHaveBeenCalledTimes(1)
+      })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(fetchValidTransitions).toHaveBeenCalledTimes(2)
+    })
+
+    it('cleans up interval on unmount', async () => {
+      const { unmount } = renderIssueDetail()
+      await waitFor(() => {
+        expect(fetchIssue).toHaveBeenCalledTimes(1)
+      })
+
+      unmount()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000)
+      })
+      expect(fetchIssue).toHaveBeenCalledTimes(1)
     })
   })
 })
