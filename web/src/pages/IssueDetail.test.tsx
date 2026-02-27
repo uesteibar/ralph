@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import IssueDetail from './IssueDetail'
 import type { IssueDetail as IssueDetailType } from '../api'
@@ -718,10 +718,14 @@ describe('IssueDetail', () => {
         expect(fetchIssue).toHaveBeenCalledTimes(1)
       })
 
-      await vi.advanceTimersByTimeAsync(5000)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
       expect(fetchIssue).toHaveBeenCalledTimes(2)
 
-      await vi.advanceTimersByTimeAsync(5000)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
       expect(fetchIssue).toHaveBeenCalledTimes(3)
     })
 
@@ -731,7 +735,9 @@ describe('IssueDetail', () => {
         expect(fetchValidTransitions).toHaveBeenCalledTimes(1)
       })
 
-      await vi.advanceTimersByTimeAsync(5000)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
       expect(fetchValidTransitions).toHaveBeenCalledTimes(2)
     })
 
@@ -742,7 +748,9 @@ describe('IssueDetail', () => {
       })
 
       unmount()
-      await vi.advanceTimersByTimeAsync(10000)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000)
+      })
       expect(fetchIssue).toHaveBeenCalledTimes(1)
     })
   })

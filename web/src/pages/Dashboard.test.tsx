@@ -132,8 +132,10 @@ beforeEach(() => {
 
 describe('Dashboard', () => {
   it('shows loading state initially', () => {
-    // Make fetch hang so we can see loading state
+    // Make all fetches hang so we can see loading state without act() warnings
     vi.mocked(fetchProjects).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchIssues).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchCCUsage).mockReturnValue(new Promise(() => {}))
     renderDashboard()
     expect(screen.getByText('Loading...')).toBeInTheDocument()
   })
