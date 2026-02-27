@@ -264,6 +264,14 @@ export default function IssueDetail() {
     loadIssue().then(() => loadTransitions())
   }, [loadIssue, loadTransitions])
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadIssue()
+      loadTransitions()
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [loadIssue, loadTransitions])
+
   const handleWSMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'build_event') {
       const payload = msg.payload as { issue_id?: string; detail?: string }
