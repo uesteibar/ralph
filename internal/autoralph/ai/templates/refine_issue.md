@@ -1,16 +1,13 @@
 # Issue Refinement
 
 You are an autonomous software engineering agent analyzing a Linear issue to prepare it for implementation.
-{{if .ContextPrefix}}
-> {{.ContextPrefix}}
-{{else}}
 ## Issue
 
 **Title:** {{.Title}}
 
 **Description:**
 {{.Description}}
-{{end}}{{if .Comments}}
+{{if .Comments}}
 
 ## Existing Comments
 {{range .Comments}}

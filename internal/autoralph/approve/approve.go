@@ -208,12 +208,11 @@ func NewApprovalAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	}
 }
 
-// NewIterationAction returns an ActionFunc that invokes AI with the comment
-// thread and posts the response. When LastCommentID is set (incremental),
-// only new comments are sent with a brief context prefix. When LastCommentID
-// is empty (first refinement), the full description and all comments are sent.
-// When the user's comment is a threaded reply, the response is posted in the
-// same thread.
+// NewIterationAction returns an ActionFunc that invokes AI with the full
+// comment thread and posts the response. The AI always receives the complete
+// issue context (title, description, and all comments) to produce higher
+// quality responses. When the user's comment is a threaded reply, the
+// response is posted in the same thread.
 func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	return func(issue db.Issue, database *db.DB) error {
 		project, err := cfg.Projects.GetProject(issue.ProjectID)
@@ -250,19 +249,8 @@ func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error 
 		}
 		_ = database.LogActivity(issue.ID, "reply_received", "", "", fmt.Sprintf("Reply from %s — invoking AI", replyAuthor))
 
-		// Determine whether this is an incremental iteration (LastCommentID set)
-		// or the first refinement (no LastCommentID). Incremental iterations
-		// only send new comments to reduce token usage.
-		incremental := issue.LastCommentID != ""
-		var promptComments []linear.Comment
-		if incremental {
-			promptComments = newComments
-		} else {
-			promptComments = cs
-		}
-
 		var aiComments []ai.RefineIssueComment
-		for _, c := range promptComments {
+		for _, c := range cs {
 			aiComments = append(aiComments, ai.RefineIssueComment{
 				Author:    c.UserName,
 				CreatedAt: c.CreatedAt,
@@ -271,13 +259,9 @@ func NewIterationAction(cfg Config) func(issue db.Issue, database *db.DB) error 
 		}
 
 		data := ai.RefineIssueData{
-			Title:    issue.Title,
-			Comments: aiComments,
-		}
-		if incremental {
-			data.ContextPrefix = fmt.Sprintf("Continuing refinement of: %s", issue.Title)
-		} else {
-			data.Description = issue.Description
+			Title:       issue.Title,
+			Description: issue.Description,
+			Comments:    aiComments,
 		}
 
 		prompt, err := ai.RenderRefineIssue(data, cfg.OverrideDir)
