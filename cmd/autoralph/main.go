@@ -337,11 +337,12 @@ func runServe(args []string) error {
 					return err
 				}
 				return refine.NewAction(refine.Config{
-					Invoker:      readOnlyInvoker,
-					Poster:       &linearCommentPoster{client: lc},
-					Projects:     database,
-					GitPuller:    puller,
-					OnBuildEvent: onBuildEvent,
+					Invoker:        readOnlyInvoker,
+					Poster:         &linearCommentPoster{client: lc},
+					Projects:       database,
+					GitPuller:      puller,
+					CommentFetcher: &linearCommentFetcher{client: lc},
+					OnBuildEvent:   onBuildEvent,
 				})(issue, database)
 			},
 		})

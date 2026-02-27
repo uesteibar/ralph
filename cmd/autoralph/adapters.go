@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/build"
 	"github.com/uesteibar/ralph/internal/autoralph/checks"
 	"github.com/uesteibar/ralph/internal/autoralph/complete"
@@ -20,6 +21,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/invoker"
 	"github.com/uesteibar/ralph/internal/autoralph/linear"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
+	"github.com/uesteibar/ralph/internal/autoralph/refine"
 	"github.com/uesteibar/ralph/internal/autoralph/worker"
 	"github.com/uesteibar/ralph/internal/hooks"
 	"log/slog"
@@ -61,6 +63,7 @@ var (
 	_ ghpoller.GitHubClient        = (*ghclient.Client)(nil)
 	_ invoker.EventInvoker         = (*claudeInvoker)(nil)
 	_ invoker.EventInvoker         = (*usagelimitInvoker)(nil)
+	_ refine.CommentFetcher        = (*linearCommentFetcher)(nil)
 )
 
 // claudeInvoker wraps claude.Invoke to satisfy the Invoker interface used by
@@ -169,6 +172,27 @@ type linearCommentPoster struct {
 func (p *linearCommentPoster) PostComment(ctx context.Context, issueID, body string) (string, error) {
 	c, err := p.client.PostComment(ctx, issueID, body)
 	return c.ID, err
+}
+
+// linearCommentFetcher wraps linear.Client.FetchIssueComments to satisfy refine.CommentFetcher.
+type linearCommentFetcher struct {
+	client *linear.Client
+}
+
+func (f *linearCommentFetcher) FetchIssueComments(ctx context.Context, issueID string) ([]ai.RefineIssueComment, error) {
+	cs, err := f.client.FetchIssueComments(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ai.RefineIssueComment, len(cs))
+	for i, c := range cs {
+		result[i] = ai.RefineIssueComment{
+			Author:    c.UserName,
+			CreatedAt: c.CreatedAt,
+			Body:      c.Body,
+		}
+	}
+	return result, nil
 }
 
 // linearPoster wraps linear.Client.PostComment to satisfy pr.LinearPoster

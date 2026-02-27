@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/approve"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/events"
@@ -596,6 +597,129 @@ func TestRefineAction_OnBuildEventCallback(t *testing.T) {
 	}
 	if !strings.Contains(callbackCalls[0].detail, "Read") {
 		t.Errorf("expected detail to contain tool name, got %q", callbackCalls[0].detail)
+	}
+}
+
+// mockCommentFetcher records calls and returns configured results.
+type mockCommentFetcher struct {
+	calls    []string
+	comments []ai.RefineIssueComment
+	err      error
+}
+
+func (m *mockCommentFetcher) FetchIssueComments(ctx context.Context, issueID string) ([]ai.RefineIssueComment, error) {
+	m.calls = append(m.calls, issueID)
+	return m.comments, m.err
+}
+
+func TestRefineAction_WithComments_IncludesInPrompt(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "queued")
+
+	inv := &mockInvoker{response: "AI output"}
+	poster := &mockPoster{}
+	fetcher := &mockCommentFetcher{
+		comments: []ai.RefineIssueComment{
+			{Author: "Alice", CreatedAt: "2026-01-01T00:00:00Z", Body: "What about edge cases?"},
+			{Author: "Bob", CreatedAt: "2026-01-02T00:00:00Z", Body: "Good point, let's add those."},
+		},
+	}
+
+	action := NewAction(Config{
+		Invoker:        inv,
+		Poster:         poster,
+		Projects:       d,
+		CommentFetcher: fetcher,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(fetcher.calls) != 1 {
+		t.Fatalf("expected 1 FetchIssueComments call, got %d", len(fetcher.calls))
+	}
+	if fetcher.calls[0] != "lin-123" {
+		t.Errorf("expected FetchIssueComments called with %q, got %q", "lin-123", fetcher.calls[0])
+	}
+	if !strings.Contains(inv.lastPrompt, "Alice") {
+		t.Error("expected prompt to contain comment author Alice")
+	}
+	if !strings.Contains(inv.lastPrompt, "What about edge cases?") {
+		t.Error("expected prompt to contain comment body")
+	}
+	if !strings.Contains(inv.lastPrompt, "Bob") {
+		t.Error("expected prompt to contain comment author Bob")
+	}
+}
+
+func TestRefineAction_NilCommentFetcher_SkipsFetching(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "queued")
+
+	inv := &mockInvoker{response: "AI output"}
+	poster := &mockPoster{}
+
+	action := NewAction(Config{
+		Invoker:  inv,
+		Poster:   poster,
+		Projects: d,
+		// CommentFetcher is nil — should skip
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called")
+	}
+	if !strings.Contains(inv.lastPrompt, "Add user avatars") {
+		t.Error("expected prompt to contain issue title")
+	}
+}
+
+func TestRefineAction_CommentFetchError_LogsAndProceeds(t *testing.T) {
+	d := testDB(t)
+	issue := createTestIssue(t, d, "queued")
+
+	inv := &mockInvoker{response: "AI output"}
+	poster := &mockPoster{}
+	fetcher := &mockCommentFetcher{
+		err: fmt.Errorf("Linear API timeout"),
+	}
+
+	action := NewAction(Config{
+		Invoker:        inv,
+		Poster:         poster,
+		Projects:       d,
+		CommentFetcher: fetcher,
+	})
+
+	err := action(issue, d)
+	if err != nil {
+		t.Fatalf("expected no error when comment fetch fails, got: %v", err)
+	}
+
+	if inv.lastPrompt == "" {
+		t.Fatal("expected AI invoker to be called even when comment fetch fails")
+	}
+
+	entries, err := d.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activity: %v", err)
+	}
+	foundWarning := false
+	for _, e := range entries {
+		if e.EventType == "warning" && strings.Contains(e.Detail, "Linear API timeout") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Error("expected a warning activity log entry about the comment fetch failure")
 	}
 }
 

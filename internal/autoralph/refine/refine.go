@@ -30,14 +30,20 @@ type GitPuller interface {
 	PullDefaultBase(ctx context.Context, repoPath, ralphConfigPath string) error
 }
 
+// CommentFetcher fetches existing comments for a Linear issue.
+type CommentFetcher interface {
+	FetchIssueComments(ctx context.Context, issueID string) ([]ai.RefineIssueComment, error)
+}
+
 // Config holds the dependencies for the refine action.
 type Config struct {
-	Invoker      invoker.EventInvoker
-	Poster       Poster
-	Projects     ProjectGetter
-	GitPuller    GitPuller
-	OnBuildEvent func(issueID, detail string)
-	OverrideDir  string
+	Invoker        invoker.EventInvoker
+	Poster         Poster
+	Projects       ProjectGetter
+	GitPuller      GitPuller
+	CommentFetcher CommentFetcher
+	OnBuildEvent   func(issueID, detail string)
+	OverrideDir    string
 }
 
 // NewAction returns an orchestrator ActionFunc that performs AI issue refinement.
@@ -56,11 +62,22 @@ func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			}
 		}
 
+		var comments []ai.RefineIssueComment
+		if cfg.CommentFetcher != nil {
+			cs, fetchErr := cfg.CommentFetcher.FetchIssueComments(context.Background(), issue.LinearIssueID)
+			if fetchErr != nil {
+				_ = database.LogActivity(issue.ID, "warning", "", "", fmt.Sprintf("fetching comments failed: %v", fetchErr))
+			} else {
+				comments = cs
+			}
+		}
+
 		_ = database.LogActivity(issue.ID, "ai_invocation", "", "", "Invoking AI to refine issue...")
 
 		prompt, err := ai.RenderRefineIssue(ai.RefineIssueData{
 			Title:         issue.Title,
 			Description:   issue.Description,
+			Comments:      comments,
 			KnowledgePath: knowledge.Dir(project.LocalPath),
 		}, cfg.OverrideDir)
 		if err != nil {
