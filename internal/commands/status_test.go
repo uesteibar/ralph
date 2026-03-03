@@ -92,10 +92,6 @@ func TestStatus_InWorkspaceWithPRD(t *testing.T) {
 			{ID: "US-002", Title: "Story 2", Passes: true},
 			{ID: "US-003", Title: "Story 3", Passes: false},
 		},
-		IntegrationTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test 1", Passes: false},
-			{ID: "IT-002", Description: "Test 2", Passes: false},
-		},
 	}
 	writePRD(t, filepath.Join(wsDir, "prd.json"), testPRD)
 
@@ -122,8 +118,8 @@ func TestStatus_InWorkspaceWithPRD(t *testing.T) {
 	if !containsText(output, "2/3 passing") {
 		t.Errorf("expected story progress '2/3 passing' in output, got: %s", output)
 	}
-	if !containsText(output, "0/2 passing") {
-		t.Errorf("expected integration test progress '0/2 passing' in output, got: %s", output)
+	if !containsText(output, "QA:") {
+		t.Errorf("expected QA status in output, got: %s", output)
 	}
 }
 
@@ -255,7 +251,7 @@ func TestStatus_WorkspaceWithoutPRD(t *testing.T) {
 	}
 }
 
-func TestStatus_IntegrationTestProgress(t *testing.T) {
+func TestStatus_QAVerificationProgress(t *testing.T) {
 	dir := realPath(t, t.TempDir())
 	initTestRepo(t, dir)
 
@@ -275,11 +271,7 @@ func TestStatus_IntegrationTestProgress(t *testing.T) {
 			{ID: "US-001", Passes: true},
 			{ID: "US-002", Passes: true},
 		},
-		IntegrationTests: []prd.IntegrationTest{
-			{ID: "IT-001", Passes: true},
-			{ID: "IT-002", Passes: false},
-			{ID: "IT-003", Passes: true},
-		},
+		QAVerification: &prd.QAVerification{Status: "failed", Attempts: 1},
 	}
 	writePRD(t, filepath.Join(wsDir, "prd.json"), testPRD)
 
@@ -300,8 +292,11 @@ func TestStatus_IntegrationTestProgress(t *testing.T) {
 	if !containsText(output, "2/2 passing") {
 		t.Errorf("expected story progress '2/2 passing', got: %s", output)
 	}
-	if !containsText(output, "2/3 passing") {
-		t.Errorf("expected integration test progress '2/3 passing', got: %s", output)
+	if !containsText(output, "QA:") {
+		t.Errorf("expected QA status in output, got: %s", output)
+	}
+	if !containsText(output, "failed") {
+		t.Errorf("expected QA status 'failed' in output, got: %s", output)
 	}
 }
 

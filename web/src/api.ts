@@ -47,6 +47,21 @@ export interface IntegrationTestInfo {
   passes: boolean
 }
 
+export interface QAFinding {
+  id: string
+  title: string
+  description: string
+  severity: string
+  test_script: string
+  status: string
+}
+
+export interface QAVerification {
+  status: string
+  attempts: number
+  findings: QAFinding[]
+}
+
 const BASE = '/api'
 
 async function fetchJSON<T>(path: string): Promise<T> {
@@ -89,6 +104,7 @@ export interface IssueDetail {
   model?: string
   stories: StoryInfo[]
   integration_tests: IntegrationTestInfo[]
+  qa_verification?: QAVerification
   current_story?: string
   iteration?: number
   max_iterations?: number

@@ -54,12 +54,22 @@ type StoryStarted struct {
 
 func (StoryStarted) eventTag() {}
 
-// QAPhaseStarted is emitted when the QA verification or fix phase begins.
-type QAPhaseStarted struct {
-	Phase string `json:"phase"` // "verification" or "fix"
+// QAVerifyStarted is emitted when the QA verification phase begins.
+type QAVerifyStarted struct{}
+
+func (QAVerifyStarted) eventTag() {}
+
+// QAFixStarted is emitted when a QA fix attempt begins.
+type QAFixStarted struct{}
+
+func (QAFixStarted) eventTag() {}
+
+// QAComplete is emitted when the QA phase finishes.
+type QAComplete struct {
+	Passed bool `json:"passed"`
 }
 
-func (QAPhaseStarted) eventTag() {}
+func (QAComplete) eventTag() {}
 
 // UsageLimitWait is emitted when a usage limit is hit and the loop is waiting.
 type UsageLimitWait struct {
@@ -78,6 +88,22 @@ type LogMessage struct {
 }
 
 func (LogMessage) eventTag() {}
+
+// QAFindingReported is emitted when a new QA finding is discovered.
+type QAFindingReported struct {
+	FindingID string `json:"findingId"`
+	Title     string `json:"title"`
+	Severity  string `json:"severity"`
+}
+
+func (QAFindingReported) eventTag() {}
+
+// QAFindingResolved is emitted when a QA finding is resolved/removed.
+type QAFindingResolved struct {
+	FindingID string `json:"findingId"`
+}
+
+func (QAFindingResolved) eventTag() {}
 
 // PRDRefresh is emitted after events that may have changed the PRD on disk
 // (e.g. after each invocation or iteration). The TUI uses this signal to

@@ -12,7 +12,6 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/eventlog"
-	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/shell"
 )
@@ -223,7 +222,7 @@ func TestDispatcher_Dispatch_CorrectPaths(t *testing.T) {
 	}
 }
 
-func TestDispatcher_Dispatch_SuccessTransitionsToInReview(t *testing.T) {
+func TestDispatcher_Dispatch_SuccessTransitionsToQA(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
 	issue := createTestIssue(t, d, project, "building")
@@ -250,8 +249,8 @@ func TestDispatcher_Dispatch_SuccessTransitionsToInReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting issue: %v", err)
 	}
-	if updated.State != "in_review" {
-		t.Errorf("expected state %q, got %q", "in_review", updated.State)
+	if updated.State != "qa" {
+		t.Errorf("expected state %q, got %q", "qa", updated.State)
 	}
 }
 
@@ -287,8 +286,8 @@ func TestDispatcher_Dispatch_SuccessLogsActivity(t *testing.T) {
 	for _, e := range entries {
 		if e.EventType == "build_completed" {
 			found = true
-			if !strings.Contains(e.Detail, "success") {
-				t.Errorf("expected activity detail to contain 'success', got %q", e.Detail)
+			if !strings.Contains(e.Detail, "QA") {
+				t.Errorf("expected activity detail to mention QA, got %q", e.Detail)
 			}
 		}
 	}
@@ -689,99 +688,6 @@ func (r *eventForwardingRunner) Run(ctx context.Context, cfg LoopConfig) error {
 	return nil
 }
 
-// mockPRCreator is a PRCreator that returns a configurable error.
-type mockPRCreator struct {
-	err error
-}
-
-func (m *mockPRCreator) CreatePR(issue db.Issue, database *db.DB) error {
-	return m.err
-}
-
-func TestDispatcher_Dispatch_ConflictError_TransitionsToPaused(t *testing.T) {
-	d := testDB(t)
-	project := createTestProject(t, d)
-	issue := createTestIssue(t, d, project, "building")
-
-	runner := &mockLoopRunner{} // success
-	prCreator := &mockPRCreator{err: &pr.ConflictError{Files: []string{"main.go", "handler.go"}}}
-	disp := New(Config{
-		DB:         d,
-		MaxWorkers: 1,
-		LoopRunner: runner,
-		Projects:   d,
-		PR:         prCreator,
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := disp.Dispatch(ctx, issue); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	disp.Wait()
-
-	updated, err := d.GetIssue(issue.ID)
-	if err != nil {
-		t.Fatalf("getting issue: %v", err)
-	}
-	if updated.State != "paused" {
-		t.Errorf("expected state %q, got %q", "paused", updated.State)
-	}
-	if !strings.Contains(updated.ErrorMessage, "merge conflicts") {
-		t.Errorf("expected error message to contain 'merge conflicts', got %q", updated.ErrorMessage)
-	}
-
-	entries, err := d.ListActivity(issue.ID, 10, 0)
-	if err != nil {
-		t.Fatalf("listing activity: %v", err)
-	}
-	found := false
-	for _, e := range entries {
-		if e.EventType == "merge_conflict" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected merge_conflict activity entry")
-	}
-}
-
-func TestDispatcher_Dispatch_PRFailure_TransitionsToFailed(t *testing.T) {
-	d := testDB(t)
-	project := createTestProject(t, d)
-	issue := createTestIssue(t, d, project, "building")
-
-	runner := &mockLoopRunner{} // success
-	prCreator := &mockPRCreator{err: errors.New("github API error")}
-	disp := New(Config{
-		DB:         d,
-		MaxWorkers: 1,
-		LoopRunner: runner,
-		Projects:   d,
-		PR:         prCreator,
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := disp.Dispatch(ctx, issue); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	disp.Wait()
-
-	updated, err := d.GetIssue(issue.ID)
-	if err != nil {
-		t.Fatalf("getting issue: %v", err)
-	}
-	if updated.State != "failed" {
-		t.Errorf("expected state %q, got %q", "failed", updated.State)
-	}
-	if !strings.Contains(updated.ErrorMessage, "github API error") {
-		t.Errorf("expected error message to contain 'github API error', got %q", updated.ErrorMessage)
-	}
-}
-
 func TestDispatcher_RecoverBuilding_RedispatchesBuildingIssues(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
@@ -827,13 +733,13 @@ func TestDispatcher_RecoverBuilding_RedispatchesBuildingIssues(t *testing.T) {
 		t.Fatalf("expected 1 loop.Run call, got %d", len(calls))
 	}
 
-	// The building issue should have been processed (moved to in_review since runner succeeds)
+	// The building issue should have been processed (moved to qa since runner succeeds)
 	updated, err := d.GetIssue(building.ID)
 	if err != nil {
 		t.Fatalf("getting issue: %v", err)
 	}
-	if updated.State != "in_review" {
-		t.Errorf("expected state %q after recovery, got %q", "in_review", updated.State)
+	if updated.State != "qa" {
+		t.Errorf("expected state %q after recovery, got %q", "qa", updated.State)
 	}
 }
 
@@ -1059,7 +965,9 @@ func TestFormatEventDetail_ExistingTypes_Unchanged(t *testing.T) {
 		{"ToolUse without detail", events.ToolUse{Name: "Bash"}, "→ Bash"},
 		{"IterationStart", events.IterationStart{Iteration: 1, MaxIterations: 5}, "Iteration 1/5 started"},
 		{"StoryStarted", events.StoryStarted{StoryID: "US-001", Title: "Add feature"}, "Story US-001: Add feature"},
-		{"QAPhaseStarted", events.QAPhaseStarted{Phase: "verification"}, "QA phase: verification"},
+		{"QAVerifyStarted", events.QAVerifyStarted{}, "QA verification started"},
+		{"QAFixStarted", events.QAFixStarted{}, "QA fix started"},
+		{"QAComplete", events.QAComplete{Passed: true}, "QA complete: passed"},
 		{"LogMessage", events.LogMessage{Level: "info", Message: "hello"}, "[info] hello"},
 		{"InvocationDone", events.InvocationDone{NumTurns: 3, DurationMS: 1500}, "Invocation done: 3 turns in 1500ms"},
 	}
@@ -1768,7 +1676,7 @@ func (m *mockHookRunner) getPrePRCalls() []string {
 
 // --- HookRunner tests ---
 
-func TestDispatcher_Dispatch_PrePRHooksRunBeforeCreatePR(t *testing.T) {
+func TestDispatcher_Dispatch_PrePRHooksRunOnSuccess(t *testing.T) {
 	d := testDB(t)
 	projectPath := t.TempDir()
 	wsName := "proj-42"
@@ -1789,30 +1697,7 @@ func TestDispatcher_Dispatch_PrePRHooksRunBeforeCreatePR(t *testing.T) {
 	}
 
 	issue := createTestIssue(t, d, p, "building")
-
 	hookRunner := &mockHookRunner{}
-
-	// Track order of operations: hooks should run before PR creation.
-	var order []string
-	var orderMu sync.Mutex
-
-	orderedHookRunner := &orderTrackingHookRunner{
-		inner: hookRunner,
-		recordFn: func(op string) {
-			orderMu.Lock()
-			order = append(order, op)
-			orderMu.Unlock()
-		},
-	}
-
-	prCreator := &orderTrackingPRCreator{
-		inner: &mockPRCreator{},
-		recordFn: func(op string) {
-			orderMu.Lock()
-			order = append(order, op)
-			orderMu.Unlock()
-		},
-	}
 
 	runner := &mockLoopRunner{}
 	disp := New(Config{
@@ -1820,8 +1705,7 @@ func TestDispatcher_Dispatch_PrePRHooksRunBeforeCreatePR(t *testing.T) {
 		MaxWorkers: 1,
 		LoopRunner: runner,
 		Projects:   d,
-		PR:         prCreator,
-		HookRunner: orderedHookRunner,
+		HookRunner: hookRunner,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1832,19 +1716,17 @@ func TestDispatcher_Dispatch_PrePRHooksRunBeforeCreatePR(t *testing.T) {
 	}
 	disp.Wait()
 
-	orderMu.Lock()
-	ops := make([]string, len(order))
-	copy(ops, order)
-	orderMu.Unlock()
+	calls := hookRunner.getPrePRCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 RunPrePR call, got %d", len(calls))
+	}
 
-	if len(ops) < 2 {
-		t.Fatalf("expected at least 2 operations, got %d: %v", len(ops), ops)
+	updated, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("getting issue: %v", err)
 	}
-	if ops[0] != "pre_pr" {
-		t.Errorf("expected first operation to be 'pre_pr', got %q", ops[0])
-	}
-	if ops[1] != "create_pr" {
-		t.Errorf("expected second operation to be 'create_pr', got %q", ops[1])
+	if updated.State != "qa" {
+		t.Errorf("expected state %q, got %q", "qa", updated.State)
 	}
 }
 
@@ -1900,7 +1782,7 @@ func TestDispatcher_Dispatch_PrePRHooksRunInWorktreeDir(t *testing.T) {
 	}
 }
 
-func TestDispatcher_Dispatch_PrePRHookFailure_DoesNotBlockPR(t *testing.T) {
+func TestDispatcher_Dispatch_PrePRHookFailure_DoesNotBlockQATransition(t *testing.T) {
 	d := testDB(t)
 	projectPath := t.TempDir()
 	wsName := "proj-42"
@@ -1924,14 +1806,12 @@ func TestDispatcher_Dispatch_PrePRHookFailure_DoesNotBlockPR(t *testing.T) {
 
 	hookRunner := &mockHookRunner{preErr: errors.New("hook failed")}
 
-	prCreator := &mockPRCreator{}
 	runner := &mockLoopRunner{}
 	disp := New(Config{
 		DB:         d,
 		MaxWorkers: 1,
 		LoopRunner: runner,
 		Projects:   d,
-		PR:         prCreator,
 		HookRunner: hookRunner,
 	})
 
@@ -1943,29 +1823,27 @@ func TestDispatcher_Dispatch_PrePRHookFailure_DoesNotBlockPR(t *testing.T) {
 	}
 	disp.Wait()
 
-	// Issue should still transition to in_review despite hook failure.
+	// Issue should still transition to qa despite hook failure.
 	updated, err := d.GetIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("getting issue: %v", err)
 	}
-	if updated.State != "in_review" {
-		t.Errorf("expected state %q, got %q", "in_review", updated.State)
+	if updated.State != "qa" {
+		t.Errorf("expected state %q, got %q", "qa", updated.State)
 	}
 }
 
-func TestDispatcher_Dispatch_NoHookRunner_ExistingBehaviorUnchanged(t *testing.T) {
+func TestDispatcher_Dispatch_NoHookRunner_TransitionsToQA(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
 	issue := createTestIssue(t, d, project, "building")
 
-	prCreator := &mockPRCreator{}
 	runner := &mockLoopRunner{}
 	disp := New(Config{
 		DB:         d,
 		MaxWorkers: 1,
 		LoopRunner: runner,
 		Projects:   d,
-		PR:         prCreator,
 		// HookRunner intentionally nil
 	})
 
@@ -1981,8 +1859,8 @@ func TestDispatcher_Dispatch_NoHookRunner_ExistingBehaviorUnchanged(t *testing.T
 	if err != nil {
 		t.Fatalf("getting issue: %v", err)
 	}
-	if updated.State != "in_review" {
-		t.Errorf("expected state %q, got %q", "in_review", updated.State)
+	if updated.State != "qa" {
+		t.Errorf("expected state %q, got %q", "qa", updated.State)
 	}
 }
 
@@ -2094,19 +1972,103 @@ func TestDispatcher_Dispatch_HookRunnerFn_ReceivesCorrectProject(t *testing.T) {
 	}
 }
 
+func TestDispatcher_RecoverQA_ReturnsQAAndQAFixIssues(t *testing.T) {
+	d := testDB(t)
+	project := createTestProject(t, d)
+
+	// Create issues in various states — only qa and qa_fix should be counted.
+	_, err := d.CreateIssue(db.Issue{
+		ProjectID:     project.ID,
+		LinearIssueID: "lin-qa",
+		Identifier:    "PROJ-10",
+		Title:         "QA issue",
+		State:         "qa",
+		WorkspaceName: "proj-10",
+		BranchName:    "autoralph/proj-10",
+	})
+	if err != nil {
+		t.Fatalf("creating qa issue: %v", err)
+	}
+
+	_, err = d.CreateIssue(db.Issue{
+		ProjectID:     project.ID,
+		LinearIssueID: "lin-qafix",
+		Identifier:    "PROJ-11",
+		Title:         "QA fix issue",
+		State:         "qa_fix",
+		WorkspaceName: "proj-11",
+		BranchName:    "autoralph/proj-11",
+	})
+	if err != nil {
+		t.Fatalf("creating qa_fix issue: %v", err)
+	}
+
+	// These should NOT be counted.
+	_, err = d.CreateIssue(db.Issue{
+		ProjectID:     project.ID,
+		LinearIssueID: "lin-building",
+		Identifier:    "PROJ-12",
+		Title:         "Building issue",
+		State:         "building",
+		WorkspaceName: "proj-12",
+		BranchName:    "autoralph/proj-12",
+	})
+	if err != nil {
+		t.Fatalf("creating building issue: %v", err)
+	}
+
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 5,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	recovered, err := disp.RecoverQA(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 2 {
+		t.Errorf("expected 2 recovered issues, got %d", recovered)
+	}
+}
+
+func TestDispatcher_RecoverQA_NoQAIssues(t *testing.T) {
+	d := testDB(t)
+
+	disp := New(Config{
+		DB:         d,
+		MaxWorkers: 1,
+		LoopRunner: &mockLoopRunner{},
+		Projects:   d,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	recovered, err := disp.RecoverQA(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 0 {
+		t.Errorf("expected 0 recovered, got %d", recovered)
+	}
+}
+
 func TestDispatcher_Dispatch_HookRunnerFn_NilReturn_NoHooksRun(t *testing.T) {
 	d := testDB(t)
 	project := createTestProject(t, d)
 	issue := createTestIssue(t, d, project, "building")
 
-	prCreator := &mockPRCreator{}
 	runner := &mockLoopRunner{}
 	disp := New(Config{
 		DB:         d,
 		MaxWorkers: 1,
 		LoopRunner: runner,
 		Projects:   d,
-		PR:         prCreator,
 		HookRunnerFn: func(project db.Project) HookRunner {
 			return nil // no hooks for this project
 		},
@@ -2120,34 +2082,13 @@ func TestDispatcher_Dispatch_HookRunnerFn_NilReturn_NoHooksRun(t *testing.T) {
 	}
 	disp.Wait()
 
-	// Should still succeed — transitions to in_review.
+	// Should still succeed — transitions to qa.
 	updated, err := d.GetIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("getting issue: %v", err)
 	}
-	if updated.State != "in_review" {
-		t.Errorf("expected state %q, got %q", "in_review", updated.State)
+	if updated.State != "qa" {
+		t.Errorf("expected state %q, got %q", "qa", updated.State)
 	}
 }
 
-// orderTrackingHookRunner wraps a HookRunner and records when RunPrePR is called.
-type orderTrackingHookRunner struct {
-	inner    HookRunner
-	recordFn func(string)
-}
-
-func (o *orderTrackingHookRunner) RunPrePR(ctx context.Context, workDir string) error {
-	o.recordFn("pre_pr")
-	return o.inner.RunPrePR(ctx, workDir)
-}
-
-// orderTrackingPRCreator wraps a PRCreator and records when CreatePR is called.
-type orderTrackingPRCreator struct {
-	inner    PRCreator
-	recordFn func(string)
-}
-
-func (o *orderTrackingPRCreator) CreatePR(issue db.Issue, database *db.DB) error {
-	o.recordFn("create_pr")
-	return o.inner.CreatePR(issue, database)
-}

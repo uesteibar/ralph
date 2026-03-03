@@ -9,7 +9,7 @@ import (
 
 // FileHandler writes events as JSONL (one JSON line per event) to log files
 // under a workspace's logs/ directory. A new log file is created when
-// StoryStarted or QAPhaseStarted events are received. Events before the
+// StoryStarted, QAVerifyStarted, or QAFixStarted events are received. Events before the
 // first such event go to a startup-<timestamp>.jsonl file.
 type FileHandler struct {
 	logsDir string
@@ -30,8 +30,10 @@ func (h *FileHandler) Handle(event Event) {
 	switch e := event.(type) {
 	case StoryStarted:
 		h.rotateFile(fmt.Sprintf("%s-%s.jsonl", e.StoryID, h.timestamp()))
-	case QAPhaseStarted:
-		h.rotateFile(fmt.Sprintf("QA-%s-%s.jsonl", e.Phase, h.timestamp()))
+	case QAVerifyStarted:
+		h.rotateFile(fmt.Sprintf("QA-verify-%s.jsonl", h.timestamp()))
+	case QAFixStarted:
+		h.rotateFile(fmt.Sprintf("QA-fix-%s.jsonl", h.timestamp()))
 	}
 
 	h.ensureFile()

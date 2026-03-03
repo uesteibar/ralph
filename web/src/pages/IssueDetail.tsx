@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import type { IssueDetail as IssueDetailType, Activity, StoryInfo, IntegrationTestInfo, ValidTransitionsResponse } from '../api'
+import type { IssueDetail as IssueDetailType, Activity, StoryInfo, IntegrationTestInfo, QAFinding, QAVerification, ValidTransitionsResponse } from '../api'
 import { fetchIssue, resumeIssue, retryIssue, deleteIssue, fetchValidTransitions, transitionIssue, resetIssueFields, pauseIssue } from '../api'
 import { useWebSocket } from '../useWebSocket'
 import type { WSMessage } from '../useWebSocket'
@@ -217,6 +217,125 @@ function StoryList({
               </div>
             )
           })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function QAFindingsList({ qaVerification }: { qaVerification?: QAVerification }) {
+  if (!qaVerification || !qaVerification.findings || qaVerification.findings.length === 0) return null
+
+  const findings = qaVerification.findings
+
+  return (
+    <div
+      style={{
+        border: '1px solid #e5e7eb',
+        borderRadius: '8px',
+        padding: '16px',
+        backgroundColor: '#fff',
+        marginBottom: '16px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+        <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#374151' }}>
+          QA Findings ({findings.filter(f => f.status === 'addressed').length}/{findings.length} addressed)
+        </h3>
+        <span
+          style={{
+            fontSize: '11px',
+            padding: '1px 8px',
+            borderRadius: '4px',
+            fontWeight: 600,
+            backgroundColor: qaVerification.status === 'passed' ? '#d1fae5' : qaVerification.status === 'failed' ? '#fef2f2' : '#f3f4f6',
+            color: qaVerification.status === 'passed' ? '#065f46' : qaVerification.status === 'failed' ? '#dc2626' : '#6b7280',
+          }}
+        >
+          {qaVerification.status.toUpperCase()}
+        </span>
+        {qaVerification.attempts > 0 && (
+          <span style={{ fontSize: '12px', color: '#9ca3af' }}>
+            (attempt {qaVerification.attempts})
+          </span>
+        )}
+      </div>
+
+      {findings.map(finding => {
+        const isAddressed = finding.status === 'addressed'
+        const isError = finding.severity === 'error'
+        const icon = isAddressed ? '\u2705' : isError ? '\uD83D\uDD34' : '\uD83D\uDFE1'
+        return (
+          <FindingItem key={finding.id} finding={finding} icon={icon} isAddressed={isAddressed} />
+        )
+      })}
+    </div>
+  )
+}
+
+function FindingItem({ finding, icon, isAddressed }: { finding: QAFinding; icon: string; isAddressed: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div
+      style={{
+        padding: '8px 0',
+        borderBottom: '1px solid #f3f4f6',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          fontSize: '13px',
+          color: isAddressed ? '#6b7280' : '#374151',
+          cursor: finding.description ? 'pointer' : 'default',
+        }}
+        onClick={() => finding.description && setExpanded(!expanded)}
+      >
+        <span style={{ flexShrink: 0 }}>{icon}</span>
+        <span style={{ fontWeight: 500, color: '#6b7280', flexShrink: 0 }}>{finding.id}</span>
+        <span style={{ textDecoration: isAddressed ? 'line-through' : 'none' }}>{finding.title}</span>
+        <span
+          style={{
+            marginLeft: 'auto',
+            fontSize: '11px',
+            padding: '1px 6px',
+            borderRadius: '4px',
+            fontWeight: 600,
+            backgroundColor: finding.severity === 'error' ? '#fef2f2' : '#fffbeb',
+            color: finding.severity === 'error' ? '#dc2626' : '#92400e',
+            flexShrink: 0,
+          }}
+        >
+          {finding.severity}
+        </span>
+        {finding.description && (
+          <span style={{ color: '#9ca3af', fontSize: '12px', flexShrink: 0 }}>
+            {expanded ? '\u25B2' : '\u25BC'}
+          </span>
+        )}
+      </div>
+      {expanded && finding.description && (
+        <div
+          style={{
+            marginTop: '8px',
+            marginLeft: '28px',
+            padding: '8px 12px',
+            backgroundColor: '#f9fafb',
+            borderRadius: '4px',
+            fontSize: '12px',
+            color: '#4b5563',
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {finding.description}
+          {finding.test_script && (
+            <div style={{ marginTop: '4px', color: '#6b7280' }}>
+              Test script: <code>{finding.test_script}</code>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -575,6 +694,9 @@ export default function IssueDetail() {
         integrationTests={issue.integration_tests ?? []}
         currentStory={issue.state === 'building' ? issue.current_story : undefined}
       />
+
+      {/* QA Findings */}
+      <QAFindingsList qaVerification={issue.qa_verification} />
 
       {/* Agent Logs — visible whenever build events exist */}
       {((issue.build_activity?.length ?? 0) > 0 || streamEvents.length > 0) && (

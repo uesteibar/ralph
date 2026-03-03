@@ -480,7 +480,7 @@ func TestIT005_LogPersistenceAndReplay(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 
 		// QA phase triggers rotation
-		handler.Handle(events.QAPhaseStarted{Phase: "verification"})
+		handler.Handle(events.QAVerifyStarted{})
 		handler.Handle(events.ToolUse{Name: "Bash", Detail: "go test"})
 
 		handler.Close()
@@ -491,7 +491,7 @@ func TestIT005_LogPersistenceAndReplay(t *testing.T) {
 			for i, f := range files {
 				names[i] = filepath.Base(f)
 			}
-			t.Errorf("expected 4 log files (startup, US-001, US-002, QA-verification), got %d: %v", len(files), names)
+			t.Errorf("expected 4 log files (startup, US-001, US-002, QA-verify), got %d: %v", len(files), names)
 		}
 
 		// Verify file name patterns
@@ -507,7 +507,7 @@ func TestIT005_LogPersistenceAndReplay(t *testing.T) {
 			if strings.HasPrefix(name, "US-002-") {
 				hasUS002 = true
 			}
-			if strings.HasPrefix(name, "QA-verification-") {
+			if strings.HasPrefix(name, "QA-verify-") {
 				hasQA = true
 			}
 		}
@@ -521,7 +521,7 @@ func TestIT005_LogPersistenceAndReplay(t *testing.T) {
 			t.Error("missing US-002-*.jsonl file")
 		}
 		if !hasQA {
-			t.Error("missing QA-verification-*.jsonl file")
+			t.Error("missing QA-verify-*.jsonl file")
 		}
 	})
 }
@@ -975,8 +975,12 @@ func getEventTypeName(e events.Event) string {
 		return "IterationStart"
 	case events.StoryStarted:
 		return "StoryStarted"
-	case events.QAPhaseStarted:
-		return "QAPhaseStarted"
+	case events.QAVerifyStarted:
+		return "QAVerifyStarted"
+	case events.QAFixStarted:
+		return "QAFixStarted"
+	case events.QAComplete:
+		return "QAComplete"
 	case events.UsageLimitWait:
 		return "UsageLimitWait"
 	case events.PRDRefresh:

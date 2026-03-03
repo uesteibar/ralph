@@ -9,13 +9,13 @@ import (
 )
 
 type PRD struct {
-	Project               string            `json:"project"`
-	BranchName            string            `json:"branchName"`
-	Description           string            `json:"description"`
-	FeatureOverview       json.RawMessage   `json:"featureOverview,omitempty"`
-	ArchitectureOverview  json.RawMessage   `json:"architectureOverview,omitempty"`
-	UserStories           []Story           `json:"userStories"`
-	IntegrationTests      []IntegrationTest `json:"integrationTests,omitempty"`
+	Project              string           `json:"project"`
+	BranchName           string           `json:"branchName"`
+	Description          string           `json:"description"`
+	FeatureOverview      json.RawMessage  `json:"featureOverview,omitempty"`
+	ArchitectureOverview json.RawMessage  `json:"architectureOverview,omitempty"`
+	UserStories          []Story          `json:"userStories"`
+	QAVerification       *QAVerification  `json:"qaVerification,omitempty"`
 }
 
 type Story struct {
@@ -28,13 +28,20 @@ type Story struct {
 	Notes              string   `json:"notes"`
 }
 
-type IntegrationTest struct {
-	ID          string   `json:"id"`
-	Description string   `json:"description"`
-	Steps       []string `json:"steps"`
-	Passes      bool     `json:"passes"`
-	Failure     string   `json:"failure"`
-	Notes       string   `json:"notes"`
+type QAVerification struct {
+	Status   string      `json:"status"`
+	Attempts int         `json:"attempts"`
+	Findings []QAFinding `json:"findings,omitempty"`
+}
+
+// QAFinding represents a single QA issue discovered during verification.
+type QAFinding struct {
+	ID          string `json:"id"`          // "QA-001", "QA-002", ...
+	Title       string `json:"title"`       // Short description
+	Description string `json:"description"` // What's wrong and how to reproduce
+	Severity    string `json:"severity"`    // "error" | "warning"
+	TestScript  string `json:"testScript"`  // Relative path in qa-scripts/ dir
+	Status      string `json:"status"`      // "found" | "addressed"
 }
 
 // Read loads a PRD from the given JSON file.
@@ -97,15 +104,12 @@ func AllPass(p *PRD) bool {
 	return true
 }
 
-// AllIntegrationTestsPass returns true when every integration test has Passes set to true.
-// Returns true if there are no integration tests.
-func AllIntegrationTestsPass(p *PRD) bool {
-	for _, t := range p.IntegrationTests {
-		if !t.Passes {
-			return false
-		}
+// QAVerificationStatus returns the QA status string, or "pending" if QAVerification is nil.
+func QAVerificationStatus(p *PRD) string {
+	if p.QAVerification == nil {
+		return "pending"
 	}
-	return true
+	return p.QAVerification.Status
 }
 
 // MarkPassing sets the story with the given ID to Passes=true.
@@ -119,15 +123,53 @@ func MarkPassing(p *PRD, storyID string) bool {
 	return false
 }
 
-// FailedIntegrationTests returns all integration tests where Passes is false.
-func FailedIntegrationTests(p *PRD) []IntegrationTest {
-	var failed []IntegrationTest
-	for _, t := range p.IntegrationTests {
-		if !t.Passes {
-			failed = append(failed, t)
+// NextUnfixedFinding returns the first finding with status "found".
+// Returns nil when no unfixed findings remain.
+func NextUnfixedFinding(qa *QAVerification) *QAFinding {
+	if qa == nil {
+		return nil
+	}
+	for i := range qa.Findings {
+		if qa.Findings[i].Status == "found" {
+			return &qa.Findings[i]
 		}
 	}
-	return failed
+	return nil
+}
+
+// MarkFindingAddressed sets the finding with the given ID to status "addressed".
+// Returns true if the finding was found and updated.
+func MarkFindingAddressed(qa *QAVerification, findingID string) bool {
+	if qa == nil {
+		return false
+	}
+	for i := range qa.Findings {
+		if qa.Findings[i].ID == findingID {
+			qa.Findings[i].Status = "addressed"
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveFinding removes the finding with the given ID from the list.
+// Returns true if the finding was found and removed.
+func RemoveFinding(qa *QAVerification, findingID string) bool {
+	if qa == nil {
+		return false
+	}
+	for i, f := range qa.Findings {
+		if f.ID == findingID {
+			qa.Findings = append(qa.Findings[:i], qa.Findings[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// HasUnfixedFindings returns true if any finding has status "found".
+func HasUnfixedFindings(qa *QAVerification) bool {
+	return NextUnfixedFinding(qa) != nil
 }
 
 // RawJSONToString converts a json.RawMessage to a human-readable string.

@@ -7,7 +7,7 @@ describe('STATE_COLORS', () => {
     const expectedStates = [
       'queued', 'refining', 'approved', 'building',
       'in_review', 'addressing_feedback', 'completed',
-      'failed', 'paused',
+      'failed', 'paused', 'qa', 'qa_fix',
     ]
     for (const state of expectedStates) {
       expect(STATE_COLORS[state]).toMatch(/^#[0-9a-f]{6}$/i)
@@ -36,5 +36,17 @@ describe('StateBadge', () => {
     render(<StateBadge state="unknown_state" />)
     const badge = screen.getByText('unknown state')
     expect(badge).toHaveStyle({ backgroundColor: '#6b7280' })
+  })
+
+  it('renders qa state with correct color', () => {
+    render(<StateBadge state="qa" />)
+    const badge = screen.getByText('qa')
+    expect(badge).toHaveStyle({ backgroundColor: STATE_COLORS.qa })
+  })
+
+  it('renders qa_fix state with underscore replaced', () => {
+    render(<StateBadge state="qa_fix" />)
+    const badge = screen.getByText('qa fix')
+    expect(badge).toHaveStyle({ backgroundColor: STATE_COLORS.qa_fix })
   })
 })

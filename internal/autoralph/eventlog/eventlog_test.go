@@ -41,11 +41,35 @@ func TestFormatDetail_StoryStarted(t *testing.T) {
 	}
 }
 
-func TestFormatDetail_QAPhaseStarted(t *testing.T) {
-	got := eventlog.FormatDetail(events.QAPhaseStarted{Phase: "verification"})
-	want := "QA phase: verification"
+func TestFormatDetail_QAVerifyStarted(t *testing.T) {
+	got := eventlog.FormatDetail(events.QAVerifyStarted{})
+	want := "QA verification started"
 	if got != want {
-		t.Errorf("FormatDetail(QAPhaseStarted) = %q, want %q", got, want)
+		t.Errorf("FormatDetail(QAVerifyStarted) = %q, want %q", got, want)
+	}
+}
+
+func TestFormatDetail_QAFixStarted(t *testing.T) {
+	got := eventlog.FormatDetail(events.QAFixStarted{})
+	want := "QA fix started"
+	if got != want {
+		t.Errorf("FormatDetail(QAFixStarted) = %q, want %q", got, want)
+	}
+}
+
+func TestFormatDetail_QAComplete_Passed(t *testing.T) {
+	got := eventlog.FormatDetail(events.QAComplete{Passed: true})
+	want := "QA complete: passed"
+	if got != want {
+		t.Errorf("FormatDetail(QAComplete passed) = %q, want %q", got, want)
+	}
+}
+
+func TestFormatDetail_QAComplete_Failed(t *testing.T) {
+	got := eventlog.FormatDetail(events.QAComplete{Passed: false})
+	want := "QA complete: failed"
+	if got != want {
+		t.Errorf("FormatDetail(QAComplete failed) = %q, want %q", got, want)
 	}
 }
 

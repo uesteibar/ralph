@@ -836,7 +836,7 @@ func TestIsDoneWorkspace_AllPassing(t *testing.T) {
 		t.Fatalf("creating workspace: %v", err)
 	}
 
-	// Write a PRD with all stories and tests passing.
+	// Write a PRD with all stories passing and QA verification passed.
 	p := &prd.PRD{
 		Project:     "test",
 		Description: "test project",
@@ -844,9 +844,7 @@ func TestIsDoneWorkspace_AllPassing(t *testing.T) {
 			{ID: "US-001", Title: "Story 1", Passes: true},
 			{ID: "US-002", Title: "Story 2", Passes: true},
 		},
-		IntegrationTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test 1", Passes: true},
-		},
+		QAVerification: &prd.QAVerification{Status: "passed", Attempts: 1},
 	}
 	prdPath := workspace.PRDPathForWorkspace(dir, "all-pass")
 	data, _ := json.MarshalIndent(p, "", "  ")
@@ -896,7 +894,7 @@ func TestIsDoneWorkspace_NotPassing(t *testing.T) {
 	}
 }
 
-func TestIsDoneWorkspace_FailingIntegrationTest(t *testing.T) {
+func TestIsDoneWorkspace_QAVerificationNotPassed(t *testing.T) {
 	dir := realPath(t, t.TempDir())
 	initTestRepo(t, dir)
 
@@ -913,16 +911,14 @@ func TestIsDoneWorkspace_FailingIntegrationTest(t *testing.T) {
 		t.Fatalf("creating workspace: %v", err)
 	}
 
-	// Write a PRD with all stories passing but a failing integration test.
+	// Write a PRD with all stories passing but QA verification not passed.
 	p := &prd.PRD{
 		Project:     "test",
 		Description: "test project",
 		UserStories: []prd.Story{
 			{ID: "US-001", Title: "Story 1", Passes: true},
 		},
-		IntegrationTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test 1", Passes: false},
-		},
+		QAVerification: &prd.QAVerification{Status: "failed", Attempts: 1},
 	}
 	prdPath := workspace.PRDPathForWorkspace(dir, "fail-it")
 	data, _ := json.MarshalIndent(p, "", "  ")
@@ -931,7 +927,7 @@ func TestIsDoneWorkspace_FailingIntegrationTest(t *testing.T) {
 	}
 
 	if isDoneWorkspace(dir, "fail-it") {
-		t.Error("workspace with failing integration test should NOT be considered done")
+		t.Error("workspace with failed QA verification should NOT be considered done")
 	}
 }
 
@@ -957,10 +953,11 @@ func TestWorkspacesPrune_RemovesDoneWorkspaces(t *testing.T) {
 		}
 	}
 
-	// ws-done: all-passing PRD.
+	// ws-done: all-passing PRD with QA verified.
 	donePRD := &prd.PRD{
-		Project:     "test",
-		UserStories: []prd.Story{{ID: "US-001", Passes: true}},
+		Project:        "test",
+		UserStories:    []prd.Story{{ID: "US-001", Passes: true}},
+		QAVerification: &prd.QAVerification{Status: "passed", Attempts: 1},
 	}
 	data, _ := json.MarshalIndent(donePRD, "", "  ")
 	os.WriteFile(workspace.PRDPathForWorkspace(dir, "ws-done"), data, 0644)

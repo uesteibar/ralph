@@ -335,8 +335,16 @@ func (m *MultiModel) handleLogEvent(index int, e events.Event) {
 		lines = append(lines, fmt.Sprintf("iteration %d/%d", e.Iteration, e.MaxIterations))
 	case events.StoryStarted:
 		lines = append(lines, fmt.Sprintf("working on %s: %s", e.StoryID, e.Title))
-	case events.QAPhaseStarted:
-		lines = append(lines, fmt.Sprintf("all stories pass — running QA %s", e.Phase))
+	case events.QAVerifyStarted:
+		lines = append(lines, "all stories pass — running QA verification")
+	case events.QAFixStarted:
+		lines = append(lines, "QA checks failed — running QA fix")
+	case events.QAComplete:
+		if e.Passed {
+			lines = append(lines, "QA complete — all checks passed")
+		} else {
+			lines = append(lines, "QA complete — checks failed")
+		}
 	case events.UsageLimitWait:
 		lines = append(lines, fmt.Sprintf("  ⏳ Usage limit reached — waiting %s (until %s)",
 			e.WaitDuration, e.ResetAt.Format("3:04pm MST")))
@@ -505,13 +513,6 @@ func renderWorkspaceSummary(ws WorkspaceInfo) string {
 		}
 	}
 
-	testsPass, testsTotal := 0, len(ws.PRD.IntegrationTests)
-	for _, t := range ws.PRD.IntegrationTests {
-		if t.Passes {
-			testsPass++
-		}
-	}
-
 	storyStyle := wsStoppedStyle
 	if storiesTotal > 0 && storiesPass == storiesTotal {
 		storyStyle = wsRunningStyle
@@ -520,14 +521,15 @@ func renderWorkspaceSummary(ws WorkspaceInfo) string {
 	}
 	parts := []string{storyStyle.Render(fmt.Sprintf("%d/%d stories", storiesPass, storiesTotal))}
 
-	if testsTotal > 0 {
-		testStyle := wsStoppedStyle
-		if testsPass == testsTotal {
-			testStyle = wsRunningStyle
+	qaStatus := prd.QAVerificationStatus(ws.PRD)
+	if qaStatus != "pending" {
+		qaStyle := wsStoppedStyle
+		if qaStatus == "passed" {
+			qaStyle = wsRunningStyle
 		} else {
-			testStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"})
+			qaStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"})
 		}
-		parts = append(parts, testStyle.Render(fmt.Sprintf("%d/%d tests", testsPass, testsTotal)))
+		parts = append(parts, qaStyle.Render(fmt.Sprintf("QA: %s", qaStatus)))
 	}
 
 	return strings.Join(parts, "  ")
@@ -565,31 +567,24 @@ func (m MultiModel) renderPRDPane(width, height int) string {
 	}
 	storiesCol := strings.Join(storyLines, "\n")
 
-	// Integration Tests column
-	var testLines []string
-	testLines = append(testLines, prdSectionTitleStyle.Render("Integration Tests"))
-	if len(ws.PRD.IntegrationTests) == 0 {
-		testLines = append(testLines, " (none)")
+	// QA Verification column
+	var qaLines []string
+	qaLines = append(qaLines, prdSectionTitleStyle.Render("QA Verification"))
+	qaStatus := prd.QAVerificationStatus(ws.PRD)
+	if qaStatus == "passed" {
+		qaLines = append(qaLines, fmt.Sprintf(" %s %s", passStyle.Render("✓"), qaStatus))
+	} else if qaStatus == "failed" {
+		qaLines = append(qaLines, fmt.Sprintf(" %s %s", failStyle.Render("✗"), qaStatus))
 	} else {
-		for _, t := range ws.PRD.IntegrationTests {
-			var indicator string
-			if t.Passes {
-				indicator = passStyle.Render("✓")
-			} else {
-				indicator = failStyle.Render("✗")
-			}
-			text := fmt.Sprintf("%s %s", t.ID, t.Description)
-			maxW := halfWidth - 5
-			if maxW > 0 && len(text) > maxW {
-				text = text[:maxW-1] + "…"
-			}
-			testLines = append(testLines, fmt.Sprintf(" %s %s", indicator, text))
-		}
+		qaLines = append(qaLines, fmt.Sprintf(" - %s", qaStatus))
 	}
-	testsCol := strings.Join(testLines, "\n")
+	if ws.PRD.QAVerification != nil && ws.PRD.QAVerification.Attempts > 0 {
+		qaLines = append(qaLines, fmt.Sprintf(" Attempts: %d", ws.PRD.QAVerification.Attempts))
+	}
+	qaCol := strings.Join(qaLines, "\n")
 
 	leftCol := lipgloss.NewStyle().Width(halfWidth).Render(storiesCol)
-	rightCol := lipgloss.NewStyle().Width(halfWidth).Render(testsCol)
+	rightCol := lipgloss.NewStyle().Width(halfWidth).Render(qaCol)
 
 	pane := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, rightCol)
 	return prdPaneBorderStyle.Width(width).Height(height).Render(pane)
@@ -670,7 +665,7 @@ func isResumable(ws WorkspaceInfo) bool {
 	if ws.Running || ws.PRD == nil {
 		return false
 	}
-	return !(prd.AllPass(ws.PRD) && prd.AllIntegrationTestsPass(ws.PRD))
+	return !(prd.AllPass(ws.PRD) && prd.QAVerificationStatus(ws.PRD) == "passed")
 }
 
 // --- Test accessors ---

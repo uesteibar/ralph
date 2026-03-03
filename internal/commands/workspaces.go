@@ -262,7 +262,7 @@ func workspacesSwitch(args []string) error {
 
 // isDoneWorkspace checks if a workspace is considered done:
 // - No PRD file exists, OR
-// - PRD has all userStories with passes:true AND all integrationTests with passes:true
+// - PRD has all userStories with passes:true AND QA verification passed
 func isDoneWorkspace(repoPath, name string) bool {
 	prdPath := workspace.PRDPathForWorkspace(repoPath, name)
 	p, err := prd.Read(prdPath)
@@ -270,7 +270,7 @@ func isDoneWorkspace(repoPath, name string) bool {
 		// No PRD file or unreadable → considered done.
 		return true
 	}
-	return prd.AllPass(p) && prd.AllIntegrationTestsPass(p)
+	return prd.AllPass(p) && prd.QAVerificationStatus(p) == "passed"
 }
 
 func workspacesPrune(args []string, in io.Reader) error {

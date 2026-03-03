@@ -144,9 +144,9 @@ func TestModel_HandleEvent_StoryStarted_UpdatesSidebar(t *testing.T) {
 	}
 }
 
-func TestModel_HandleEvent_QAPhaseStarted(t *testing.T) {
+func TestModel_HandleEvent_QAVerifyStarted(t *testing.T) {
 	m := NewModel("ws", "")
-	m.handleEvent(events.QAPhaseStarted{Phase: "verification"})
+	m.handleEvent(events.QAVerifyStarted{})
 
 	if m.CurrentStory() != "QA verification" {
 		t.Errorf("expected current story 'QA verification', got %q", m.CurrentStory())
@@ -158,7 +158,49 @@ func TestModel_HandleEvent_QAPhaseStarted(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d", len(m.Lines()))
 	}
 	if !strings.Contains(m.Lines()[0], "all stories pass — running QA verification") {
-		t.Errorf("expected QA phase line, got %q", m.Lines()[0])
+		t.Errorf("expected QA verify line, got %q", m.Lines()[0])
+	}
+}
+
+func TestModel_HandleEvent_QAFixStarted(t *testing.T) {
+	m := NewModel("ws", "")
+	m.handleEvent(events.QAFixStarted{})
+
+	if m.CurrentStory() != "QA fix" {
+		t.Errorf("expected current story 'QA fix', got %q", m.CurrentStory())
+	}
+	if m.ActiveStoryID() != "" {
+		t.Errorf("expected activeStoryID to be empty, got %q", m.ActiveStoryID())
+	}
+	if len(m.Lines()) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(m.Lines()))
+	}
+	if !strings.Contains(m.Lines()[0], "QA checks failed — running QA fix") {
+		t.Errorf("expected QA fix line, got %q", m.Lines()[0])
+	}
+}
+
+func TestModel_HandleEvent_QAComplete_Passed(t *testing.T) {
+	m := NewModel("ws", "")
+	m.handleEvent(events.QAComplete{Passed: true})
+
+	if len(m.Lines()) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(m.Lines()))
+	}
+	if !strings.Contains(m.Lines()[0], "QA complete — all checks passed") {
+		t.Errorf("expected QA complete passed line, got %q", m.Lines()[0])
+	}
+}
+
+func TestModel_HandleEvent_QAComplete_Failed(t *testing.T) {
+	m := NewModel("ws", "")
+	m.handleEvent(events.QAComplete{Passed: false})
+
+	if len(m.Lines()) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(m.Lines()))
+	}
+	if !strings.Contains(m.Lines()[0], "QA complete — checks failed") {
+		t.Errorf("expected QA complete failed line, got %q", m.Lines()[0])
 	}
 }
 
@@ -519,17 +561,14 @@ func TestModel_PRDLoadedMsg_UpdatesSidebar(t *testing.T) {
 			{ID: "US-001", Title: "Auth", Passes: true},
 			{ID: "US-002", Title: "TUI", Passes: false},
 		},
-		IntegrationTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Login works", Passes: true},
-		},
 	}
 
 	updated, _ := m.Update(prdLoadedMsg{prd: testPRD})
 	m = updated.(Model)
 
 	items := m.Sidebar().Items()
-	if len(items) != 3 {
-		t.Fatalf("expected 3 sidebar items, got %d", len(items))
+	if len(items) != 2 {
+		t.Fatalf("expected 2 sidebar items, got %d", len(items))
 	}
 
 	// Stories
@@ -538,11 +577,6 @@ func TestModel_PRDLoadedMsg_UpdatesSidebar(t *testing.T) {
 	}
 	if items[1].id != "US-002" || items[1].passes {
 		t.Errorf("expected US-002 not passing, got %+v", items[1])
-	}
-
-	// Integration test
-	if items[2].id != "IT-001" || !items[2].isTest || !items[2].passes {
-		t.Errorf("expected IT-001 as passing test, got %+v", items[2])
 	}
 }
 
@@ -687,56 +721,6 @@ func TestModel_EnterKey_OpensStoryOverlay(t *testing.T) {
 	}
 	if !strings.Contains(m.Overlay().content, "Use JWT") {
 		t.Error("expected overlay to contain notes")
-	}
-}
-
-func TestModel_EnterKey_OpensTestOverlay(t *testing.T) {
-	m := NewModel("ws", "")
-	testPRD := &prd.PRD{
-		UserStories: []prd.Story{
-			{ID: "US-001", Title: "Auth", Passes: true},
-		},
-		IntegrationTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Login test",
-				Steps:   []string{"Go to login", "Enter creds", "Verify"},
-				Passes:  false,
-				Failure: "Button not found",
-				Notes:   "Needs headless browser"},
-		},
-	}
-
-	// Load PRD
-	updated, _ := m.Update(prdLoadedMsg{prd: testPRD})
-	m = updated.(Model)
-
-	// Make ready
-	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = ready.(Model)
-
-	// Switch to sidebar and navigate to test item
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m = updated.(Model)
-
-	// Press Enter on IT-001
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-
-	if !m.Overlay().visible {
-		t.Fatal("expected overlay to be visible")
-	}
-	if !strings.Contains(m.Overlay().content, "IT-001") {
-		t.Error("expected overlay to contain test ID")
-	}
-	if !strings.Contains(m.Overlay().content, "Login test") {
-		t.Error("expected overlay to contain description")
-	}
-	if !strings.Contains(m.Overlay().content, "1. Go to login") {
-		t.Error("expected overlay to contain numbered steps")
-	}
-	if !strings.Contains(m.Overlay().content, "Button not found") {
-		t.Error("expected overlay to contain failure details")
 	}
 }
 
@@ -1021,86 +1005,6 @@ func TestIT005_StoryDetailOverlayShowsCorrectData(t *testing.T) {
 	view = m.View()
 	if !strings.Contains(view, "Stories & Tests") {
 		t.Error("expected split-pane view to be restored after Esc")
-	}
-}
-
-// --- IT-006: Integration test detail overlay shows failure info ---
-
-func TestIT006_IntegrationTestDetailOverlayShowsFailureInfo(t *testing.T) {
-	dir := t.TempDir()
-	prdPath := filepath.Join(dir, "prd.json")
-
-	testPRD := prd.PRD{
-		UserStories: []prd.Story{
-			{ID: "US-001", Title: "Auth", Passes: true},
-		},
-		IntegrationTests: []prd.IntegrationTest{
-			{
-				ID:          "IT-099",
-				Description: "End-to-end checkout flow",
-				Steps: []string{
-					"Add item to cart",
-					"Proceed to checkout",
-					"Enter payment details",
-					"Confirm order",
-				},
-				Passes:  false,
-				Failure: "Payment gateway returned 503 Service Unavailable",
-				Notes:   "Requires mock payment service",
-			},
-		},
-	}
-	data, _ := json.MarshalIndent(testPRD, "", "  ")
-	os.WriteFile(prdPath, data, 0644)
-
-	m := NewModel("ws", prdPath)
-	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = ready.(Model)
-
-	// Load PRD
-	cmd := m.Init()
-	msg := cmd()
-	updated, _ := m.Update(msg)
-	m = updated.(Model)
-
-	// Navigate to the integration test (item index 1, after US-001)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-
-	// Verify overlay is visible
-	if !m.Overlay().visible {
-		t.Fatal("expected overlay to be visible")
-	}
-
-	// Verify rendered view contains test details
-	view := m.View()
-	checks := []string{
-		"IT-099",
-		"End-to-end checkout flow",
-		"1. Add item to cart",
-		"2. Proceed to checkout",
-		"3. Enter payment details",
-		"4. Confirm order",
-		"FAIL",
-		"Payment gateway returned 503 Service Unavailable",
-		"Requires mock payment service",
-	}
-	for _, check := range checks {
-		if !strings.Contains(view, check) {
-			t.Errorf("expected view to contain %q", check)
-		}
-	}
-
-	// Press Esc to close
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = updated.(Model)
-
-	if m.Overlay().visible {
-		t.Error("expected overlay to be closed after Esc")
 	}
 }
 

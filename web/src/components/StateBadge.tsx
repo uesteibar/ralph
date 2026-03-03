@@ -9,6 +9,8 @@ export const STATE_COLORS: Record<string, string> = {
   completed: '#22c55e',
   failed: '#dc2626',
   paused: '#9ca3af',
+  qa: '#6366f1',
+  qa_fix: '#ec4899',
 }
 
 export function StateBadge({ state }: { state: string }) {

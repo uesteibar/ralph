@@ -140,34 +140,20 @@ func TestRead_InvalidJSON_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestIntegrationTests_Roundtrip(t *testing.T) {
+func TestQAVerification_Roundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prd.json")
 
 	original := &PRD{
 		Project:     "TestProject",
 		BranchName:  "ralph/test",
-		Description: "Test with integration tests",
+		Description: "Test with QA verification",
 		UserStories: []Story{
 			{ID: "US-001", Title: "First", Passes: true},
 		},
-		IntegrationTests: []IntegrationTest{
-			{
-				ID:          "IT-001",
-				Description: "Test login flow",
-				Steps:       []string{"Open login page", "Enter credentials", "Click submit"},
-				Passes:      false,
-				Failure:     "Button not found",
-				Notes:       "Needs UI update",
-			},
-			{
-				ID:          "IT-002",
-				Description: "Test logout",
-				Steps:       []string{"Click logout"},
-				Passes:      true,
-				Failure:     "",
-				Notes:       "",
-			},
+		QAVerification: &QAVerification{
+			Status:   "passed",
+			Attempts: 2,
 		},
 	}
 
@@ -180,44 +166,21 @@ func TestIntegrationTests_Roundtrip(t *testing.T) {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if len(loaded.IntegrationTests) != 2 {
-		t.Fatalf("IntegrationTests count = %d, want 2", len(loaded.IntegrationTests))
+	if loaded.QAVerification == nil {
+		t.Fatal("QAVerification should not be nil")
 	}
-
-	it := loaded.IntegrationTests[0]
-	if it.ID != "IT-001" {
-		t.Errorf("IT[0].ID = %q, want %q", it.ID, "IT-001")
+	if loaded.QAVerification.Status != "passed" {
+		t.Errorf("QAVerification.Status = %q, want %q", loaded.QAVerification.Status, "passed")
 	}
-	if it.Description != "Test login flow" {
-		t.Errorf("IT[0].Description = %q, want %q", it.Description, "Test login flow")
-	}
-	if len(it.Steps) != 3 {
-		t.Errorf("IT[0].Steps count = %d, want 3", len(it.Steps))
-	}
-	if it.Steps[0] != "Open login page" {
-		t.Errorf("IT[0].Steps[0] = %q, want %q", it.Steps[0], "Open login page")
-	}
-	if it.Passes != false {
-		t.Errorf("IT[0].Passes = %v, want false", it.Passes)
-	}
-	if it.Failure != "Button not found" {
-		t.Errorf("IT[0].Failure = %q, want %q", it.Failure, "Button not found")
-	}
-	if it.Notes != "Needs UI update" {
-		t.Errorf("IT[0].Notes = %q, want %q", it.Notes, "Needs UI update")
-	}
-
-	it2 := loaded.IntegrationTests[1]
-	if it2.Passes != true {
-		t.Errorf("IT[1].Passes = %v, want true", it2.Passes)
+	if loaded.QAVerification.Attempts != 2 {
+		t.Errorf("QAVerification.Attempts = %d, want 2", loaded.QAVerification.Attempts)
 	}
 }
 
-func TestRead_PRDWithoutIntegrationTests_ParsesCorrectly(t *testing.T) {
+func TestRead_PRDWithoutQAVerification_ParsesCorrectly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prd.json")
 
-	// Write a PRD JSON without integrationTests field
 	jsonData := `{
   "project": "OldProject",
   "branchName": "ralph/old-feature",
@@ -241,82 +204,33 @@ func TestRead_PRDWithoutIntegrationTests_ParsesCorrectly(t *testing.T) {
 	if len(loaded.UserStories) != 1 {
 		t.Errorf("UserStories count = %d, want 1", len(loaded.UserStories))
 	}
-	// IntegrationTests should be nil or empty
-	if len(loaded.IntegrationTests) != 0 {
-		t.Errorf("IntegrationTests count = %d, want 0 for legacy PRD", len(loaded.IntegrationTests))
+	if loaded.QAVerification != nil {
+		t.Errorf("QAVerification should be nil for legacy PRD, got %+v", loaded.QAVerification)
 	}
 }
 
-func TestAllIntegrationTestsPass_Empty_ReturnsTrue(t *testing.T) {
+func TestQAVerificationStatus_Nil_ReturnsPending(t *testing.T) {
 	p := &PRD{}
-	if !AllIntegrationTestsPass(p) {
-		t.Error("AllIntegrationTestsPass should be true when there are no integration tests")
+	if got := QAVerificationStatus(p); got != "pending" {
+		t.Errorf("QAVerificationStatus = %q, want %q", got, "pending")
 	}
 }
 
-func TestAllIntegrationTestsPass_AllTrue(t *testing.T) {
+func TestQAVerificationStatus_Passed(t *testing.T) {
 	p := &PRD{
-		IntegrationTests: []IntegrationTest{
-			{ID: "IT-001", Passes: true},
-			{ID: "IT-002", Passes: true},
-		},
+		QAVerification: &QAVerification{Status: "passed", Attempts: 1},
 	}
-	if !AllIntegrationTestsPass(p) {
-		t.Error("AllIntegrationTestsPass should be true when all tests pass")
+	if got := QAVerificationStatus(p); got != "passed" {
+		t.Errorf("QAVerificationStatus = %q, want %q", got, "passed")
 	}
 }
 
-func TestAllIntegrationTestsPass_SomeFailing(t *testing.T) {
+func TestQAVerificationStatus_Failed(t *testing.T) {
 	p := &PRD{
-		IntegrationTests: []IntegrationTest{
-			{ID: "IT-001", Passes: true},
-			{ID: "IT-002", Passes: false},
-		},
+		QAVerification: &QAVerification{Status: "failed", Attempts: 3},
 	}
-	if AllIntegrationTestsPass(p) {
-		t.Error("AllIntegrationTestsPass should be false when some tests fail")
-	}
-}
-
-func TestAllIntegrationTestsPass_AllFailing(t *testing.T) {
-	p := &PRD{
-		IntegrationTests: []IntegrationTest{
-			{ID: "IT-001", Passes: false},
-			{ID: "IT-002", Passes: false},
-		},
-	}
-	if AllIntegrationTestsPass(p) {
-		t.Error("AllIntegrationTestsPass should be false when all tests fail")
-	}
-}
-
-func TestFailedIntegrationTests_ReturnsOnlyFailing(t *testing.T) {
-	p := &PRD{
-		IntegrationTests: []IntegrationTest{
-			{ID: "IT-001", Description: "Test 1", Passes: true},
-			{ID: "IT-002", Description: "Test 2", Passes: false},
-			{ID: "IT-003", Description: "Test 3", Passes: false},
-		},
-	}
-
-	failed := FailedIntegrationTests(p)
-
-	if len(failed) != 2 {
-		t.Fatalf("expected 2 failed tests, got %d", len(failed))
-	}
-	if failed[0].ID != "IT-002" {
-		t.Errorf("failed[0].ID = %q, want %q", failed[0].ID, "IT-002")
-	}
-	if failed[1].ID != "IT-003" {
-		t.Errorf("failed[1].ID = %q, want %q", failed[1].ID, "IT-003")
-	}
-}
-
-func TestFailedIntegrationTests_Empty_ReturnsNil(t *testing.T) {
-	p := &PRD{}
-	failed := FailedIntegrationTests(p)
-	if failed != nil {
-		t.Errorf("expected nil for empty PRD, got %v", failed)
+	if got := QAVerificationStatus(p); got != "failed" {
+		t.Errorf("QAVerificationStatus = %q, want %q", got, "failed")
 	}
 }
 
@@ -379,7 +293,6 @@ func TestOverviewFields_Roundtrip_Object(t *testing.T) {
 	if got == "" {
 		t.Fatal("FeatureOverview should not be empty")
 	}
-	// Object should contain the key
 	if !strings.Contains(got, "problem") {
 		t.Errorf("FeatureOverview = %q, should contain 'problem'", got)
 	}
@@ -423,15 +336,165 @@ func TestRead_PRDWithoutOverviewFields_ParsesCorrectly(t *testing.T) {
 	}
 }
 
-func TestFailedIntegrationTests_AllPassing_ReturnsNil(t *testing.T) {
-	p := &PRD{
-		IntegrationTests: []IntegrationTest{
-			{ID: "IT-001", Passes: true},
-			{ID: "IT-002", Passes: true},
+func TestQAFinding_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prd.json")
+
+	original := &PRD{
+		Project:     "TestProject",
+		BranchName:  "ralph/test",
+		Description: "Test with QA findings",
+		UserStories: []Story{{ID: "US-001", Passes: true}},
+		QAVerification: &QAVerification{
+			Status:   "failed",
+			Attempts: 1,
+			Findings: []QAFinding{
+				{ID: "QA-001", Title: "Login fails", Description: "Login page returns 500", Severity: "error", TestScript: "test-login.sh", Status: "found"},
+				{ID: "QA-002", Title: "Slow query", Description: "Query takes >5s", Severity: "warning", TestScript: "test-perf.sh", Status: "addressed"},
+			},
 		},
 	}
-	failed := FailedIntegrationTests(p)
-	if failed != nil {
-		t.Errorf("expected nil when all tests pass, got %v", failed)
+
+	if err := Write(path, original); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	loaded, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if loaded.QAVerification == nil {
+		t.Fatal("QAVerification should not be nil")
+	}
+	if len(loaded.QAVerification.Findings) != 2 {
+		t.Fatalf("Findings count = %d, want 2", len(loaded.QAVerification.Findings))
+	}
+	f := loaded.QAVerification.Findings[0]
+	if f.ID != "QA-001" || f.Title != "Login fails" || f.Severity != "error" || f.Status != "found" {
+		t.Errorf("First finding = %+v, unexpected", f)
+	}
+}
+
+func TestNextUnfixedFinding_ReturnsFirstFound(t *testing.T) {
+	qa := &QAVerification{
+		Findings: []QAFinding{
+			{ID: "QA-001", Status: "addressed"},
+			{ID: "QA-002", Status: "found"},
+			{ID: "QA-003", Status: "found"},
+		},
+	}
+	f := NextUnfixedFinding(qa)
+	if f == nil || f.ID != "QA-002" {
+		t.Errorf("NextUnfixedFinding = %v, want QA-002", f)
+	}
+}
+
+func TestNextUnfixedFinding_AllAddressed_ReturnsNil(t *testing.T) {
+	qa := &QAVerification{
+		Findings: []QAFinding{
+			{ID: "QA-001", Status: "addressed"},
+		},
+	}
+	if f := NextUnfixedFinding(qa); f != nil {
+		t.Errorf("expected nil, got %v", f)
+	}
+}
+
+func TestNextUnfixedFinding_NilQA_ReturnsNil(t *testing.T) {
+	if f := NextUnfixedFinding(nil); f != nil {
+		t.Errorf("expected nil, got %v", f)
+	}
+}
+
+func TestMarkFindingAddressed_ExistingFinding(t *testing.T) {
+	qa := &QAVerification{
+		Findings: []QAFinding{
+			{ID: "QA-001", Status: "found"},
+			{ID: "QA-002", Status: "found"},
+		},
+	}
+	if !MarkFindingAddressed(qa, "QA-001") {
+		t.Error("expected true for existing finding")
+	}
+	if qa.Findings[0].Status != "addressed" {
+		t.Errorf("Status = %q, want addressed", qa.Findings[0].Status)
+	}
+	if qa.Findings[1].Status != "found" {
+		t.Error("QA-002 should still be found")
+	}
+}
+
+func TestMarkFindingAddressed_NonexistentFinding(t *testing.T) {
+	qa := &QAVerification{
+		Findings: []QAFinding{{ID: "QA-001", Status: "found"}},
+	}
+	if MarkFindingAddressed(qa, "QA-999") {
+		t.Error("expected false for nonexistent finding")
+	}
+}
+
+func TestMarkFindingAddressed_NilQA(t *testing.T) {
+	if MarkFindingAddressed(nil, "QA-001") {
+		t.Error("expected false for nil QA")
+	}
+}
+
+func TestRemoveFinding_ExistingFinding(t *testing.T) {
+	qa := &QAVerification{
+		Findings: []QAFinding{
+			{ID: "QA-001"},
+			{ID: "QA-002"},
+			{ID: "QA-003"},
+		},
+	}
+	if !RemoveFinding(qa, "QA-002") {
+		t.Error("expected true for existing finding")
+	}
+	if len(qa.Findings) != 2 {
+		t.Fatalf("Findings count = %d, want 2", len(qa.Findings))
+	}
+	if qa.Findings[0].ID != "QA-001" || qa.Findings[1].ID != "QA-003" {
+		t.Errorf("Remaining = [%s, %s], want [QA-001, QA-003]", qa.Findings[0].ID, qa.Findings[1].ID)
+	}
+}
+
+func TestRemoveFinding_NonexistentFinding(t *testing.T) {
+	qa := &QAVerification{
+		Findings: []QAFinding{{ID: "QA-001"}},
+	}
+	if RemoveFinding(qa, "QA-999") {
+		t.Error("expected false for nonexistent finding")
+	}
+}
+
+func TestRemoveFinding_NilQA(t *testing.T) {
+	if RemoveFinding(nil, "QA-001") {
+		t.Error("expected false for nil QA")
+	}
+}
+
+func TestHasUnfixedFindings_WithFound(t *testing.T) {
+	qa := &QAVerification{
+		Findings: []QAFinding{{ID: "QA-001", Status: "found"}},
+	}
+	if !HasUnfixedFindings(qa) {
+		t.Error("expected true with found findings")
+	}
+}
+
+func TestHasUnfixedFindings_AllAddressed(t *testing.T) {
+	qa := &QAVerification{
+		Findings: []QAFinding{{ID: "QA-001", Status: "addressed"}},
+	}
+	if HasUnfixedFindings(qa) {
+		t.Error("expected false when all addressed")
+	}
+}
+
+func TestHasUnfixedFindings_Empty(t *testing.T) {
+	qa := &QAVerification{}
+	if HasUnfixedFindings(qa) {
+		t.Error("expected false with no findings")
 	}
 }

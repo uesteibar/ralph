@@ -273,13 +273,17 @@ func (m *Model) openOverlay() {
 
 	item := items[cursor]
 	var content string
-	if item.isTest {
-		for _, t := range m.currentPRD.IntegrationTests {
-			if t.ID == item.id {
-				content = renderTestOverlay(t)
-				break
+	if item.isFinding {
+		if m.currentPRD.QAVerification != nil {
+			for _, f := range m.currentPRD.QAVerification.Findings {
+				if f.ID == item.id {
+					content = renderFindingOverlay(f)
+					break
+				}
 			}
 		}
+	} else if item.isTest {
+		// Integration tests removed — no overlay content for test items
 	} else {
 		for _, s := range m.currentPRD.UserStories {
 			if s.ID == item.id {
@@ -325,11 +329,34 @@ func (m *Model) handleEvent(e events.Event) {
 		// Update sidebar to highlight the active story
 		m.sidebar.setActiveStory(e.StoryID)
 
-	case events.QAPhaseStarted:
+	case events.QAVerifyStarted:
 		m.activeStoryID = ""
-		m.currentStory = fmt.Sprintf("QA %s", e.Phase)
-		m.lines = append(m.lines, fmt.Sprintf("all stories pass — running QA %s", e.Phase))
+		m.currentStory = "QA verification"
+		m.lines = append(m.lines, "all stories pass — running QA verification")
 		m.sidebar.setActiveStory("")
+
+	case events.QAFixStarted:
+		m.activeStoryID = ""
+		m.currentStory = "QA fix"
+		m.lines = append(m.lines, "QA checks failed — running QA fix")
+		m.sidebar.setActiveStory("")
+
+	case events.QAComplete:
+		if e.Passed {
+			m.lines = append(m.lines, "QA complete — all checks passed")
+		} else {
+			m.lines = append(m.lines, "QA complete — checks failed")
+		}
+
+	case events.QAFindingReported:
+		icon := "🔴"
+		if e.Severity == "warning" {
+			icon = "🟡"
+		}
+		m.lines = append(m.lines, fmt.Sprintf("  %s QA finding %s: %s", icon, e.FindingID, e.Title))
+
+	case events.QAFindingResolved:
+		m.lines = append(m.lines, fmt.Sprintf("  ✅ QA finding %s resolved", e.FindingID))
 
 	case events.UsageLimitWait:
 		m.lines = append(m.lines, fmt.Sprintf("  ⏳ Usage limit reached — waiting %s (until %s)",

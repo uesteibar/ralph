@@ -43,7 +43,8 @@ func TestValidState_AllKnownStates(t *testing.T) {
 	states := []IssueState{
 		StateQueued, StateRefining, StateWaitingApproval, StateApproved,
 		StateBuilding, StateInReview, StateAddressingFeedback,
-		StateFixingChecks, StateCompleted, StateFailed, StatePaused,
+		StateFixingChecks, StateQA, StateQAFix,
+		StateCompleted, StateFailed, StatePaused,
 	}
 	for _, s := range states {
 		if !ValidState(s) {
@@ -529,5 +530,102 @@ func TestEvaluate_PausedState_NoTransition_WhenNoneRegistered(t *testing.T) {
 	_, ok := sm.Evaluate(issue)
 	if ok {
 		t.Error("expected no transition from paused state when none registered")
+	}
+}
+
+// --- QA States ---
+
+func TestRegister_QAStates_ValidTransitions(t *testing.T) {
+	sm := New(nil)
+
+	transitions := []Transition{
+		{From: StateBuilding, To: StateQA},
+		{From: StateQA, To: StateInReview},
+		{From: StateQA, To: StateQAFix},
+		{From: StateQAFix, To: StateQA},
+		{From: StateQA, To: StatePaused},
+	}
+	for _, tr := range transitions {
+		if err := sm.Register(tr); err != nil {
+			t.Fatalf("unexpected error registering %s -> %s: %v", tr.From, tr.To, err)
+		}
+	}
+}
+
+func TestEvaluateAndExecute_QATransitions(t *testing.T) {
+	d := testDB(t)
+	sm := New(d)
+
+	qaPass := false
+	sm.Register(Transition{From: StateBuilding, To: StateQA})
+	sm.Register(Transition{
+		From:      StateQA,
+		To:        StateInReview,
+		Condition: func(db.Issue) bool { return qaPass },
+	})
+	sm.Register(Transition{
+		From:      StateQA,
+		To:        StateQAFix,
+		Condition: func(db.Issue) bool { return !qaPass },
+	})
+	sm.Register(Transition{From: StateQAFix, To: StateQA})
+
+	issue := createTestIssue(t, d, "building")
+
+	// building -> qa
+	tr, ok := sm.Evaluate(issue)
+	if !ok {
+		t.Fatal("expected transition from building")
+	}
+	if tr.To != StateQA {
+		t.Fatalf("expected transition to qa, got %s", tr.To)
+	}
+	if err := sm.Execute(tr, issue); err != nil {
+		t.Fatalf("executing building -> qa: %v", err)
+	}
+
+	// qa -> qa_fix (QA fails)
+	issue, _ = d.GetIssue(issue.ID)
+	tr, ok = sm.Evaluate(issue)
+	if !ok {
+		t.Fatal("expected transition from qa")
+	}
+	if tr.To != StateQAFix {
+		t.Fatalf("expected transition to qa_fix, got %s", tr.To)
+	}
+	if err := sm.Execute(tr, issue); err != nil {
+		t.Fatalf("executing qa -> qa_fix: %v", err)
+	}
+
+	// qa_fix -> qa
+	issue, _ = d.GetIssue(issue.ID)
+	tr, ok = sm.Evaluate(issue)
+	if !ok {
+		t.Fatal("expected transition from qa_fix")
+	}
+	if tr.To != StateQA {
+		t.Fatalf("expected transition to qa, got %s", tr.To)
+	}
+	if err := sm.Execute(tr, issue); err != nil {
+		t.Fatalf("executing qa_fix -> qa: %v", err)
+	}
+
+	// qa -> in_review (QA passes)
+	qaPass = true
+	issue, _ = d.GetIssue(issue.ID)
+	tr, ok = sm.Evaluate(issue)
+	if !ok {
+		t.Fatal("expected transition from qa")
+	}
+	if tr.To != StateInReview {
+		t.Fatalf("expected transition to in_review, got %s", tr.To)
+	}
+	if err := sm.Execute(tr, issue); err != nil {
+		t.Fatalf("executing qa -> in_review: %v", err)
+	}
+
+	final, _ := d.GetIssue(issue.ID)
+	if final.State != "in_review" {
+		t.Errorf("expected final state in_review, got %s", final.State)
 	}
 }

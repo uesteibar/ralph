@@ -954,8 +954,8 @@ This creates `.ralph/prompts/` with all templates:
 | Template | Used by | Purpose |
 |----------|---------|---------|
 | `loop_iteration.md` | `ralph run` | Main prompt for implementing a single story |
-| `qa_verification.md` | `ralph run` | QA agent prompt for integration test verification |
-| `qa_fix.md` | `ralph run` | QA fix agent prompt for resolving test failures |
+| `qa_verify.md` | `ralph run` | Adversarial QA agent prompt for feature verification |
+| `qa_fix.md` | `ralph run` | QA fix agent prompt for resolving QA failures |
 | `prd_new.md` | `ralph new` | Interactive PRD creation conversation |
 | `chat_system.md` | `ralph chat` | System prompt for free-form chat sessions |
 | `rebase_conflict.md` | `ralph rebase` | Conflict resolution prompt |

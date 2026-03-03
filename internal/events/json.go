@@ -7,15 +7,19 @@ import (
 
 // Type discriminator values for JSON serialization.
 const (
-	typeToolUse         = "tool_use"
-	typeAgentText       = "agent_text"
-	typeInvocationDone  = "invocation_done"
-	typeIterationStart  = "iteration_start"
-	typeStoryStarted    = "story_started"
-	typeQAPhaseStarted  = "qa_phase_started"
-	typeUsageLimitWait  = "usage_limit_wait"
-	typeLogMessage      = "log_message"
-	typePRDRefresh      = "prd_refresh"
+	typeToolUse            = "tool_use"
+	typeAgentText          = "agent_text"
+	typeInvocationDone     = "invocation_done"
+	typeIterationStart     = "iteration_start"
+	typeStoryStarted       = "story_started"
+	typeQAVerifyStarted    = "qa_verify_started"
+	typeQAFixStarted       = "qa_fix_started"
+	typeQAComplete         = "qa_complete"
+	typeQAFindingReported  = "qa_finding_reported"
+	typeQAFindingResolved  = "qa_finding_resolved"
+	typeUsageLimitWait     = "usage_limit_wait"
+	typeLogMessage         = "log_message"
+	typePRDRefresh         = "prd_refresh"
 )
 
 // envelope wraps an event with a type discriminator for JSON serialization.
@@ -38,8 +42,16 @@ func MarshalEvent(e Event) ([]byte, error) {
 		typeName = typeIterationStart
 	case StoryStarted:
 		typeName = typeStoryStarted
-	case QAPhaseStarted:
-		typeName = typeQAPhaseStarted
+	case QAVerifyStarted:
+		typeName = typeQAVerifyStarted
+	case QAFixStarted:
+		typeName = typeQAFixStarted
+	case QAComplete:
+		typeName = typeQAComplete
+	case QAFindingReported:
+		typeName = typeQAFindingReported
+	case QAFindingResolved:
+		typeName = typeQAFindingResolved
 	case UsageLimitWait:
 		typeName = typeUsageLimitWait
 	case LogMessage:
@@ -101,8 +113,24 @@ func UnmarshalEvent(b []byte) (Event, error) {
 			return nil, err
 		}
 		return e, nil
-	case typeQAPhaseStarted:
-		var e QAPhaseStarted
+	case typeQAVerifyStarted:
+		return QAVerifyStarted{}, nil
+	case typeQAFixStarted:
+		return QAFixStarted{}, nil
+	case typeQAComplete:
+		var e QAComplete
+		if err := json.Unmarshal(env.Data, &e); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case typeQAFindingReported:
+		var e QAFindingReported
+		if err := json.Unmarshal(env.Data, &e); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case typeQAFindingResolved:
+		var e QAFindingResolved
 		if err := json.Unmarshal(env.Data, &e); err != nil {
 			return nil, err
 		}

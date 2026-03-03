@@ -115,15 +115,51 @@ func TestPlainTextHandler_StoryStarted(t *testing.T) {
 	}
 }
 
-func TestPlainTextHandler_QAPhaseStarted(t *testing.T) {
+func TestPlainTextHandler_QAVerifyStarted(t *testing.T) {
 	var buf bytes.Buffer
 	h := &PlainTextHandler{W: &buf}
 
-	h.Handle(QAPhaseStarted{Phase: "verification"})
+	h.Handle(QAVerifyStarted{})
 
 	output := buf.String()
 	if !strings.Contains(output, "all stories pass — running QA verification") {
-		t.Errorf("expected QA phase output, got %q", output)
+		t.Errorf("expected QA verify output, got %q", output)
+	}
+}
+
+func TestPlainTextHandler_QAFixStarted(t *testing.T) {
+	var buf bytes.Buffer
+	h := &PlainTextHandler{W: &buf}
+
+	h.Handle(QAFixStarted{})
+
+	output := buf.String()
+	if !strings.Contains(output, "QA checks failed — running QA fix") {
+		t.Errorf("expected QA fix output, got %q", output)
+	}
+}
+
+func TestPlainTextHandler_QAComplete_Passed(t *testing.T) {
+	var buf bytes.Buffer
+	h := &PlainTextHandler{W: &buf}
+
+	h.Handle(QAComplete{Passed: true})
+
+	output := buf.String()
+	if !strings.Contains(output, "QA complete — all checks passed") {
+		t.Errorf("expected QA complete passed output, got %q", output)
+	}
+}
+
+func TestPlainTextHandler_QAComplete_Failed(t *testing.T) {
+	var buf bytes.Buffer
+	h := &PlainTextHandler{W: &buf}
+
+	h.Handle(QAComplete{Passed: false})
+
+	output := buf.String()
+	if !strings.Contains(output, "QA complete — checks failed") {
+		t.Errorf("expected QA complete failed output, got %q", output)
 	}
 }
 
@@ -182,7 +218,9 @@ func TestEventTypes_ImplementEvent(t *testing.T) {
 	var _ Event = InvocationDone{}
 	var _ Event = IterationStart{}
 	var _ Event = StoryStarted{}
-	var _ Event = QAPhaseStarted{}
+	var _ Event = QAVerifyStarted{}
+	var _ Event = QAFixStarted{}
+	var _ Event = QAComplete{}
 	var _ Event = UsageLimitWait{}
 	var _ Event = LogMessage{}
 }

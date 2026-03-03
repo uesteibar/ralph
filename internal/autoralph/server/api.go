@@ -41,11 +41,21 @@ type storyResponse struct {
 	Passes bool   `json:"passes"`
 }
 
-// integrationTestResponse represents an integration test in the API response.
-type integrationTestResponse struct {
+// qaFindingResponse represents a single QA finding in the API response.
+type qaFindingResponse struct {
 	ID          string `json:"id"`
+	Title       string `json:"title"`
 	Description string `json:"description"`
-	Passes      bool   `json:"passes"`
+	Severity    string `json:"severity"`
+	TestScript  string `json:"test_script"`
+	Status      string `json:"status"`
+}
+
+// qaVerificationResponse represents QA verification status in the API response.
+type qaVerificationResponse struct {
+	Status   string              `json:"status"`
+	Attempts int                 `json:"attempts"`
+	Findings []qaFindingResponse `json:"findings"`
 }
 
 // readPRD reads the PRD for an issue from disk, returning nil if unavailable.
@@ -302,7 +312,7 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		InputTokens      int                       `json:"input_tokens"`
 		OutputTokens     int                       `json:"output_tokens"`
 		Stories          []storyResponse            `json:"stories"`
-		IntegrationTests []integrationTestResponse  `json:"integration_tests"`
+		QAVerification   *qaVerificationResponse     `json:"qa_verification,omitempty"`
 		CurrentStory     string                    `json:"current_story,omitempty"`
 		Iteration        int                       `json:"iteration,omitempty"`
 		MaxIterations    int                       `json:"max_iterations,omitempty"`
@@ -335,24 +345,35 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		buildActive = h.buildChecker.IsRunning(issue.ID)
 	}
 
-	// Read PRD for story/test data.
+	// Read PRD for story/QA data.
 	var stories []storyResponse
-	var integrationTests []integrationTestResponse
+	var qaVerification *qaVerificationResponse
 	if p := h.readPRD(issue); p != nil {
 		stories = make([]storyResponse, len(p.UserStories))
 		for i, s := range p.UserStories {
 			stories[i] = storyResponse{ID: s.ID, Title: s.Title, Passes: s.Passes}
 		}
-		integrationTests = make([]integrationTestResponse, len(p.IntegrationTests))
-		for i, t := range p.IntegrationTests {
-			integrationTests[i] = integrationTestResponse{ID: t.ID, Description: t.Description, Passes: t.Passes}
+		if p.QAVerification != nil {
+			findings := make([]qaFindingResponse, len(p.QAVerification.Findings))
+			for i, f := range p.QAVerification.Findings {
+				findings[i] = qaFindingResponse{
+					ID:          f.ID,
+					Title:       f.Title,
+					Description: f.Description,
+					Severity:    f.Severity,
+					TestScript:  f.TestScript,
+					Status:      f.Status,
+				}
+			}
+			qaVerification = &qaVerificationResponse{
+				Status:   p.QAVerification.Status,
+				Attempts: p.QAVerification.Attempts,
+				Findings: findings,
+			}
 		}
 	}
 	if stories == nil {
 		stories = []storyResponse{}
-	}
-	if integrationTests == nil {
-		integrationTests = []integrationTestResponse{}
 	}
 
 	currentStory := parseCurrentStory(buildActivity)
@@ -378,7 +399,7 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		InputTokens:      issue.InputTokens,
 		OutputTokens:     issue.OutputTokens,
 		Stories:          stories,
-		IntegrationTests: integrationTests,
+		QAVerification:   qaVerification,
 		CurrentStory:     currentStory,
 		Iteration:        iteration,
 		MaxIterations:    maxIterations,

@@ -1677,6 +1677,209 @@ func TestTxUpdateIssue_FeedbackCursorColumns(t *testing.T) {
 	}
 }
 
+// --- QA Fix Attempts Column ---
+
+func TestOpen_MigratesQAFixAttemptsColumn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer d.Close()
+
+	var count int
+	err = d.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('issues') WHERE name='qa_fix_attempts'`).Scan(&count)
+	if err != nil {
+		t.Fatalf("querying column info: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected qa_fix_attempts column to exist")
+	}
+}
+
+func TestCreateIssue_QAFixAttempts_DefaultValues(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, err := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "No QA fix attempts set",
+		State:     "queued",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.QAFixAttempts != 0 {
+		t.Errorf("expected QAFixAttempts 0, got %d", got.QAFixAttempts)
+	}
+}
+
+func TestCreateIssue_QAFixAttempts_SetValues(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, err := d.CreateIssue(Issue{
+		ProjectID:     p.ID,
+		Title:         "With QA fix attempts",
+		State:         "qa_fix",
+		QAFixAttempts: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := d.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.QAFixAttempts != 2 {
+		t.Errorf("expected QAFixAttempts 2, got %d", got.QAFixAttempts)
+	}
+}
+
+func TestUpdateIssue_QAFixAttempts(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Update QA fix attempts",
+		State:     "qa",
+	})
+	issue.QAFixAttempts = 3
+
+	if err := d.UpdateIssue(issue); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.QAFixAttempts != 3 {
+		t.Errorf("expected QAFixAttempts 3, got %d", got.QAFixAttempts)
+	}
+}
+
+func TestListIssues_QAFixAttempts(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:     p.ID,
+		Title:         "QA fix issue",
+		State:         "qa_fix",
+		QAFixAttempts: 1,
+	})
+
+	issues, err := d.ListIssues(IssueFilter{ProjectID: p.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(issues))
+	}
+	if issues[0].QAFixAttempts != 1 {
+		t.Errorf("expected QAFixAttempts 1, got %d", issues[0].QAFixAttempts)
+	}
+}
+
+func TestTxUpdateIssue_QAFixAttempts(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID: p.ID,
+		Title:     "Tx QA fix attempts",
+		State:     "qa",
+	})
+
+	err := d.Tx(func(tx *Tx) error {
+		issue.QAFixAttempts = 2
+		return tx.UpdateIssue(issue)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _ := d.GetIssue(issue.ID)
+	if got.QAFixAttempts != 2 {
+		t.Errorf("expected QAFixAttempts 2, got %d", got.QAFixAttempts)
+	}
+}
+
+func TestTxGetIssue_QAFixAttempts(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	issue, _ := d.CreateIssue(Issue{
+		ProjectID:     p.ID,
+		Title:         "Tx get QA fix attempts",
+		State:         "qa_fix",
+		QAFixAttempts: 3,
+	})
+
+	err := d.Tx(func(tx *Tx) error {
+		got, err := tx.GetIssue(issue.ID)
+		if err != nil {
+			return err
+		}
+		if got.QAFixAttempts != 3 {
+			t.Errorf("expected QAFixAttempts 3, got %d", got.QAFixAttempts)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetIssueByLinearID_QAFixAttempts(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:     p.ID,
+		LinearIssueID: "lin-qa-1",
+		Title:         "QA fix by linear ID",
+		State:         "qa_fix",
+		QAFixAttempts: 2,
+	})
+
+	got, err := d.GetIssueByLinearID("lin-qa-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.QAFixAttempts != 2 {
+		t.Errorf("expected QAFixAttempts 2, got %d", got.QAFixAttempts)
+	}
+}
+
+func TestGetIssueByLinearIDAndProject_QAFixAttempts(t *testing.T) {
+	d := testDB(t)
+	p := createTestProject(t, d)
+
+	d.CreateIssue(Issue{
+		ProjectID:     p.ID,
+		LinearIssueID: "lin-qa-2",
+		Title:         "QA fix by linear ID and project",
+		State:         "qa_fix",
+		QAFixAttempts: 1,
+	})
+
+	got, err := d.GetIssueByLinearIDAndProject("lin-qa-2", p.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.QAFixAttempts != 1 {
+		t.Errorf("expected QAFixAttempts 1, got %d", got.QAFixAttempts)
+	}
+}
+
 func TestTxGetIssue_FeedbackCursorColumns(t *testing.T) {
 	d := testDB(t)
 	p := createTestProject(t, d)

@@ -40,8 +40,16 @@ func (h *PlainTextHandler) Handle(event Event) {
 		h.handleIterationStart(e)
 	case StoryStarted:
 		h.handleStoryStarted(e)
-	case QAPhaseStarted:
-		h.handleQAPhaseStarted(e)
+	case QAVerifyStarted:
+		h.handleQAVerifyStarted()
+	case QAFixStarted:
+		h.handleQAFixStarted()
+	case QAComplete:
+		h.handleQAComplete(e)
+	case QAFindingReported:
+		h.handleQAFindingReported(e)
+	case QAFindingResolved:
+		h.handleQAFindingResolved(e)
 	case UsageLimitWait:
 		h.handleUsageLimitWait(e)
 	case LogMessage:
@@ -85,8 +93,32 @@ func (h *PlainTextHandler) handleStoryStarted(e StoryStarted) {
 	fmt.Fprintf(h.W, "working on %s: %s\n", e.StoryID, e.Title)
 }
 
-func (h *PlainTextHandler) handleQAPhaseStarted(e QAPhaseStarted) {
-	fmt.Fprintf(h.W, "all stories pass — running QA %s\n", e.Phase)
+func (h *PlainTextHandler) handleQAVerifyStarted() {
+	fmt.Fprintf(h.W, "all stories pass — running QA verification\n")
+}
+
+func (h *PlainTextHandler) handleQAFixStarted() {
+	fmt.Fprintf(h.W, "QA checks failed — running QA fix\n")
+}
+
+func (h *PlainTextHandler) handleQAComplete(e QAComplete) {
+	if e.Passed {
+		fmt.Fprintf(h.W, "QA complete — all checks passed\n")
+	} else {
+		fmt.Fprintf(h.W, "QA complete — checks failed\n")
+	}
+}
+
+func (h *PlainTextHandler) handleQAFindingReported(e QAFindingReported) {
+	icon := "🔴"
+	if e.Severity == "warning" {
+		icon = "🟡"
+	}
+	fmt.Fprintf(h.W, "  %s QA finding %s: %s\n", icon, e.FindingID, e.Title)
+}
+
+func (h *PlainTextHandler) handleQAFindingResolved(e QAFindingResolved) {
+	fmt.Fprintf(h.W, "  ✅ QA finding %s resolved\n", e.FindingID)
 }
 
 func (h *PlainTextHandler) handleUsageLimitWait(e UsageLimitWait) {

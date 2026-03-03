@@ -73,12 +73,12 @@ func TestFileHandler_StoryStarted_CreatesNewFile(t *testing.T) {
 	}
 }
 
-func TestFileHandler_QAPhaseStarted_CreatesNewFile(t *testing.T) {
+func TestFileHandler_QAVerifyStarted_CreatesNewFile(t *testing.T) {
 	dir := t.TempDir()
 	ts := time.Date(2026, 2, 6, 10, 0, 0, 0, time.UTC)
 	h := newFileHandler(dir, func() time.Time { return ts })
 
-	h.Handle(QAPhaseStarted{Phase: "verification"})
+	h.Handle(QAVerifyStarted{})
 	h.Handle(ToolUse{Name: "Bash"})
 	h.Close()
 
@@ -87,8 +87,27 @@ func TestFileHandler_QAPhaseStarted_CreatesNewFile(t *testing.T) {
 		t.Fatalf("expected 1 file, got %d: %v", len(files), files)
 	}
 	name := filepath.Base(files[0])
-	if !strings.HasPrefix(name, "QA-verification-") {
-		t.Errorf("expected QA-verification- prefix, got %s", name)
+	if !strings.HasPrefix(name, "QA-verify-") {
+		t.Errorf("expected QA-verify- prefix, got %s", name)
+	}
+}
+
+func TestFileHandler_QAFixStarted_CreatesNewFile(t *testing.T) {
+	dir := t.TempDir()
+	ts := time.Date(2026, 2, 6, 10, 0, 0, 0, time.UTC)
+	h := newFileHandler(dir, func() time.Time { return ts })
+
+	h.Handle(QAFixStarted{})
+	h.Handle(ToolUse{Name: "Bash"})
+	h.Close()
+
+	files := listJSONLFiles(t, dir)
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d: %v", len(files), files)
+	}
+	name := filepath.Base(files[0])
+	if !strings.HasPrefix(name, "QA-fix-") {
+		t.Errorf("expected QA-fix- prefix, got %s", name)
 	}
 }
 
@@ -112,7 +131,7 @@ func TestFileHandler_MultiplePhases_CreatesMultipleFiles(t *testing.T) {
 	h.Handle(StoryStarted{StoryID: "US-001", Title: "Auth"})
 	h.Handle(ToolUse{Name: "Read"})
 	// QA starts → new file
-	h.Handle(QAPhaseStarted{Phase: "verification"})
+	h.Handle(QAVerifyStarted{})
 	h.Handle(ToolUse{Name: "Bash"})
 	h.Close()
 
@@ -137,7 +156,7 @@ func TestFileHandler_MultiplePhases_CreatesMultipleFiles(t *testing.T) {
 		if strings.HasPrefix(n, "US-001-") {
 			hasStory = true
 		}
-		if strings.HasPrefix(n, "QA-verification-") {
+		if strings.HasPrefix(n, "QA-verify-") {
 			hasQA = true
 		}
 	}
@@ -148,7 +167,7 @@ func TestFileHandler_MultiplePhases_CreatesMultipleFiles(t *testing.T) {
 		t.Error("expected US-001 story file")
 	}
 	if !hasQA {
-		t.Error("expected QA-verification file")
+		t.Error("expected QA-verify file")
 	}
 }
 

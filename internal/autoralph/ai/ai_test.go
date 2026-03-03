@@ -139,7 +139,7 @@ func TestRenderGeneratePRD_ContainsPlanAndProject(t *testing.T) {
 		"Create login endpoint",
 		"my-app",
 		"userStories",
-		"integrationTests",
+		"qaVerification",
 		"acceptanceCriteria",
 		"All quality checks pass",
 	}
@@ -927,12 +927,12 @@ func TestRenderFixChecks_KnowledgeBase_HasWriteInstructions(t *testing.T) {
 	}
 }
 
-// --- ContextPrefix tests ---
+// --- Issue section rendering tests ---
 
-func TestRenderRefineIssue_WithContextPrefix_RendersPrefix(t *testing.T) {
+func TestRenderRefineIssue_AlwaysRendersFullIssueSection(t *testing.T) {
 	data := RefineIssueData{
-		Title:         "Add user avatars",
-		ContextPrefix: "Continuing refinement of: Add user avatars",
+		Title:       "Add user avatars",
+		Description: "Users should be able to upload profile pictures.",
 		Comments: []RefineIssueComment{
 			{Author: "human", CreatedAt: "2026-01-15T10:00:00Z", Body: "Can you add caching?"},
 		},
@@ -943,52 +943,19 @@ func TestRenderRefineIssue_WithContextPrefix_RendersPrefix(t *testing.T) {
 		t.Fatalf("RenderRefineIssue failed: %v", err)
 	}
 
-	if !strings.Contains(out, "Continuing refinement of: Add user avatars") {
-		t.Error("output should contain context prefix")
-	}
-}
-
-func TestRenderRefineIssue_WithContextPrefix_OmitsIssueSection(t *testing.T) {
-	data := RefineIssueData{
-		Title:         "Add user avatars",
-		ContextPrefix: "Continuing refinement of: Add user avatars",
-		Comments: []RefineIssueComment{
-			{Author: "human", CreatedAt: "2026-01-15T10:00:00Z", Body: "Feedback"},
-		},
-	}
-
-	out, err := RenderRefineIssue(data, "")
-	if err != nil {
-		t.Fatalf("RenderRefineIssue failed: %v", err)
-	}
-
-	// The ## Issue section with **Title:** and **Description:** should be absent.
-	if strings.Contains(out, "**Title:**") {
-		t.Error("output should not contain Title label when ContextPrefix is set")
-	}
-	if strings.Contains(out, "**Description:**") {
-		t.Error("output should not contain Description label when ContextPrefix is set")
-	}
-}
-
-func TestRenderRefineIssue_WithoutContextPrefix_RendersIssueSection(t *testing.T) {
-	data := RefineIssueData{
-		Title:       "Add user avatars",
-		Description: "Users should be able to upload profile pictures.",
-	}
-
-	out, err := RenderRefineIssue(data, "")
-	if err != nil {
-		t.Fatalf("RenderRefineIssue failed: %v", err)
-	}
-
 	if !strings.Contains(out, "**Title:**") {
-		t.Error("output should contain Title label when no ContextPrefix")
+		t.Error("output should contain Title label")
+	}
+	if !strings.Contains(out, "Add user avatars") {
+		t.Error("output should contain the issue title")
 	}
 	if !strings.Contains(out, "**Description:**") {
-		t.Error("output should contain Description label when no ContextPrefix")
+		t.Error("output should contain Description label")
 	}
-	if strings.Contains(out, "Continuing refinement of") {
-		t.Error("output should not contain context prefix when not set")
+	if !strings.Contains(out, "Users should be able to upload profile pictures.") {
+		t.Error("output should contain the issue description")
+	}
+	if !strings.Contains(out, "Can you add caching?") {
+		t.Error("output should contain comment body")
 	}
 }

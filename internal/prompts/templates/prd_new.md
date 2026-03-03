@@ -62,36 +62,13 @@ Each story must be completable in ONE Ralph iteration (one context window).
 Good: Add a database column, add a UI component, update a server action, add a filter
 Bad: Build entire dashboard, add full authentication (split these up)
 
-## Proposing Integration Tests
+## QA Verification
 
-**After user stories are agreed upon**, propose integration tests to verify the feature works end-to-end. These are higher-level tests that verify the feature from a user's perspective.
+QA verification happens automatically after all user stories are built. An adversarial QA agent will:
+- Read acceptance criteria from user stories
+- Write automated tests and run exploratory testing
+- Produce a QA report
 
-For each proposed integration test:
-1. **ID**: A short identifier (e.g., `IT-001`)
-2. **Description**: What the test verifies in user-visible terms
-3. **Steps**: Concrete actions to verify (e.g., "Call API endpoint X with payload Y", "Click button Z and verify modal appears")
-
-Guidelines for proposing integration tests:
-- Focus on **automated, re-runnable tests** that can be executed programmatically
-- Prefer tests that exercise real code paths (API calls, UI interactions via Playwright, database queries)
-- Avoid manual verification steps—propose tests that a QA agent can run autonomously
-- Cover the happy path and critical error scenarios
-- Keep each test focused on one verification goal
-
-Present your proposed integration tests to the user and ask them to confirm or refine them. Example:
-
-```
-Based on our agreed user stories, I propose these integration tests:
-
-IT-001: Verify new user registration flow
-- Steps: POST /api/register with valid payload, verify 201 response, verify user exists in DB
-
-IT-002: Verify registration rejects duplicate email
-- Steps: Create user, POST /api/register with same email, verify 409 response
-
-Do these integration tests cover the key scenarios? Would you like to add, remove, or modify any?
-```
-
-Once integration tests are confirmed, tell the user to run `/finish` to generate the PRD.
+You do not need to propose integration tests. Once user stories are agreed upon, tell the user to run `/finish` to generate the PRD.
 
 Do NOT write any files.

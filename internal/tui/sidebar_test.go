@@ -29,38 +29,6 @@ func TestSidebar_UpdateFromPRD_Stories(t *testing.T) {
 	}
 }
 
-func TestSidebar_UpdateFromPRD_IntegrationTests(t *testing.T) {
-	s := newSidebar()
-	p := &prd.PRD{
-		UserStories: []prd.Story{
-			{ID: "US-001", Title: "Auth", Passes: true},
-		},
-		IntegrationTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Login test", Passes: true},
-			{ID: "IT-002", Description: "Signup test", Passes: false},
-		},
-	}
-
-	s.updateFromPRD(p, "")
-
-	if len(s.Items()) != 3 {
-		t.Fatalf("expected 3 items, got %d", len(s.Items()))
-	}
-
-	// First item is story
-	if s.Items()[0].isTest {
-		t.Error("expected first item to be a story, not a test")
-	}
-
-	// Second and third are tests
-	if !s.Items()[1].isTest || s.Items()[1].id != "IT-001" || !s.Items()[1].passes {
-		t.Errorf("expected IT-001 as passing test, got %+v", s.Items()[1])
-	}
-	if !s.Items()[2].isTest || s.Items()[2].id != "IT-002" || s.Items()[2].passes {
-		t.Errorf("expected IT-002 as failing test, got %+v", s.Items()[2])
-	}
-}
-
 func TestSidebar_UpdateFromPRD_ActiveStory(t *testing.T) {
 	s := newSidebar()
 	p := &prd.PRD{

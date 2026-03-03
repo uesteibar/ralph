@@ -21,9 +21,6 @@ func makeTestWorkspaces() []WorkspaceInfo {
 					{ID: "US-001", Title: "Login", Passes: true},
 					{ID: "US-002", Title: "Logout", Passes: false},
 				},
-				IntegrationTests: []prd.IntegrationTest{
-					{ID: "IT-001", Description: "Login flow", Passes: false},
-				},
 			},
 			LogsDir: "/tmp/logs/auth",
 			WsPath:  "/tmp/ws/auth",
@@ -36,6 +33,7 @@ func makeTestWorkspaces() []WorkspaceInfo {
 				UserStories: []prd.Story{
 					{ID: "US-001", Title: "Checkout", Passes: true},
 				},
+				QAVerification: &prd.QAVerification{Status: "passed"},
 			},
 			LogsDir: "/tmp/logs/payment",
 			WsPath:  "/tmp/ws/payment",
@@ -319,14 +317,11 @@ func TestMultiModel_View_ShowsPassSummary(t *testing.T) {
 	m = ready.(MultiModel)
 
 	view := m.View()
-	// auth-feature: 1/2 stories, 0/1 tests
+	// auth-feature: 1/2 stories
 	if !strings.Contains(view, "1/2 stories") {
 		t.Error("expected view to contain '1/2 stories' for auth-feature")
 	}
-	if !strings.Contains(view, "0/1 tests") {
-		t.Error("expected view to contain '0/1 tests' for auth-feature")
-	}
-	// payment: 1/1 stories, no integration tests
+	// payment: 1/1 stories
 	if !strings.Contains(view, "1/1 stories") {
 		t.Error("expected view to contain '1/1 stories' for payment")
 	}
@@ -358,14 +353,8 @@ func TestMultiModel_View_ShowsStoriesAndTests(t *testing.T) {
 	if !strings.Contains(view, "User Stories") {
 		t.Error("expected view to contain 'User Stories' section")
 	}
-	if !strings.Contains(view, "Integration Tests") {
-		t.Error("expected view to contain 'Integration Tests' section")
-	}
 	if !strings.Contains(view, "US-001") {
 		t.Error("expected view to contain 'US-001'")
-	}
-	if !strings.Contains(view, "IT-001") {
-		t.Error("expected view to contain 'IT-001'")
 	}
 }
 
@@ -579,17 +568,11 @@ func TestRenderWorkspaceSummary_AllPassing(t *testing.T) {
 				{ID: "US-001", Passes: true},
 				{ID: "US-002", Passes: true},
 			},
-			IntegrationTests: []prd.IntegrationTest{
-				{ID: "IT-001", Passes: true},
-			},
 		},
 	}
 	summary := renderWorkspaceSummary(ws)
 	if !strings.Contains(summary, "2/2 stories") {
 		t.Errorf("expected '2/2 stories', got %q", summary)
-	}
-	if !strings.Contains(summary, "1/1 tests") {
-		t.Errorf("expected '1/1 tests', got %q", summary)
 	}
 }
 
@@ -991,30 +974,11 @@ func TestIsResumable_AllPassing(t *testing.T) {
 				{ID: "US-001", Passes: true},
 				{ID: "US-002", Passes: true},
 			},
-			IntegrationTests: []prd.IntegrationTest{
-				{ID: "IT-001", Passes: true},
-			},
+			QAVerification: &prd.QAVerification{Status: "passed"},
 		},
 	}
 	if isResumable(ws) {
 		t.Error("expected finished workspace to not be resumable")
-	}
-}
-
-func TestIsResumable_AllStoriesPassButTestsFailing(t *testing.T) {
-	ws := WorkspaceInfo{
-		Running: false,
-		PRD: &prd.PRD{
-			UserStories: []prd.Story{
-				{ID: "US-001", Passes: true},
-			},
-			IntegrationTests: []prd.IntegrationTest{
-				{ID: "IT-001", Passes: false},
-			},
-		},
-	}
-	if !isResumable(ws) {
-		t.Error("expected workspace with failing tests to be resumable")
 	}
 }
 

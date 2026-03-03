@@ -14,13 +14,16 @@ const (
 	focusRight = 1
 )
 
-// sidebarItem represents a single entry in the sidebar (story or test).
+// sidebarItem represents a single entry in the sidebar (story, test, or QA finding).
 type sidebarItem struct {
-	id     string
-	title  string
-	passes bool
-	active bool // currently being worked on
-	isTest bool // true for integration tests
+	id        string
+	title     string
+	passes    bool
+	active    bool   // currently being worked on
+	isTest    bool   // true for integration tests
+	isFinding bool   // true for QA findings
+	severity  string // "error" | "warning" (only for findings)
+	status    string // "found" | "addressed" (only for findings)
 }
 
 // sidebar holds the state for the left pane story/test list.
@@ -42,6 +45,7 @@ var (
 
 	passStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"})
 	failStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"})
+	warnStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#d29922"})
 
 	activeStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#d29922"}).
@@ -73,13 +77,18 @@ func (s *sidebar) updateFromPRD(p *prd.PRD, activeStoryID string) {
 		})
 	}
 
-	for _, test := range p.IntegrationTests {
-		s.items = append(s.items, sidebarItem{
-			id:     test.ID,
-			title:  test.Description,
-			passes: test.Passes,
-			isTest: true,
-		})
+	// Add QA findings if present.
+	if p.QAVerification != nil {
+		for _, f := range p.QAVerification.Findings {
+			s.items = append(s.items, sidebarItem{
+				id:        f.ID,
+				title:     f.Title,
+				isFinding: true,
+				severity:  f.Severity,
+				status:    f.Status,
+				passes:    f.Status == "addressed",
+			})
+		}
 	}
 
 	// Keep cursor in bounds
@@ -123,12 +132,15 @@ func (s sidebar) view() string {
 
 	var lines []string
 
-	// Find where tests start (to add a separator)
+	// Find where tests and findings start (to add separators)
 	firstTestIdx := -1
+	firstFindingIdx := -1
 	for i, item := range s.items {
-		if item.isTest {
+		if item.isTest && firstTestIdx == -1 {
 			firstTestIdx = i
-			break
+		}
+		if item.isFinding && firstFindingIdx == -1 {
+			firstFindingIdx = i
 		}
 	}
 
@@ -142,6 +154,16 @@ func (s sidebar) view() string {
 			lines = append(lines, strings.Repeat("─", s.width-2))
 			contentHeight-- // separator takes a line
 			visibleEnd = min(s.scrollOff+contentHeight+1, len(s.items)) // +1 for separator line just added
+			if i >= visibleEnd {
+				break
+			}
+		}
+
+		// Add separator before findings section
+		if i == firstFindingIdx && i > 0 && i != firstTestIdx {
+			lines = append(lines, strings.Repeat("─", s.width-2))
+			contentHeight--
+			visibleEnd = min(s.scrollOff+contentHeight+1, len(s.items))
 			if i >= visibleEnd {
 				break
 			}
@@ -172,7 +194,18 @@ func (s *sidebar) adjustScroll(contentHeight int) {
 func (s sidebar) renderItem(idx int, item sidebarItem) string {
 	// Status indicator
 	var indicator string
-	if item.passes {
+	if item.isFinding {
+		switch item.status {
+		case "addressed":
+			indicator = warnStyle.Render("●")
+		default: // "found"
+			if item.severity == "warning" {
+				indicator = warnStyle.Render("▲")
+			} else {
+				indicator = failStyle.Render("●")
+			}
+		}
+	} else if item.passes {
 		indicator = passStyle.Render("✓")
 	} else {
 		indicator = failStyle.Render("✗")

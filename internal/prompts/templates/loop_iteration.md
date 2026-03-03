@@ -65,11 +65,9 @@ If you discover reusable codebase patterns, add them to the **Codebase Patterns*
 
 ## Completion Check
 
-After committing, re-read `{{.PRDPath}}`. If ALL of the following conditions are met, reply with exactly: `<promise>COMPLETE</promise>`
-- All `userStories` have `passes: true`
-- All `integrationTests` have `passes: true` (if any exist)
+After committing, re-read `{{.PRDPath}}`. If all `userStories` have `passes: true`, reply with exactly: `<promise>COMPLETE</promise>`
 
-If any story or integration test has `passes: false`, end your response normally. The next iteration will pick up the remaining work.
+If any story has `passes: false`, end your response normally. The next iteration will pick up the remaining work.
 
 ## Workspace Boundary
 

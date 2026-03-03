@@ -58,9 +58,6 @@ func TestIT001_TUILaunchesByDefault(t *testing.T) {
 				{ID: "US-001", Title: "Auth feature", Priority: 1, Passes: true},
 				{ID: "US-002", Title: "TUI feature", Priority: 2, Passes: false},
 			},
-			IntegrationTests: []prd.IntegrationTest{
-				{ID: "IT-001", Description: "Login test", Passes: true},
-			},
 		}
 		data, _ := json.MarshalIndent(testPRD, "", "  ")
 		os.WriteFile(prdPath, data, 0644)
@@ -279,7 +276,7 @@ func TestIT002_NoTUIFallsBackToPlainText(t *testing.T) {
 			events.InvocationDone{NumTurns: 1, DurationMS: 1000},
 			events.IterationStart{Iteration: 1, MaxIterations: 10},
 			events.StoryStarted{StoryID: "US-001", Title: "Test"},
-			events.QAPhaseStarted{Phase: "verification"},
+			events.QAVerifyStarted{},
 			events.PRDRefresh{},
 		}
 
@@ -486,8 +483,12 @@ func eventTypeName(e events.Event) string {
 		return "IterationStart"
 	case events.StoryStarted:
 		return "StoryStarted"
-	case events.QAPhaseStarted:
-		return "QAPhaseStarted"
+	case events.QAVerifyStarted:
+		return "QAVerifyStarted"
+	case events.QAFixStarted:
+		return "QAFixStarted"
+	case events.QAComplete:
+		return "QAComplete"
 	case events.UsageLimitWait:
 		return "UsageLimitWait"
 	case events.PRDRefresh:

@@ -274,13 +274,15 @@ func TestIT001_FullLifecycleHappyPath(t *testing.T) {
 	}
 	dispatcher.Wait()
 
-	// Verify state transitioned to in_review (no PRCreator → direct transition).
+	// Verify state transitioned to qa (build completes → QA phase).
 	issue, _ = pg.DB.GetIssue(issue.ID)
-	if issue.State != "in_review" {
-		t.Errorf("expected state in_review after build, got %s", issue.State)
+	if issue.State != "qa" {
+		t.Errorf("expected state qa after build, got %s", issue.State)
 	}
 
-	// Step 8: Simulate PR creation (manually seed PR info since we don't have a real PR action).
+	// Step 8: Simulate PR creation — manually advance to in_review since we
+	// skip the QA phase in this test (no QA dispatcher wired).
+	issue.State = "in_review"
 	issue.PRNumber = 42
 	issue.PRURL = "https://github.com/test-owner/test-repo/pull/42"
 	pg.DB.UpdateIssue(issue)
@@ -911,10 +913,10 @@ func TestIT008_RestartRecovery(t *testing.T) {
 
 	dispatcher.Wait()
 
-	// Verify issue completed the build (in_review).
+	// Verify issue completed the build (transitions to qa for QA verification).
 	issue, _ = pg.DB.GetIssue(issue.ID)
-	if issue.State != "in_review" {
-		t.Errorf("expected in_review after recovered build, got %s", issue.State)
+	if issue.State != "qa" {
+		t.Errorf("expected qa after recovered build, got %s", issue.State)
 	}
 }
 
@@ -992,14 +994,14 @@ func TestIT012_ConcurrentBuildWorkerLimit(t *testing.T) {
 	close(runner.release)
 	dispatcher.Wait()
 
-	// Both issues should have completed.
+	// Both issues should have completed building (transitions to qa for QA verification).
 	issue1, _ = pg.DB.GetIssue(issue1.ID)
 	issue2, _ = pg.DB.GetIssue(issue2.ID)
-	if issue1.State != "in_review" {
-		t.Errorf("issue1 expected in_review, got %s", issue1.State)
+	if issue1.State != "qa" {
+		t.Errorf("issue1 expected qa, got %s", issue1.State)
 	}
-	if issue2.State != "in_review" {
-		t.Errorf("issue2 expected in_review, got %s", issue2.State)
+	if issue2.State != "qa" {
+		t.Errorf("issue2 expected qa, got %s", issue2.State)
 	}
 }
 

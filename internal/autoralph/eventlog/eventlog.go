@@ -73,8 +73,15 @@ func FormatDetail(e events.Event) string {
 		return fmt.Sprintf("Iteration %d/%d started", ev.Iteration, ev.MaxIterations)
 	case events.StoryStarted:
 		return fmt.Sprintf("Story %s: %s", ev.StoryID, ev.Title)
-	case events.QAPhaseStarted:
-		return fmt.Sprintf("QA phase: %s", ev.Phase)
+	case events.QAVerifyStarted:
+		return "QA verification started"
+	case events.QAFixStarted:
+		return "QA fix started"
+	case events.QAComplete:
+		if ev.Passed {
+			return "QA complete: passed"
+		}
+		return "QA complete: failed"
 	case events.LogMessage:
 		return fmt.Sprintf("[%s] %s", ev.Level, ev.Message)
 	case events.AgentText:

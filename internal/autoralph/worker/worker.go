@@ -9,7 +9,6 @@ import (
 
 	"github.com/uesteibar/ralph/internal/autoralph/db"
 	"github.com/uesteibar/ralph/internal/autoralph/eventlog"
-	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/events"
 	"github.com/uesteibar/ralph/internal/gitops"
 	"github.com/uesteibar/ralph/internal/knowledge"
@@ -44,11 +43,6 @@ type ProjectGetter interface {
 	GetProject(id string) (db.Project, error)
 }
 
-// PRCreator creates a GitHub PR for a completed build.
-type PRCreator interface {
-	CreatePR(issue db.Issue, database *db.DB) error
-}
-
 // HookRunner runs lifecycle hooks at specific points in the build lifecycle.
 type HookRunner interface {
 	RunPrePR(ctx context.Context, workDir string) error
@@ -60,7 +54,6 @@ type Config struct {
 	MaxWorkers   int
 	LoopRunner   LoopRunner
 	Projects     ProjectGetter
-	PR           PRCreator
 	EventHandler events.EventHandler
 	Logger       *slog.Logger
 
@@ -101,7 +94,6 @@ type Dispatcher struct {
 	maxWorkers     int
 	runner         LoopRunner
 	projects       ProjectGetter
-	pr             PRCreator
 	handler          events.EventHandler
 	onBuildEvent     func(issueID, detail string)
 	ulSetter         eventlog.UsageLimitSetter
@@ -132,7 +124,6 @@ func New(cfg Config) *Dispatcher {
 		maxWorkers:     maxWorkers,
 		runner:         cfg.LoopRunner,
 		projects:       cfg.Projects,
-		pr:             cfg.PR,
 		handler:        cfg.EventHandler,
 		onBuildEvent:   cfg.OnBuildEvent,
 		ulSetter:       cfg.UsageLimitSetter,
@@ -311,6 +302,21 @@ func (d *Dispatcher) RecoverBuilding(ctx context.Context) (int, error) {
 	return recovered, nil
 }
 
+// RecoverQA queries the database for issues in the QA or QA_FIX state and
+// re-dispatches them. This is called on startup to resume QA actions that
+// were interrupted by a process restart. The orchestrator loop picks up
+// the actual QA verify/fix dispatch on its next tick.
+func (d *Dispatcher) RecoverQA(ctx context.Context) (int, error) {
+	issues, err := d.db.ListIssues(db.IssueFilter{States: []string{"qa", "qa_fix"}})
+	if err != nil {
+		return 0, fmt.Errorf("listing qa/qa_fix issues: %w", err)
+	}
+	for _, issue := range issues {
+		d.logger.Info("recovered QA issue", "issue", issue.ID, "identifier", issue.Identifier, "state", issue.State)
+	}
+	return len(issues), nil
+}
+
 // run executes a single build worker. It loads the project, constructs paths,
 // and calls the loop runner. On completion it updates the issue state in the DB.
 func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue db.Issue) {
@@ -402,58 +408,20 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, issue d
 }
 
 func (d *Dispatcher) handleSuccess(ctx context.Context, issue db.Issue, workDir string, hookRunner HookRunner) {
-	// Run pre-PR hooks (e.g. code generators, formatters) before creating the PR.
+	// Run pre-PR hooks (e.g. code generators, formatters) before moving on.
 	if hookRunner != nil {
 		if err := hookRunner.RunPrePR(ctx, workDir); err != nil {
 			d.logger.Warn("pre-PR hooks failed", "issue", issue.ID, "error", err)
 		}
 	}
 
-	if d.pr != nil {
-		if err := d.pr.CreatePR(issue, d.db); err != nil {
-			d.logger.Error("creating PR", "issue", issue.ID, "error", err)
-			// Re-read issue from DB since CreatePR may have partially updated it.
-			fresh, readErr := d.db.GetIssue(issue.ID)
-			if readErr != nil {
-				d.logger.Error("re-reading issue after PR failure", "issue", issue.ID, "error", readErr)
-				fresh = issue
-			}
-			var conflictErr *pr.ConflictError
-			if errors.As(err, &conflictErr) {
-				d.handleConflict(fresh, conflictErr)
-				return
-			}
-			d.handleFailure(fresh, fmt.Errorf("creating PR: %w", err))
-			return
-		}
-		// Re-read issue to pick up PR info stored by CreatePR.
-		fresh, err := d.db.GetIssue(issue.ID)
-		if err != nil {
-			d.logger.Error("re-reading issue after PR creation", "issue", issue.ID, "error", err)
-		} else {
-			issue = fresh
-		}
-	}
-
-	issue.State = "in_review"
+	issue.State = "qa"
 	if err := d.db.UpdateIssue(issue); err != nil {
-		d.logger.Error("updating issue to in_review", "issue", issue.ID, "error", err)
+		d.logger.Error("updating issue to qa", "issue", issue.ID, "error", err)
 		return
 	}
-	if err := d.db.LogActivity(issue.ID, "build_completed", "building", "in_review", "Build completed successfully"); err != nil {
+	if err := d.db.LogActivity(issue.ID, "build_completed", "building", "qa", "Build completed, moving to QA"); err != nil {
 		d.logger.Error("logging build_completed activity", "issue", issue.ID, "error", err)
-	}
-}
-
-func (d *Dispatcher) handleConflict(issue db.Issue, conflictErr *pr.ConflictError) {
-	issue.State = "paused"
-	issue.ErrorMessage = conflictErr.Error()
-	if err := d.db.UpdateIssue(issue); err != nil {
-		d.logger.Error("updating issue to paused", "issue", issue.ID, "error", err)
-		return
-	}
-	if err := d.db.LogActivity(issue.ID, "merge_conflict", "building", "paused", conflictErr.Error()); err != nil {
-		d.logger.Error("logging merge_conflict activity", "issue", issue.ID, "error", err)
 	}
 }
 

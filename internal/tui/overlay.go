@@ -117,54 +117,40 @@ func renderStoryOverlay(s prd.Story) string {
 	return b.String()
 }
 
-// renderTestOverlay builds the overlay content for an integration test.
-func renderTestOverlay(t prd.IntegrationTest) string {
+// renderFindingOverlay builds the overlay content for a QA finding.
+func renderFindingOverlay(f prd.QAFinding) string {
 	var b strings.Builder
 
-	b.WriteString(overlayTitleStyle.Render(t.ID))
+	b.WriteString(overlayTitleStyle.Render(fmt.Sprintf("%s: %s", f.ID, f.Title)))
 	b.WriteString("\n\n")
 
 	// Status
-	if t.Passes {
-		b.WriteString(overlayLabelStyle.Render("Status: "))
-		b.WriteString(overlayPassStyle.Render("PASS"))
-	} else {
-		b.WriteString(overlayLabelStyle.Render("Status: "))
-		b.WriteString(overlayFailStyle.Render("FAIL"))
+	b.WriteString(overlayLabelStyle.Render("Status: "))
+	switch f.Status {
+	case "addressed":
+		b.WriteString(overlayPassStyle.Render("ADDRESSED"))
+	default:
+		b.WriteString(overlayFailStyle.Render("FOUND"))
 	}
 	b.WriteString("\n\n")
 
+	// Severity
+	b.WriteString(overlayLabelStyle.Render("Severity: "))
+	b.WriteString(f.Severity)
+	b.WriteString("\n\n")
+
+	// Test Script
+	if f.TestScript != "" {
+		b.WriteString(overlayLabelStyle.Render("Test Script: "))
+		b.WriteString(f.TestScript)
+		b.WriteString("\n\n")
+	}
+
 	// Description
-	if t.Description != "" {
+	if f.Description != "" {
 		b.WriteString(overlayLabelStyle.Render("Description:"))
 		b.WriteString("\n")
-		b.WriteString(t.Description)
-		b.WriteString("\n\n")
-	}
-
-	// Steps
-	if len(t.Steps) > 0 {
-		b.WriteString(overlayLabelStyle.Render("Steps:"))
-		b.WriteString("\n")
-		for i, step := range t.Steps {
-			fmt.Fprintf(&b, "  %d. %s\n", i+1, step)
-		}
-		b.WriteString("\n")
-	}
-
-	// Failure details
-	if t.Failure != "" {
-		b.WriteString(overlayLabelStyle.Render("Failure:"))
-		b.WriteString("\n")
-		b.WriteString(t.Failure)
-		b.WriteString("\n\n")
-	}
-
-	// Notes
-	if t.Notes != "" {
-		b.WriteString(overlayLabelStyle.Render("Notes:"))
-		b.WriteString("\n")
-		b.WriteString(t.Notes)
+		b.WriteString(f.Description)
 		b.WriteString("\n")
 	}
 

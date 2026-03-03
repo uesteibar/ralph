@@ -54,16 +54,10 @@ The JSON must have this structure:
       "notes": ""
     }
   ],
-  "integrationTests": [
-    {
-      "id": "IT-001",
-      "description": "<what the test verifies>",
-      "steps": ["<step 1>", "<step 2>"],
-      "passes": false,
-      "failure": "",
-      "notes": ""
-    }
-  ]
+  "qaVerification": {
+    "status": "pending",
+    "attempts": 0
+  }
 }
 ```
 

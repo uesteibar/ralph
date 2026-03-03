@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
@@ -203,7 +204,12 @@ type Config struct {
 // stores PR info in the issue, and posts a Linear comment with the PR link.
 func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	return func(issue db.Issue, database *db.DB) error {
-		ctx := context.Background()
+		// Create a context with timeout to prevent indefinite hangs.
+		// PR creation involves git push, AI invocation for description generation,
+		// and GitHub API calls, which should complete within 30 minutes under
+		// normal circumstances.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
 
 		project, err := cfg.Projects.GetProject(issue.ProjectID)
 		if err != nil {

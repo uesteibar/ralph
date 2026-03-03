@@ -359,9 +359,7 @@ func TestRun_AllStoriesPass_PrintsDoneMessage(t *testing.T) {
   "userStories": [
     {"id": "US-001", "title": "Test", "description": "Test", "acceptanceCriteria": ["Works"], "priority": 1, "passes": true}
   ],
-  "integrationTests": [
-    {"id": "IT-001", "description": "Test works", "steps": ["Run test"], "passes": true}
-  ]
+  "qaVerification": {"status": "passed", "attempts": 1}
 }`
 	if err := os.WriteFile(filepath.Join(wsDir, "prd.json"), []byte(prdContent), 0644); err != nil {
 		t.Fatal(err)
@@ -393,7 +391,7 @@ func TestRun_AllStoriesPass_PrintsDoneMessage(t *testing.T) {
 		t.Fatalf("expected no error when all stories pass, got: %v", err)
 	}
 
-	if !strings.Contains(stderr, "All stories and integration tests pass") {
+	if !strings.Contains(stderr, "All stories pass and QA verified") {
 		t.Errorf("expected stderr to contain done message, got: %s", stderr)
 	}
 	if !strings.Contains(stderr, "squash and merge your changes back to base") {

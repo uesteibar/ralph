@@ -102,15 +102,15 @@ func overviewRun(args []string, w io.Writer) error {
 
 		parts := fmt.Sprintf("%s%s  %s  %s", prefix, name, branch, storyStr)
 
-		if len(p.IntegrationTests) > 0 {
-			itPassing, itTotal := integrationTestProgress(p)
-			var testStr string
-			if itPassing == itTotal {
-				testStr = passStyle.Render(fmt.Sprintf("Tests: %d/%d", itPassing, itTotal))
+		qaStatus := prd.QAVerificationStatus(p)
+		if qaStatus != "pending" {
+			var qaStr string
+			if qaStatus == "passed" {
+				qaStr = passStyle.Render(fmt.Sprintf("QA: %s", qaStatus))
 			} else {
-				testStr = failStyle.Render(fmt.Sprintf("Tests: %d/%d", itPassing, itTotal))
+				qaStr = failStyle.Render(fmt.Sprintf("QA: %s", qaStatus))
 			}
-			parts += "  " + testStr
+			parts += "  " + qaStr
 		}
 
 		if entry.Name == currentWC.Name {

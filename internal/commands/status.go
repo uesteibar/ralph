@@ -111,13 +111,13 @@ func statusFull(w io.Writer, wc workspace.WorkContext, repoPath string) error {
 		fmt.Fprintf(w, "%s %s\n", labelStyle.Render("Stories:"), failStyle.Render(fmt.Sprintf("%d/%d passing", passing, total)))
 	}
 
-	if len(p.IntegrationTests) > 0 {
-		itPassing, itTotal := integrationTestProgress(p)
-		if itPassing == itTotal {
-			fmt.Fprintf(w, "%s %s\n", labelStyle.Render("Tests:"), passStyle.Render(fmt.Sprintf("%d/%d passing", itPassing, itTotal)))
-		} else {
-			fmt.Fprintf(w, "%s %s\n", labelStyle.Render("Tests:"), failStyle.Render(fmt.Sprintf("%d/%d passing", itPassing, itTotal)))
-		}
+	qaStatus := prd.QAVerificationStatus(p)
+	if qaStatus == "passed" {
+		fmt.Fprintf(w, "%s %s\n", labelStyle.Render("QA:"), passStyle.Render(qaStatus))
+	} else if qaStatus == "failed" {
+		fmt.Fprintf(w, "%s %s\n", labelStyle.Render("QA:"), failStyle.Render(qaStatus))
+	} else {
+		fmt.Fprintf(w, "%s %s\n", labelStyle.Render("QA:"), qaStatus)
 	}
 
 	return nil
@@ -127,16 +127,6 @@ func storyProgress(p *prd.PRD) (passing, total int) {
 	total = len(p.UserStories)
 	for _, s := range p.UserStories {
 		if s.Passes {
-			passing++
-		}
-	}
-	return
-}
-
-func integrationTestProgress(p *prd.PRD) (passing, total int) {
-	total = len(p.IntegrationTests)
-	for _, t := range p.IntegrationTests {
-		if t.Passes {
 			passing++
 		}
 	}

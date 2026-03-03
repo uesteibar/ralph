@@ -22,20 +22,16 @@ const (
 	iterationDelay       = 2 * time.Second
 
 	// MaxTurns limits for Claude invocations.
-	storyMaxTurns    = 50
-	qaVerifyMaxTurns = 30
-	qaFixMaxTurns    = 30
+	storyMaxTurns = 50
 )
 
 // invokeOpts holds parameters for Claude invocation (used for testability).
 type invokeOpts struct {
-	prompt           string
-	dir              string
-	verbose          bool
-	maxTurns         int
-	eventHandler     events.EventHandler
-	isQAVerification bool
-	isQAFix          bool
+	prompt       string
+	dir          string
+	verbose      bool
+	maxTurns     int
+	eventHandler events.EventHandler
 }
 
 // invokeClaudeFn is the function used to invoke Claude. Package-level var for testability.
@@ -141,24 +137,54 @@ func emitWarn(h events.EventHandler, format string, args ...any) {
 	emitEvent(h, events.LogMessage{Level: "warning", Message: fmt.Sprintf(format, args...)})
 }
 
+// buildCommitPrompt creates a prompt for the commit phase when all stories are complete
+// but there are uncommitted changes that need to be committed.
+func buildCommitPrompt(prdPath, progressPath, knowledgePath string) string {
+	var prompt bytes.Buffer
+
+	prompt.WriteString("# Commit Phase\n\n")
+	prompt.WriteString("All user stories in the PRD have been completed! However, there are uncommitted changes in the repository.\n\n")
+	prompt.WriteString("Your task:\n")
+	prompt.WriteString("1. Review the uncommitted changes using `git status` and `git diff`\n")
+	prompt.WriteString("2. Review recent commits using `git log` to understand the commit message style\n")
+	prompt.WriteString("3. Create an appropriate commit message that summarizes the work done\n")
+	prompt.WriteString("4. Commit all changes\n\n")
+
+	if prdPath != "" {
+		fmt.Fprintf(&prompt, "PRD location: %s\n", prdPath)
+	}
+	if progressPath != "" {
+		fmt.Fprintf(&prompt, "Progress log: %s\n", progressPath)
+	}
+	if knowledgePath != "" {
+		fmt.Fprintf(&prompt, "Knowledge base: %s\n", knowledgePath)
+	}
+
+	prompt.WriteString("\nWhen you have successfully committed all changes, respond with <promise>COMPLETE</promise> to signal completion.\n")
+
+	return prompt.String()
+}
+
 // Config holds the parameters for a Ralph execution loop.
 type Config struct {
 	MaxIterations int
+	MaxQAAttempts int
 	WorkDir       string
 	PRDPath       string
 	ProgressPath  string
 	PromptsDir    string
 	QualityChecks []string
 	KnowledgePath string
+	QAReportPath  string
+	QAScriptsPath string
 	Verbose       bool
 	EventHandler  events.EventHandler
 }
 
 // Run executes the Ralph loop: for each iteration, it reads the PRD, picks
 // the next unfinished story, invokes Claude to implement it, and checks for
-// the completion signal. When all stories pass, it invokes QA verification.
-// Returns nil when all stories and integration tests are done or an error
-// if max iterations are reached.
+// the completion signal. Returns nil when all stories pass or an error if
+// max iterations are reached.
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.MaxIterations <= 0 {
 		cfg.MaxIterations = DefaultMaxIterations
@@ -184,66 +210,42 @@ func Run(ctx context.Context, cfg Config) error {
 
 		story := prd.NextUnfinished(currentPRD)
 		if story == nil {
-			// All user stories pass — check if QA verification is needed
-			if len(currentPRD.IntegrationTests) == 0 {
-				if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
-					if i < cfg.MaxIterations {
-						time.Sleep(iterationDelay)
+			// All user stories pass
+			if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
+				// Git is dirty — invoke Claude to commit the changes
+				emitLog(cfg.EventHandler, "all stories complete but uncommitted changes detected — invoking Claude to commit")
+
+				commitPrompt := buildCommitPrompt(cfg.PRDPath, cfg.ProgressPath, cfg.KnowledgePath)
+				output, err := invokeWithUsageLimitWait(ctx, invokeOpts{
+					prompt:       commitPrompt,
+					dir:          cfg.WorkDir,
+					verbose:      cfg.Verbose,
+					maxTurns:     storyMaxTurns,
+					eventHandler: cfg.EventHandler,
+				})
+				if err != nil {
+					emitWarn(cfg.EventHandler, "Claude returned error during commit phase: %v", err)
+					// Non-fatal — Claude may have partially succeeded.
+					// The next iteration will re-check git status.
+				}
+
+				// If Claude signaled COMPLETE, verify git is now clean
+				if claude.ContainsComplete(output) {
+					emitLog(cfg.EventHandler, "Claude signaled COMPLETE after commit — verifying git status")
+					if checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
+						emitLog(cfg.EventHandler, "verified: all stories pass and git is clean — done")
+						return nil
 					}
-					continue
+					emitLog(cfg.EventHandler, "COMPLETE signal received but git still has uncommitted changes — continuing loop")
 				}
-				emitLog(cfg.EventHandler, "all stories pass, no integration tests — done")
-				return nil
-			}
 
-			if prd.AllIntegrationTestsPass(currentPRD) {
-				if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
-					if i < cfg.MaxIterations {
-						time.Sleep(iterationDelay)
-					}
-					continue
+				if i < cfg.MaxIterations {
+					time.Sleep(iterationDelay)
 				}
-				emitLog(cfg.EventHandler, "all stories and integration tests pass — done")
-				return nil
+				continue
 			}
-
-			// Run QA verification phase
-			emitEvent(cfg.EventHandler, events.QAPhaseStarted{Phase: "verification"})
-			if err := runQAVerification(ctx, cfg); err != nil {
-				emitWarn(cfg.EventHandler, "QA verification error: %v", err)
-			}
-			emitEvent(cfg.EventHandler, events.PRDRefresh{})
-
-			// Re-read PRD after QA verification and check if all tests pass
-			verifyPRD, err := prd.Read(cfg.PRDPath)
-			if err != nil {
-				emitWarn(cfg.EventHandler, "failed to read PRD after QA: %v — continuing loop", err)
-			} else if prd.AllIntegrationTestsPass(verifyPRD) {
-				if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
-					if i < cfg.MaxIterations {
-						time.Sleep(iterationDelay)
-					}
-					continue
-				}
-				emitLog(cfg.EventHandler, "QA verification complete — all integration tests pass")
-				return nil
-			}
-
-			// Get failed tests and invoke fix agent
-			failedTests := prd.FailedIntegrationTests(verifyPRD)
-			if len(failedTests) > 0 {
-				emitEvent(cfg.EventHandler, events.QAPhaseStarted{Phase: "fix"})
-				if err := runQAFix(ctx, cfg, failedTests); err != nil {
-					emitWarn(cfg.EventHandler, "QA fix error: %v", err)
-				}
-				emitEvent(cfg.EventHandler, events.PRDRefresh{})
-			}
-
-			// Continue loop to allow re-verification after fix
-			if i < cfg.MaxIterations {
-				time.Sleep(iterationDelay)
-			}
-			continue
+			emitLog(cfg.EventHandler, "all stories pass — done")
+			return nil
 		}
 
 		emitEvent(cfg.EventHandler, events.StoryStarted{
@@ -275,7 +277,7 @@ func Run(ctx context.Context, cfg Config) error {
 		if claude.ContainsComplete(output) {
 			emitLog(cfg.EventHandler, "Ralph signaled COMPLETE — verifying PRD state")
 
-			// Re-read PRD to verify all stories and integration tests actually pass.
+			// Re-read PRD to verify all stories actually pass.
 			// This guards against Claude hallucinating completion or stale data.
 			verifyPRD, err := prd.Read(cfg.PRDPath)
 			if err != nil {
@@ -288,29 +290,13 @@ func Run(ctx context.Context, cfg Config) error {
 				continue
 			}
 
-			if len(verifyPRD.IntegrationTests) == 0 {
-				if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
-					if i < cfg.MaxIterations {
-						time.Sleep(iterationDelay)
-					}
-					continue
-				}
-				emitLog(cfg.EventHandler, "verified: all stories pass, no integration tests — done")
-				return nil
-			}
-
-			if !prd.AllIntegrationTestsPass(verifyPRD) {
-				emitLog(cfg.EventHandler, "COMPLETE signal received but not all integration tests pass — continuing loop")
-				continue
-			}
-
 			if !checkGitClean(ctx, cfg.WorkDir, cfg.EventHandler) {
 				if i < cfg.MaxIterations {
 					time.Sleep(iterationDelay)
 				}
 				continue
 			}
-			emitLog(cfg.EventHandler, "verified: all stories and integration tests pass — done")
+			emitLog(cfg.EventHandler, "verified: all stories pass — done")
 			return nil
 		}
 
@@ -320,55 +306,6 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	return fmt.Errorf("max iterations (%d) reached without completing all stories", cfg.MaxIterations)
-}
-
-// runQAVerification invokes the QA verification agent with the qa_verification.md prompt.
-func runQAVerification(ctx context.Context, cfg Config) error {
-	viewPath := writeProgressView(cfg.ProgressPath)
-	prompt, err := prompts.RenderQAVerification(prompts.QAVerificationData{
-		PRDPath:       cfg.PRDPath,
-		ProgressPath:  viewPath,
-		QualityChecks: cfg.QualityChecks,
-		KnowledgePath: cfg.KnowledgePath,
-	}, cfg.PromptsDir)
-	if err != nil {
-		return fmt.Errorf("rendering QA verification prompt: %w", err)
-	}
-
-	_, err = invokeWithUsageLimitWait(ctx, invokeOpts{
-		prompt:           prompt,
-		dir:              cfg.WorkDir,
-		verbose:          cfg.Verbose,
-		maxTurns:         qaVerifyMaxTurns,
-		eventHandler:     cfg.EventHandler,
-		isQAVerification: true,
-	})
-	return err
-}
-
-// runQAFix invokes the QA fix agent with the qa_fix.md prompt to resolve failing integration tests.
-func runQAFix(ctx context.Context, cfg Config, failedTests []prd.IntegrationTest) error {
-	viewPath := writeProgressView(cfg.ProgressPath)
-	prompt, err := prompts.RenderQAFix(prompts.QAFixData{
-		PRDPath:       cfg.PRDPath,
-		ProgressPath:  viewPath,
-		QualityChecks: cfg.QualityChecks,
-		FailedTests:   failedTests,
-		KnowledgePath: cfg.KnowledgePath,
-	}, cfg.PromptsDir)
-	if err != nil {
-		return fmt.Errorf("rendering QA fix prompt: %w", err)
-	}
-
-	_, err = invokeWithUsageLimitWait(ctx, invokeOpts{
-		prompt:       prompt,
-		dir:          cfg.WorkDir,
-		verbose:      cfg.Verbose,
-		maxTurns:     qaFixMaxTurns,
-		eventHandler: cfg.EventHandler,
-		isQAFix:      true,
-	})
-	return err
 }
 
 func ensureProgressFile(path string) {

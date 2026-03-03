@@ -67,12 +67,30 @@ func TestMarshalUnmarshal_RoundTrip(t *testing.T) {
 			},
 		},
 		{
-			name:  "QAPhaseStarted",
-			event: QAPhaseStarted{Phase: "verification"},
+			name:  "QAVerifyStarted",
+			event: QAVerifyStarted{},
 			check: func(t *testing.T, got Event) {
-				e := got.(QAPhaseStarted)
-				if e.Phase != "verification" {
-					t.Errorf("QAPhaseStarted mismatch: %+v", e)
+				if _, ok := got.(QAVerifyStarted); !ok {
+					t.Errorf("expected QAVerifyStarted, got %T", got)
+				}
+			},
+		},
+		{
+			name:  "QAFixStarted",
+			event: QAFixStarted{},
+			check: func(t *testing.T, got Event) {
+				if _, ok := got.(QAFixStarted); !ok {
+					t.Errorf("expected QAFixStarted, got %T", got)
+				}
+			},
+		},
+		{
+			name:  "QAComplete",
+			event: QAComplete{Passed: true},
+			check: func(t *testing.T, got Event) {
+				e := got.(QAComplete)
+				if !e.Passed {
+					t.Errorf("QAComplete mismatch: %+v", e)
 				}
 			},
 		},

@@ -78,10 +78,6 @@ func TestOverview_WithWorkspaces(t *testing.T) {
 			{ID: "US-002", Title: "Story 2", Passes: true},
 			{ID: "US-003", Title: "Story 3", Passes: false},
 		},
-		IntegrationTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test 1", Passes: true},
-			{ID: "IT-002", Description: "Test 2", Passes: false},
-		},
 	}
 	writePRD(t, workspace.PRDPathForWorkspace(dir, "login-page"), loginPRD)
 
@@ -109,9 +105,6 @@ func TestOverview_WithWorkspaces(t *testing.T) {
 	}
 	if !containsText(output, "2/3") {
 		t.Errorf("expected story progress '2/3' in output, got: %s", output)
-	}
-	if !containsText(output, "1/2") {
-		t.Errorf("expected test progress '1/2' in output, got: %s", output)
 	}
 
 	// dark-mode without PRD.

@@ -418,7 +418,7 @@ func TestOrchestratorLoop_SyncTransitionExecutes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wake := make(chan struct{}, 1)
 
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil, nil)
 
 	// Trigger a tick.
 	wake <- struct{}{}
@@ -466,7 +466,7 @@ func TestOrchestratorLoop_AsyncTransitionDispatches(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wake := make(chan struct{}, 1)
 
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil, nil)
 
 	// Trigger a tick.
 	wake <- struct{}{}
@@ -477,6 +477,499 @@ func TestOrchestratorLoop_AsyncTransitionDispatches(t *testing.T) {
 
 	if !actionCalled {
 		t.Error("expected async transition to be dispatched")
+	}
+}
+
+// --- isAsyncTransition QA tests ---
+
+func TestIsAsyncTransition_QAToInReview(t *testing.T) {
+	tr := orchestrator.Transition{
+		From: orchestrator.StateQA,
+		To:   orchestrator.StateInReview,
+	}
+	if !isAsyncTransition(tr) {
+		t.Error("expected qa → in_review to be async")
+	}
+}
+
+func TestIsAsyncTransition_QAToQAFix(t *testing.T) {
+	tr := orchestrator.Transition{
+		From: orchestrator.StateQA,
+		To:   orchestrator.StateQAFix,
+	}
+	if !isAsyncTransition(tr) {
+		t.Error("expected qa → qa_fix to be async")
+	}
+}
+
+func TestIsAsyncTransition_QAFixToQA(t *testing.T) {
+	tr := orchestrator.Transition{
+		From: orchestrator.StateQAFix,
+		To:   orchestrator.StateQA,
+	}
+	if !isAsyncTransition(tr) {
+		t.Error("expected qa_fix → qa to be async")
+	}
+}
+
+func TestIsAsyncTransition_QAToPaused(t *testing.T) {
+	tr := orchestrator.Transition{
+		From: orchestrator.StateQA,
+		To:   orchestrator.StatePaused,
+	}
+	if !isAsyncTransition(tr) {
+		t.Error("expected qa → paused to be async")
+	}
+}
+
+// --- qaDispatcher tests ---
+
+func TestQADispatcher_VerifySuccess_TransitionsToInReviewAndCreatesPR(t *testing.T) {
+	database := orchestratorTestDB(t)
+	issue := orchestratorTestIssue(t, database, "qa")
+
+	var prCalled bool
+	qaDisp := &qaDispatcher{
+		verifyFn: func(i db.Issue, d *db.DB) error {
+			return nil // QA passes
+		},
+		fixFn: func(i db.Issue, d *db.DB) error {
+			t.Error("fixFn should not be called on verify success")
+			return nil
+		},
+		prFn: func(i db.Issue, d *db.DB) error {
+			prCalled = true
+			return nil
+		},
+	}
+
+	dispatcher := worker.New(worker.Config{
+		DB:         database,
+		MaxWorkers: 2,
+		Logger:     slog.Default(),
+	})
+
+	hub := server.NewHub(slog.Default())
+	logger := slog.Default()
+
+	qaDisp.dispatch(context.Background(), issue, database, dispatcher, hub, logger)
+	dispatcher.Wait()
+
+	if !prCalled {
+		t.Error("expected PR creation function to be called after QA verify success")
+	}
+
+	updated, err := database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("reading issue: %v", err)
+	}
+	if updated.State != "in_review" {
+		t.Errorf("expected state in_review, got %s", updated.State)
+	}
+
+	// Verify activity was logged.
+	activities, err := database.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+	found := false
+	for _, a := range activities {
+		if a.EventType == "state_change" && a.FromState == "qa" && a.ToState == "in_review" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected state_change activity from qa to in_review")
+	}
+}
+
+func TestQADispatcher_VerifyFailure_TransitionsToQAFix(t *testing.T) {
+	database := orchestratorTestDB(t)
+	issue := orchestratorTestIssue(t, database, "qa")
+
+	qaDisp := &qaDispatcher{
+		verifyFn: func(i db.Issue, d *db.DB) error {
+			return fmt.Errorf("qa verification failed: ralph check just test")
+		},
+		fixFn: func(i db.Issue, d *db.DB) error {
+			t.Error("fixFn should not be called during verify dispatch")
+			return nil
+		},
+		prFn: func(i db.Issue, d *db.DB) error {
+			t.Error("prFn should not be called on verify failure")
+			return nil
+		},
+	}
+
+	dispatcher := worker.New(worker.Config{
+		DB:         database,
+		MaxWorkers: 2,
+		Logger:     slog.Default(),
+	})
+
+	hub := server.NewHub(slog.Default())
+	logger := slog.Default()
+
+	qaDisp.dispatch(context.Background(), issue, database, dispatcher, hub, logger)
+	dispatcher.Wait()
+
+	updated, err := database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("reading issue: %v", err)
+	}
+	if updated.State != "qa_fix" {
+		t.Errorf("expected state qa_fix, got %s", updated.State)
+	}
+
+	// Verify activity was logged.
+	activities, err := database.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+	found := false
+	for _, a := range activities {
+		if a.EventType == "state_change" && a.FromState == "qa" && a.ToState == "qa_fix" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected state_change activity from qa to qa_fix")
+	}
+}
+
+func TestQADispatcher_VerifyMaxAttempts_TransitionsToPaused(t *testing.T) {
+	database := orchestratorTestDB(t)
+	issue := orchestratorTestIssue(t, database, "qa")
+
+	qaDisp := &qaDispatcher{
+		verifyFn: func(i db.Issue, d *db.DB) error {
+			// Simulate verify action setting state to paused (max attempts exceeded).
+			current, err := d.GetIssue(i.ID)
+			if err != nil {
+				return err
+			}
+			current.State = string(orchestrator.StatePaused)
+			return d.UpdateIssue(current)
+		},
+		fixFn: func(i db.Issue, d *db.DB) error {
+			t.Error("fixFn should not be called when paused")
+			return nil
+		},
+		prFn: func(i db.Issue, d *db.DB) error {
+			t.Error("prFn should not be called when paused")
+			return nil
+		},
+	}
+
+	dispatcher := worker.New(worker.Config{
+		DB:         database,
+		MaxWorkers: 2,
+		Logger:     slog.Default(),
+	})
+
+	hub := server.NewHub(slog.Default())
+	logger := slog.Default()
+
+	qaDisp.dispatch(context.Background(), issue, database, dispatcher, hub, logger)
+	dispatcher.Wait()
+
+	updated, err := database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("reading issue: %v", err)
+	}
+	if updated.State != "paused" {
+		t.Errorf("expected state paused, got %s", updated.State)
+	}
+}
+
+func TestQADispatcher_FixSuccess_TransitionsBackToQA(t *testing.T) {
+	database := orchestratorTestDB(t)
+	issue := orchestratorTestIssue(t, database, "qa_fix")
+
+	var fixCalled bool
+	qaDisp := &qaDispatcher{
+		verifyFn: func(i db.Issue, d *db.DB) error {
+			t.Error("verifyFn should not be called for qa_fix state")
+			return nil
+		},
+		fixFn: func(i db.Issue, d *db.DB) error {
+			fixCalled = true
+			return nil
+		},
+		prFn: func(i db.Issue, d *db.DB) error {
+			t.Error("prFn should not be called during fix")
+			return nil
+		},
+	}
+
+	dispatcher := worker.New(worker.Config{
+		DB:         database,
+		MaxWorkers: 2,
+		Logger:     slog.Default(),
+	})
+
+	hub := server.NewHub(slog.Default())
+	logger := slog.Default()
+
+	qaDisp.dispatch(context.Background(), issue, database, dispatcher, hub, logger)
+	dispatcher.Wait()
+
+	if !fixCalled {
+		t.Error("expected fix function to be called")
+	}
+
+	updated, err := database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("reading issue: %v", err)
+	}
+	if updated.State != "qa" {
+		t.Errorf("expected state qa, got %s", updated.State)
+	}
+
+	// Verify activity was logged.
+	activities, err := database.ListActivity(issue.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("listing activities: %v", err)
+	}
+	found := false
+	for _, a := range activities {
+		if a.EventType == "state_change" && a.FromState == "qa_fix" && a.ToState == "qa" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected state_change activity from qa_fix to qa")
+	}
+}
+
+func TestQADispatcher_SkipsAlreadyRunning(t *testing.T) {
+	database := orchestratorTestDB(t)
+	issue := orchestratorTestIssue(t, database, "qa")
+
+	callCount := 0
+	var mu sync.Mutex
+	blocker := make(chan struct{})
+
+	qaDisp := &qaDispatcher{
+		verifyFn: func(i db.Issue, d *db.DB) error {
+			mu.Lock()
+			callCount++
+			mu.Unlock()
+			<-blocker
+			return nil
+		},
+		prFn: func(i db.Issue, d *db.DB) error { return nil },
+	}
+
+	dispatcher := worker.New(worker.Config{
+		DB:         database,
+		MaxWorkers: 2,
+		Logger:     slog.Default(),
+	})
+
+	hub := server.NewHub(slog.Default())
+	logger := slog.Default()
+
+	// First dispatch.
+	qaDisp.dispatch(context.Background(), issue, database, dispatcher, hub, logger)
+	time.Sleep(50 * time.Millisecond)
+
+	// Second dispatch should be skipped (IsRunning check in dispatch).
+	qaDisp.dispatch(context.Background(), issue, database, dispatcher, hub, logger)
+
+	close(blocker)
+	dispatcher.Wait()
+
+	mu.Lock()
+	if callCount != 1 {
+		t.Errorf("expected verifyFn called once, got %d", callCount)
+	}
+	mu.Unlock()
+}
+
+func TestQADispatcher_IgnoresNonQAState(t *testing.T) {
+	database := orchestratorTestDB(t)
+	issue := orchestratorTestIssue(t, database, "building")
+
+	qaDisp := &qaDispatcher{
+		verifyFn: func(i db.Issue, d *db.DB) error {
+			t.Error("verifyFn should not be called for building state")
+			return nil
+		},
+		fixFn: func(i db.Issue, d *db.DB) error {
+			t.Error("fixFn should not be called for building state")
+			return nil
+		},
+	}
+
+	dispatcher := worker.New(worker.Config{
+		DB:         database,
+		MaxWorkers: 2,
+		Logger:     slog.Default(),
+	})
+
+	hub := server.NewHub(slog.Default())
+	logger := slog.Default()
+
+	qaDisp.dispatch(context.Background(), issue, database, dispatcher, hub, logger)
+	dispatcher.Wait()
+
+	// Issue state should remain unchanged.
+	updated, err := database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("reading issue: %v", err)
+	}
+	if updated.State != "building" {
+		t.Errorf("expected state building, got %s", updated.State)
+	}
+}
+
+// --- Orchestrator loop QA dispatch test ---
+
+func TestOrchestratorLoop_DispatchesQAIssues(t *testing.T) {
+	database := orchestratorTestDB(t)
+	issue := orchestratorTestIssue(t, database, "qa")
+
+	sm := orchestrator.New(database)
+
+	var verifyCalled bool
+	var mu sync.Mutex
+	qaDisp := &qaDispatcher{
+		verifyFn: func(i db.Issue, d *db.DB) error {
+			mu.Lock()
+			verifyCalled = true
+			mu.Unlock()
+			return nil
+		},
+		prFn: func(i db.Issue, d *db.DB) error { return nil },
+	}
+
+	dispatcher := worker.New(worker.Config{
+		DB:         database,
+		MaxWorkers: 2,
+		Logger:     slog.Default(),
+	})
+
+	hub := server.NewHub(slog.Default())
+	logger := slog.Default()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wake := make(chan struct{}, 1)
+
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil, qaDisp)
+
+	// Trigger a tick.
+	wake <- struct{}{}
+	time.Sleep(200 * time.Millisecond)
+
+	cancel()
+	dispatcher.Wait()
+
+	mu.Lock()
+	if !verifyCalled {
+		t.Error("expected QA verify to be dispatched for qa issue")
+	}
+	mu.Unlock()
+
+	updated, err := database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("reading issue: %v", err)
+	}
+	if updated.State != "in_review" {
+		t.Errorf("expected state in_review after QA pass, got %s", updated.State)
+	}
+}
+
+func TestOrchestratorLoop_DispatchesQAFixIssues(t *testing.T) {
+	database := orchestratorTestDB(t)
+	issue := orchestratorTestIssue(t, database, "qa_fix")
+
+	sm := orchestrator.New(database)
+
+	var fixCalled bool
+	var mu sync.Mutex
+	qaDisp := &qaDispatcher{
+		fixFn: func(i db.Issue, d *db.DB) error {
+			mu.Lock()
+			fixCalled = true
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	dispatcher := worker.New(worker.Config{
+		DB:         database,
+		MaxWorkers: 2,
+		Logger:     slog.Default(),
+	})
+
+	hub := server.NewHub(slog.Default())
+	logger := slog.Default()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wake := make(chan struct{}, 1)
+
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil, qaDisp)
+
+	// Trigger a tick.
+	wake <- struct{}{}
+	time.Sleep(200 * time.Millisecond)
+
+	cancel()
+	dispatcher.Wait()
+
+	mu.Lock()
+	if !fixCalled {
+		t.Error("expected QA fix to be dispatched for qa_fix issue")
+	}
+	mu.Unlock()
+
+	updated, err := database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("reading issue: %v", err)
+	}
+	if updated.State != "qa" {
+		t.Errorf("expected state qa after fix, got %s", updated.State)
+	}
+}
+
+func TestOrchestratorLoop_SkipsQAWhenNoQADispatcher(t *testing.T) {
+	database := orchestratorTestDB(t)
+	issue := orchestratorTestIssue(t, database, "qa")
+
+	sm := orchestrator.New(database)
+
+	dispatcher := worker.New(worker.Config{
+		DB:         database,
+		MaxWorkers: 2,
+		Logger:     slog.Default(),
+	})
+
+	hub := server.NewHub(slog.Default())
+	logger := slog.Default()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wake := make(chan struct{}, 1)
+
+	// Pass nil qaDisp — should not panic or dispatch.
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, nil, nil)
+
+	wake <- struct{}{}
+	time.Sleep(100 * time.Millisecond)
+
+	cancel()
+	dispatcher.Wait()
+
+	// State should remain unchanged (no dispatch happened).
+	updated, err := database.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("reading issue: %v", err)
+	}
+	if updated.State != "qa" {
+		t.Errorf("expected state to remain qa, got %s", updated.State)
 	}
 }
 

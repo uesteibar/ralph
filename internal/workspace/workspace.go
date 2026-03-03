@@ -58,6 +58,16 @@ func ProgressPathForWorkspace(repoPath, name string) string {
 	return filepath.Join(repoPath, ".ralph", "workspaces", name, "progress.txt")
 }
 
+// QAReportPathForWorkspace returns the QA report path: <repoPath>/.ralph/workspaces/<name>/qa-report.md
+func QAReportPathForWorkspace(repoPath, name string) string {
+	return filepath.Join(repoPath, ".ralph", "workspaces", name, "qa-report.md")
+}
+
+// QAScriptsPathForWorkspace returns the QA scripts directory: <repoPath>/.ralph/workspaces/<name>/qa-scripts/
+func QAScriptsPathForWorkspace(repoPath, name string) string {
+	return filepath.Join(repoPath, ".ralph", "workspaces", name, "qa-scripts")
+}
+
 // DeriveBranch returns prefix + name and validates against branchPattern if set.
 func DeriveBranch(prefix, name, branchPattern string) (string, error) {
 	branch := prefix + name

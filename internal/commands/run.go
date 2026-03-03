@@ -107,9 +107,9 @@ func Run(args []string) error {
 		return fmt.Errorf("reading PRD: %w", err)
 	}
 
-	if prd.AllPass(currentPRD) && prd.AllIntegrationTestsPass(currentPRD) {
+	if prd.AllPass(currentPRD) && prd.QAVerificationStatus(currentPRD) == "passed" {
 		doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
-		fmt.Fprintf(os.Stderr, "\n%s All stories and integration tests pass — nothing to do.\n\n", doneStyle.Render("✓"))
+		fmt.Fprintf(os.Stderr, "\n%s All stories pass and QA verified — nothing to do.\n\n", doneStyle.Render("✓"))
 		fmt.Fprintf(os.Stderr, "Run `ralph done` to squash and merge your changes back to base.\n")
 		return nil
 	}

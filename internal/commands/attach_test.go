@@ -67,6 +67,8 @@ func TestAttach_BaseWorkspace_Error(t *testing.T) {
 	defer os.Chdir(oldWd)
 	os.Chdir(dir)
 
+	t.Setenv("RALPH_WORKSPACE", "")
+
 	err := Attach([]string{})
 	if err == nil {
 		t.Fatal("expected error when attaching to base workspace")

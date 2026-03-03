@@ -30,7 +30,7 @@ func TestRenderLoopIteration_ContainsStoryDetails(t *testing.T) {
 	}
 }
 
-func TestRenderLoopIteration_CompletionRequiresBothStoriesAndIntegrationTests(t *testing.T) {
+func TestRenderLoopIteration_CompletionChecksOnlyUserStories(t *testing.T) {
 	story := &prd.Story{
 		ID:          "US-001",
 		Title:       "Test Story",
@@ -42,16 +42,15 @@ func TestRenderLoopIteration_CompletionRequiresBothStoriesAndIntegrationTests(t 
 		t.Fatalf("RenderLoopIteration failed: %v", err)
 	}
 
-	// Verify completion criteria mentions both userStories and integrationTests
-	checks := []string{
-		"userStories",
-		"integrationTests",
-		"passes: true",
+	// Verify completion criteria mentions userStories only (not integrationTests)
+	if !strings.Contains(out, "userStories") {
+		t.Error("completion criteria should mention userStories")
 	}
-	for _, want := range checks {
-		if !strings.Contains(out, want) {
-			t.Errorf("completion criteria should mention %q", want)
-		}
+	if !strings.Contains(out, "passes: true") {
+		t.Error("completion criteria should mention passes: true")
+	}
+	if strings.Contains(out, "integrationTests") {
+		t.Error("completion criteria should NOT mention integrationTests — QA is managed separately")
 	}
 }
 
@@ -123,23 +122,23 @@ func TestRenderLoopIteration_DoesNotContainOverviewSections(t *testing.T) {
 	}
 }
 
-func TestRenderQAVerification_ContainsNoCoSignInstruction(t *testing.T) {
-	data := QAVerificationData{
+func TestRenderQAVerify_ContainsNoCoSignInstruction(t *testing.T) {
+	data := QAVerifyData{
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test"},
 	}
 
-	out, err := RenderQAVerification(data, "")
+	out, err := RenderQAVerify(data, "")
 	if err != nil {
-		t.Fatalf("RenderQAVerification failed: %v", err)
+		t.Fatalf("RenderQAVerify failed: %v", err)
 	}
 
 	if !strings.Contains(out, "Co-Authored-By") {
-		t.Error("qa_verification.md should contain Co-Authored-By instruction")
+		t.Error("qa_verify.md should contain Co-Authored-By instruction")
 	}
 	if !strings.Contains(out, "Do NOT add Co-Authored-By") {
-		t.Error("qa_verification.md should instruct not to add Co-Authored-By headers")
+		t.Error("qa_verify.md should instruct not to add Co-Authored-By headers")
 	}
 }
 
@@ -148,9 +147,7 @@ func TestRenderQAFix_ContainsNoCoSignInstruction(t *testing.T) {
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test"},
-		FailedTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
-		},
+		QAReportPath:  "/path/to/qa-report.md",
 	}
 
 	out, err := RenderQAFix(data, "")
@@ -215,7 +212,7 @@ func TestRenderPRDNew_OverviewSectionsInCorrectOrder(t *testing.T) {
 		t.Fatalf("RenderPRDNew failed: %v", err)
 	}
 
-	// The flow order must be: clarify → feature overview → architecture overview → user stories → integration tests → /finish
+	// The flow order must be: clarify → feature overview → architecture overview → user stories → QA verification → /finish
 	markers := []struct {
 		label string
 		text  string
@@ -224,7 +221,7 @@ func TestRenderPRDNew_OverviewSectionsInCorrectOrder(t *testing.T) {
 		{"Feature Overview", "Proposing Feature Overview"},
 		{"Architecture Overview", "Proposing Architecture Overview"},
 		{"Story writing", "Story writing guidelines"},
-		{"Integration Tests", "Proposing Integration Tests"},
+		{"QA Verification", "QA Verification"},
 	}
 
 	prevIdx := -1
@@ -420,16 +417,18 @@ func TestRenderChatSystem_IncludesContext(t *testing.T) {
 	}
 }
 
-func TestRenderQAVerification_ContainsAllSections(t *testing.T) {
-	data := QAVerificationData{
+func TestRenderQAVerify_ContainsAllSections(t *testing.T) {
+	data := QAVerifyData{
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test", "just vet"},
+		QAReportPath:  "/ws/qa-report.md",
+		QAScriptsPath: "/ws/qa-scripts",
 	}
 
-	out, err := RenderQAVerification(data, "")
+	out, err := RenderQAVerify(data, "")
 	if err != nil {
-		t.Fatalf("RenderQAVerification failed: %v", err)
+		t.Fatalf("RenderQAVerify failed: %v", err)
 	}
 
 	checks := []string{
@@ -438,22 +437,20 @@ func TestRenderQAVerification_ContainsAllSections(t *testing.T) {
 		data.ProgressPath,
 		"just test",
 		"just vet",
-		// Key instructions
-		"integrationTests",
-		"BUILD an automated test",
-		"RUN the test",
-		"verify autonomously",
-		"UPDATE the PRD",
-		// Tooling
-		"Playwright",
-		"npm install",
-		// PRD update
-		"passes",
-		"failure",
-		"notes",
-		// Skills
-		".ralph/skills/",
-		"reusable",
+		data.QAReportPath,
+		data.QAScriptsPath,
+		// Key instructions — project-type-based testing
+		"Detect Project Type",
+		"Testing Strategy",
+		"MANDATORY for Web/API/CLI",
+		"Hands-On Testing",
+		"Test Coverage Verification",
+		"Manual Test Plan",
+		"QA report",
+		// Structured findings
+		"qaVerification.findings",
+		// Workspace boundary
+		"Workspace Boundary",
 	}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {
@@ -467,23 +464,10 @@ func TestRenderQAFix_ContainsAllSections(t *testing.T) {
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test", "just vet"},
-		FailedTests: []prd.IntegrationTest{
-			{
-				ID:          "IT-001",
-				Description: "User can log in with valid credentials",
-				Steps:       []string{"Navigate to login page", "Enter valid credentials", "Click submit"},
-				Passes:      false,
-				Failure:     "Login button does not respond to clicks",
-				Notes:       "Button element is present but click handler missing",
-			},
-			{
-				ID:          "IT-002",
-				Description: "Form validation shows errors",
-				Steps:       []string{"Submit empty form", "Check error messages"},
-				Passes:      false,
-				Failure:     "No validation errors shown",
-				Notes:       "",
-			},
+		QAReportPath:  "/path/to/qa-report.md",
+		QAScriptsPath: "/path/to/qa-scripts",
+		Findings: []prd.QAFinding{
+			{ID: "QA-001", Title: "Login fails", Severity: "error", TestScript: "test-login.sh", Status: "found"},
 		},
 	}
 
@@ -498,25 +482,23 @@ func TestRenderQAFix_ContainsAllSections(t *testing.T) {
 		data.ProgressPath,
 		"just test",
 		"just vet",
-		// Failed tests rendered
-		"IT-001",
-		"User can log in with valid credentials",
-		"Navigate to login page",
-		"Login button does not respond to clicks",
-		"Button element is present but click handler missing",
-		"IT-002",
-		"Form validation shows errors",
-		"No validation errors shown",
-		// Key instructions
-		"FIRST reproduce the failure",
-		"automated test",
+		// QA paths
+		"/path/to/qa-report.md",
+		"/path/to/qa-scripts",
+		// Finding details
+		"QA-001", "Login fails", "error", "test-login.sh",
+		// Key instructions — fix persona
+		"Reproduce the Failure",
+		"You MUST reproduce",
 		"Fix the code",
 		// Commit format
 		"fix(QA):",
 		// Rules
-		"never fix blind",
 		"One fix per commit",
-		"Minimal changes",
+		"Keep changes surgical",
+		"minimal changes",
+		// Mark findings addressed
+		"addressed",
 	}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {
@@ -629,16 +611,16 @@ func TestRenderLoopIteration_ContainsLogFileDebuggingNote(t *testing.T) {
 	}
 }
 
-func TestRenderQAVerification_WrapsQualityChecksWithRalphCheck(t *testing.T) {
-	data := QAVerificationData{
+func TestRenderQAVerify_WrapsQualityChecksWithRalphCheck(t *testing.T) {
+	data := QAVerifyData{
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test", "just vet"},
 	}
 
-	out, err := RenderQAVerification(data, "")
+	out, err := RenderQAVerify(data, "")
 	if err != nil {
-		t.Fatalf("RenderQAVerification failed: %v", err)
+		t.Fatalf("RenderQAVerify failed: %v", err)
 	}
 
 	checks := []string{
@@ -652,16 +634,16 @@ func TestRenderQAVerification_WrapsQualityChecksWithRalphCheck(t *testing.T) {
 	}
 }
 
-func TestRenderQAVerification_ContainsLogFileDebuggingNote(t *testing.T) {
-	data := QAVerificationData{
+func TestRenderQAVerify_ContainsLogFileDebuggingNote(t *testing.T) {
+	data := QAVerifyData{
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test"},
 	}
 
-	out, err := RenderQAVerification(data, "")
+	out, err := RenderQAVerify(data, "")
 	if err != nil {
-		t.Fatalf("RenderQAVerification failed: %v", err)
+		t.Fatalf("RenderQAVerify failed: %v", err)
 	}
 
 	if !strings.Contains(out, "log file") {
@@ -674,9 +656,7 @@ func TestRenderQAFix_WrapsQualityChecksWithRalphCheck(t *testing.T) {
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test", "just vet"},
-		FailedTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
-		},
+		QAReportPath: "/path/to/qa-report.md",
 	}
 
 	out, err := RenderQAFix(data, "")
@@ -700,9 +680,7 @@ func TestRenderQAFix_ContainsLogFileDebuggingNote(t *testing.T) {
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test"},
-		FailedTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
-		},
+		QAReportPath: "/path/to/qa-report.md",
 	}
 
 	out, err := RenderQAFix(data, "")
@@ -776,14 +754,14 @@ func TestRender_FallsBackToEmbeddedWhenOverrideDirEmpty(t *testing.T) {
 }
 
 func TestRender_OverrideDirNonexistentFallsBackToEmbedded(t *testing.T) {
-	data := QAVerificationData{
+	data := QAVerifyData{
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test"},
 	}
 
 	// Point to a directory that doesn't exist — should silently fall back
-	out, err := RenderQAVerification(data, "/nonexistent/path/prompts")
+	out, err := RenderQAVerify(data, "/nonexistent/path/prompts")
 	if err != nil {
 		t.Fatalf("expected fallback to embedded, got error: %v", err)
 	}
@@ -862,8 +840,8 @@ func TestChatSystemData_KnowledgePath_Field(t *testing.T) {
 	}
 }
 
-func TestQAVerificationData_KnowledgePath_Field(t *testing.T) {
-	data := QAVerificationData{
+func TestQAVerifyData_KnowledgePath_Field(t *testing.T) {
+	data := QAVerifyData{
 		PRDPath:       ".ralph/state/prd.json",
 		KnowledgePath: "/repo/.ralph/knowledge/",
 	}
@@ -981,17 +959,17 @@ func TestRenderChatSystem_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
 	}
 }
 
-func TestRenderQAVerification_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
-	data := QAVerificationData{
+func TestRenderQAVerify_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
+	data := QAVerifyData{
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test"},
 		KnowledgePath: "/repo/.ralph/knowledge/",
 	}
 
-	out, err := RenderQAVerification(data, "")
+	out, err := RenderQAVerify(data, "")
 	if err != nil {
-		t.Fatalf("RenderQAVerification failed: %v", err)
+		t.Fatalf("RenderQAVerify failed: %v", err)
 	}
 
 	checks := []string{
@@ -1005,15 +983,15 @@ func TestRenderQAVerification_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
 	}
 }
 
-func TestRenderQAVerification_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
-	data := QAVerificationData{
+func TestRenderQAVerify_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
+	data := QAVerifyData{
 		PRDPath:      ".ralph/state/prd.json",
 		ProgressPath: ".ralph/progress.txt",
 	}
 
-	out, err := RenderQAVerification(data, "")
+	out, err := RenderQAVerify(data, "")
 	if err != nil {
-		t.Fatalf("RenderQAVerification failed: %v", err)
+		t.Fatalf("RenderQAVerify failed: %v", err)
 	}
 
 	if strings.Contains(out, "Knowledge Base") {
@@ -1026,9 +1004,7 @@ func TestRenderQAFix_KnowledgeBase_RenderedWhenPathSet(t *testing.T) {
 		PRDPath:       ".ralph/state/prd.json",
 		ProgressPath:  ".ralph/progress.txt",
 		QualityChecks: []string{"just test"},
-		FailedTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
-		},
+		QAReportPath:  "/path/to/qa-report.md",
 		KnowledgePath: "/repo/.ralph/knowledge/",
 	}
 
@@ -1052,9 +1028,7 @@ func TestRenderQAFix_KnowledgeBase_OmittedWhenPathEmpty(t *testing.T) {
 	data := QAFixData{
 		PRDPath:      ".ralph/state/prd.json",
 		ProgressPath: ".ralph/progress.txt",
-		FailedTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
-		},
+		QAReportPath: "/path/to/qa-report.md",
 	}
 
 	out, err := RenderQAFix(data, "")
@@ -1071,9 +1045,7 @@ func TestRenderQAFix_KnowledgeBase_HasWriteInstructions(t *testing.T) {
 	data := QAFixData{
 		PRDPath:      ".ralph/state/prd.json",
 		ProgressPath: ".ralph/progress.txt",
-		FailedTests: []prd.IntegrationTest{
-			{ID: "IT-001", Description: "Test", Passes: false, Failure: "failed"},
-		},
+		QAReportPath:  "/path/to/qa-report.md",
 		KnowledgePath: "/repo/.ralph/knowledge/",
 	}
 

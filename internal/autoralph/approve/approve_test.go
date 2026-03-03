@@ -374,7 +374,7 @@ func TestApprovalAction_FetchError_ReturnsError(t *testing.T) {
 
 // --- Iteration action tests ---
 
-func TestIterationAction_IncrementalSendsOnlyNewCommentsByDefault(t *testing.T) {
+func TestIterationAction_SendsFullConversation(t *testing.T) {
 	d := testDB(t)
 	issue := createTestIssue(t, d, "refining", "c1")
 
@@ -401,17 +401,19 @@ func TestIterationAction_IncrementalSendsOnlyNewCommentsByDefault(t *testing.T) 
 	if invoker.lastPrompt == "" {
 		t.Fatal("expected AI to be invoked")
 	}
-	// Incremental: only new comments (after c1) are sent.
+	// All comments should be sent in the prompt.
 	if !strings.Contains(invoker.lastPrompt, "Can you add caching?") {
 		t.Error("expected prompt to contain new comment")
 	}
-	// Old comment c1 should NOT be in the prompt.
-	if strings.Contains(invoker.lastPrompt, "Here is a draft plan") {
-		t.Error("expected incremental prompt to NOT contain old comment")
+	if !strings.Contains(invoker.lastPrompt, "Here is a draft plan") {
+		t.Error("expected prompt to contain old comment (full conversation)")
 	}
-	// Context prefix with title should be present.
-	if !strings.Contains(invoker.lastPrompt, "Continuing refinement of: Add user avatars") {
-		t.Error("expected prompt to contain context prefix")
+	// Full issue section should be present.
+	if !strings.Contains(invoker.lastPrompt, "**Title:**") {
+		t.Error("expected prompt to contain issue title section")
+	}
+	if !strings.Contains(invoker.lastPrompt, "Users should be able to upload profile pictures.") {
+		t.Error("expected prompt to contain issue description")
 	}
 }
 
@@ -1432,9 +1434,9 @@ func TestCachedCommentClient_Reset_InvalidatesCache(t *testing.T) {
 	}
 }
 
-// --- Incremental iteration tests ---
+// --- Full conversation iteration tests ---
 
-func TestIterationAction_IncrementalSendsOnlyNewComments(t *testing.T) {
+func TestIterationAction_AlwaysSendsAllComments(t *testing.T) {
 	d := testDB(t)
 	issue := createTestIssue(t, d, "refining", "c5")
 
@@ -1464,7 +1466,16 @@ func TestIterationAction_IncrementalSendsOnlyNewComments(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Prompt should contain only comments after c5 (c6, c7, c8).
+	// All comments (old and new) should be in the prompt.
+	if !strings.Contains(inv.lastPrompt, "Initial comment") {
+		t.Error("expected prompt to contain comment c1")
+	}
+	if !strings.Contains(inv.lastPrompt, "First reply") {
+		t.Error("expected prompt to contain comment c2")
+	}
+	if !strings.Contains(inv.lastPrompt, "AI response 2") {
+		t.Error("expected prompt to contain comment c5")
+	}
 	if !strings.Contains(inv.lastPrompt, "New feedback from user") {
 		t.Error("expected prompt to contain comment c6")
 	}
@@ -1474,20 +1485,9 @@ func TestIterationAction_IncrementalSendsOnlyNewComments(t *testing.T) {
 	if !strings.Contains(inv.lastPrompt, "Final thought") {
 		t.Error("expected prompt to contain comment c8")
 	}
-
-	// Prompt should NOT contain old comments (c1-c5).
-	if strings.Contains(inv.lastPrompt, "Initial comment") {
-		t.Error("expected prompt to NOT contain comment c1")
-	}
-	if strings.Contains(inv.lastPrompt, "First reply") {
-		t.Error("expected prompt to NOT contain comment c2")
-	}
-	if strings.Contains(inv.lastPrompt, "AI response 2") {
-		t.Error("expected prompt to NOT contain comment c5")
-	}
 }
 
-func TestIterationAction_IncrementalHasContextPrefix(t *testing.T) {
+func TestIterationAction_AlwaysIncludesDescription(t *testing.T) {
 	d := testDB(t)
 	issue := createTestIssue(t, d, "refining", "c1")
 
@@ -1511,38 +1511,13 @@ func TestIterationAction_IncrementalHasContextPrefix(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(inv.lastPrompt, "Continuing refinement of: Add user avatars") {
-		t.Errorf("expected context prefix in prompt, got: %s", inv.lastPrompt[:min(200, len(inv.lastPrompt))])
+	// Issue description should always be in the prompt.
+	if !strings.Contains(inv.lastPrompt, "Users should be able to upload profile pictures.") {
+		t.Error("expected prompt to contain issue description")
 	}
-}
-
-func TestIterationAction_IncrementalOmitsDescription(t *testing.T) {
-	d := testDB(t)
-	issue := createTestIssue(t, d, "refining", "c1")
-
-	client := &mockCommentClient{
-		comments: []linear.Comment{
-			{ID: "c1", Body: "Draft plan", UserName: "autoralph", CreatedAt: "2026-01-01T00:00:00Z"},
-			{ID: "c2", Body: "Feedback", UserName: "human", CreatedAt: "2026-01-01T01:00:00Z"},
-		},
-		postID: "c3",
-	}
-	inv := &mockInvoker{response: "Updated plan"}
-
-	action := NewIterationAction(Config{
-		Invoker:  inv,
-		Comments: client,
-		Projects: d,
-	})
-
-	err := action(issue, d)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Issue description should NOT be in incremental prompt.
-	if strings.Contains(inv.lastPrompt, "Users should be able to upload profile pictures.") {
-		t.Error("expected incremental prompt to NOT contain issue description")
+	// Title should always be present.
+	if !strings.Contains(inv.lastPrompt, "Add user avatars") {
+		t.Error("expected prompt to contain issue title")
 	}
 }
 
@@ -1585,11 +1560,6 @@ func TestIterationAction_FirstRefinementSendsAllComments(t *testing.T) {
 
 	// Full description should be present.
 	if !strings.Contains(inv.lastPrompt, "Users should be able to upload profile pictures.") {
-		t.Error("expected first refinement prompt to contain issue description")
-	}
-
-	// No context prefix for first refinement.
-	if strings.Contains(inv.lastPrompt, "Continuing refinement of") {
-		t.Error("expected first refinement prompt to NOT contain context prefix")
+		t.Error("expected prompt to contain issue description")
 	}
 }

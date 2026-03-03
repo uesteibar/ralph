@@ -27,6 +27,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/poller"
 	"github.com/uesteibar/ralph/internal/autoralph/pr"
 	"github.com/uesteibar/ralph/internal/autoralph/projects"
+	"github.com/uesteibar/ralph/internal/qa"
 	"github.com/uesteibar/ralph/internal/autoralph/rebase"
 	"github.com/uesteibar/ralph/internal/autoralph/refine"
 	"github.com/uesteibar/ralph/internal/autoralph/server"
@@ -294,6 +295,8 @@ func runServe(args []string) error {
 	// caches each tick.
 	commentCaches := map[string]*approve.CachedCommentClient{}
 
+	var qaDisp *qaDispatcher
+
 	if hasLinear {
 		invoker := &usagelimitInvoker{
 			inner: &claudeInvoker{},
@@ -337,11 +340,12 @@ func runServe(args []string) error {
 					return err
 				}
 				return refine.NewAction(refine.Config{
-					Invoker:      readOnlyInvoker,
-					Poster:       &linearCommentPoster{client: lc},
-					Projects:     database,
-					GitPuller:    puller,
-					OnBuildEvent: onBuildEvent,
+					Invoker:        readOnlyInvoker,
+					Poster:         &linearCommentPoster{client: lc},
+					Projects:       database,
+					GitPuller:      puller,
+					CommentFetcher: &linearCommentFetcher{client: lc},
+					OnBuildEvent:   onBuildEvent,
 				})(issue, database)
 			},
 		})
@@ -552,39 +556,85 @@ func runServe(args []string) error {
 				Action:    rebase.NewAction(rebaseCfg),
 			})
 		}
+
+		// --- 6b. QA dispatcher ---
+		if hasGitHub {
+			qaDisp = &qaDispatcher{
+				verifyFn: func(issue db.Issue, database *db.DB) error {
+					gitName, gitEmail := registry.gitIdentity(issue.ProjectID)
+					return qa.NewVerifyAction(qa.Config{
+						Invoker:      invoker,
+						Projects:     database,
+						ConfigLoad:   &configLoaderAdapter{},
+						BranchPuller: &branchPullerAdapter{},
+						Git: &gitOpsAdapter{
+							gitAuthorName:  gitName,
+							gitAuthorEmail: gitEmail,
+						},
+						Runner:       qa.NewShellRunner(),
+						OnBuildEvent: onBuildEvent,
+					})(issue, database)
+				},
+				fixFn: func(issue db.Issue, database *db.DB) error {
+					gitName, gitEmail := registry.gitIdentity(issue.ProjectID)
+					gitOps := &gitOpsAdapter{
+						gitAuthorName:  gitName,
+						gitAuthorEmail: gitEmail,
+					}
+
+					var hookRunner qa.HookRunner
+					proj, projErr := database.GetProject(issue.ProjectID)
+					if projErr == nil {
+						cfgPath := filepath.Join(proj.LocalPath, proj.RalphConfigPath)
+						if ralphCfg, cfgErr := config.Load(cfgPath); cfgErr == nil {
+							hookRunner = hooks.New(ralphCfg.Hooks, gitOps.gitEnv())
+						}
+					}
+
+					return qa.NewFixAction(qa.FixConfig{
+						Invoker:      invoker,
+						Projects:     database,
+						ConfigLoad:   &configLoaderAdapter{},
+						BranchPuller: &branchPullerAdapter{},
+						Git:          gitOps,
+						Hooks:        hookRunner,
+						OnBuildEvent: onBuildEvent,
+					})(issue, database)
+				},
+				prFn: func(issue db.Issue, database *db.DB) error {
+					gc, err := registry.mustGitHub(issue.ProjectID)
+					if err != nil {
+						return err
+					}
+					lc, err := registry.mustLinear(issue.ProjectID)
+					if err != nil {
+						return err
+					}
+					gitName, gitEmail := registry.gitIdentity(issue.ProjectID)
+					gitOps := &gitOpsAdapter{
+						gitAuthorName:  gitName,
+						gitAuthorEmail: gitEmail,
+					}
+
+					return pr.NewAction(pr.Config{
+						Invoker:    &claudeInvoker{},
+						Git:        gitOps,
+						Diff:       gitOps,
+						PRD:        &prdReaderAdapter{},
+						GitHub: &ghPRCreatorAdapter{
+							client: gc,
+						},
+						Linear:     &linearPoster{client: lc},
+						Projects:   database,
+						ConfigLoad: &configLoaderAdapter{},
+						Rebase:     gitOps,
+					})(issue, database)
+				},
+			}
+		}
 	}
 
-	// --- 7. PR and complete actions ---
-	var prAction worker.PRCreator
-	if hasLinear && hasGitHub {
-		prAction = &prActionAdapter{fn: func(issue db.Issue, database *db.DB) error {
-			lc, err := registry.mustLinear(issue.ProjectID)
-			if err != nil {
-				return err
-			}
-			gc, err := registry.mustGitHub(issue.ProjectID)
-			if err != nil {
-				return err
-			}
-			gitName, gitEmail := registry.gitIdentity(issue.ProjectID)
-			gitOps := &gitOpsAdapter{
-				gitAuthorName:  gitName,
-				gitAuthorEmail: gitEmail,
-			}
-			return pr.NewAction(pr.Config{
-				Invoker:    &usagelimitInvoker{inner: &claudeInvoker{}, state: ulState},
-				Git:        gitOps,
-				Diff:       gitOps,
-				PRD:        &prdReaderAdapter{},
-				GitHub:     &ghPRCreatorAdapter{client: gc},
-				Linear:     &linearPoster{client: lc},
-				Projects:   database,
-				ConfigLoad: &configLoaderAdapter{},
-				Rebase:     gitOps,
-			})(issue, database)
-		}}
-	}
-
+	// --- 7. Complete action ---
 	var completeAction ghpoller.CompleteFunc
 	if hasLinear {
 		completeAction = func(issue db.Issue, database *db.DB) error {
@@ -606,7 +656,6 @@ func runServe(args []string) error {
 		MaxWorkers:       maxWorkers,
 		LoopRunner:       &loopRunnerAdapter{},
 		Projects:         database,
-		PR:               prAction,
 		GitIdentityFn:    registry.gitIdentity,
 		UsageLimitSetter: ulState,
 		Logger:           logger,
@@ -648,13 +697,18 @@ func runServe(args []string) error {
 
 	// --- 10. Orchestrator evaluation loop ---
 	wake := make(chan struct{}, 1)
-	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, commentCaches)
+	go runOrchestratorLoop(ctx, sm, database, dispatcher, hub, logger, wake, commentCaches, qaDisp)
 
-	// --- 11. Recover BUILDING issues from previous run ---
+	// --- 11. Recover BUILDING and QA issues from previous run ---
 	if count, err := dispatcher.RecoverBuilding(ctx); err != nil {
 		logger.Warn("recovering building issues", "error", err)
 	} else if count > 0 {
 		logger.Info("recovered building issues", "count", count)
+	}
+	if count, err := dispatcher.RecoverQA(ctx); err != nil {
+		logger.Warn("recovering QA issues", "error", err)
+	} else if count > 0 {
+		logger.Info("recovered QA issues", "count", count)
 	}
 
 	// --- 12. Resolve model name ---
@@ -711,8 +765,127 @@ func runServe(args []string) error {
 	return nil
 }
 
+// qaDispatcher dispatches QA verification and fix actions for issues in the
+// qa or qa_fix state. It uses DispatchAction directly (instead of dispatchAsync)
+// because the QA action manages its own state transitions: verify success → in_review,
+// verify failure → qa_fix, max attempts → paused.
+type qaDispatcher struct {
+	verifyFn func(issue db.Issue, database *db.DB) error
+	fixFn    func(issue db.Issue, database *db.DB) error
+	prFn     func(issue db.Issue, database *db.DB) error
+}
+
+func (q *qaDispatcher) dispatch(
+	ctx context.Context,
+	issue db.Issue,
+	database *db.DB,
+	dispatcher *worker.Dispatcher,
+	hub *server.Hub,
+	logger *slog.Logger,
+) {
+	if dispatcher.IsRunning(issue.ID) {
+		return
+	}
+
+	var actionFn func(ctx context.Context) error
+
+	switch orchestrator.IssueState(issue.State) {
+	case orchestrator.StateQA:
+		actionFn = func(actionCtx context.Context) error {
+			verifyErr := q.verifyFn(issue, database)
+
+			// Re-read to pick up any state changes made by the verify action
+			// (e.g. paused on max attempts).
+			current, err := database.GetIssue(issue.ID)
+			if err != nil {
+				return fmt.Errorf("re-reading issue after QA verify: %w", err)
+			}
+
+			if current.State == string(orchestrator.StatePaused) {
+				// Verify action already set state to paused (max attempts exceeded).
+				q.broadcastStateChange(hub, current)
+				return nil
+			}
+
+			if verifyErr != nil {
+				// QA checks failed — transition to qa_fix.
+				current.State = string(orchestrator.StateQAFix)
+				if err := database.UpdateIssue(current); err != nil {
+					return fmt.Errorf("transitioning to qa_fix: %w", err)
+				}
+				database.LogActivity(issue.ID, "state_change", "qa", "qa_fix", "QA checks failed, starting fix")
+				q.broadcastStateChange(hub, current)
+				return nil
+			}
+
+			// QA passed — create PR and transition to in_review.
+			if q.prFn != nil {
+				if err := q.prFn(issue, database); err != nil {
+					return fmt.Errorf("creating PR after QA: %w", err)
+				}
+			}
+
+			// Re-read after PR creation to pick up PR metadata.
+			current, err = database.GetIssue(issue.ID)
+			if err != nil {
+				return fmt.Errorf("re-reading issue after PR creation: %w", err)
+			}
+
+			current.State = string(orchestrator.StateInReview)
+			if err := database.UpdateIssue(current); err != nil {
+				return fmt.Errorf("transitioning to in_review: %w", err)
+			}
+			database.LogActivity(issue.ID, "state_change", "qa", "in_review", "QA passed, PR created")
+			q.broadcastStateChange(hub, current)
+			return nil
+		}
+
+	case orchestrator.StateQAFix:
+		actionFn = func(actionCtx context.Context) error {
+			if err := q.fixFn(issue, database); err != nil {
+				return fmt.Errorf("running QA fix action: %w", err)
+			}
+
+			// Fix succeeded — transition back to qa for re-verification.
+			current, err := database.GetIssue(issue.ID)
+			if err != nil {
+				return fmt.Errorf("re-reading issue after QA fix: %w", err)
+			}
+
+			current.State = string(orchestrator.StateQA)
+			if err := database.UpdateIssue(current); err != nil {
+				return fmt.Errorf("transitioning to qa: %w", err)
+			}
+			database.LogActivity(issue.ID, "state_change", "qa_fix", "qa", "QA fix completed, re-verifying")
+			q.broadcastStateChange(hub, current)
+			return nil
+		}
+
+	default:
+		return
+	}
+
+	logger.Info("dispatching QA action",
+		"issue", issue.Identifier,
+		"state", issue.State,
+	)
+
+	if err := dispatcher.DispatchAction(ctx, issue, actionFn); err != nil {
+		logger.Warn("dispatching QA action", "issue", issue.Identifier, "error", err)
+	}
+}
+
+func (q *qaDispatcher) broadcastStateChange(hub *server.Hub, issue db.Issue) {
+	if hub == nil {
+		return
+	}
+	if msg, err := server.NewWSMessage(server.MsgIssueStateChanged, issue); err == nil {
+		hub.Broadcast(msg)
+	}
+}
+
 // runOrchestratorLoop periodically evaluates state transitions for all active
-// issues and dispatches BUILDING issues to the worker pool.
+// issues and dispatches BUILDING and QA issues to the worker pool.
 func runOrchestratorLoop(
 	ctx context.Context,
 	sm *orchestrator.StateMachine,
@@ -722,6 +895,7 @@ func runOrchestratorLoop(
 	logger *slog.Logger,
 	wake <-chan struct{},
 	commentCaches map[string]*approve.CachedCommentClient,
+	qaDisp *qaDispatcher,
 ) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -766,6 +940,12 @@ func runOrchestratorLoop(
 				} else {
 					logger.Info("re-dispatched building issue", "issue", issue.Identifier)
 				}
+				continue
+			}
+
+			// Dispatch QA and QA_FIX issues that aren't actively running.
+			if qaDisp != nil && (issue.State == string(orchestrator.StateQA) || issue.State == string(orchestrator.StateQAFix)) && !dispatcher.IsRunning(issue.ID) {
+				qaDisp.dispatch(ctx, issue, database, dispatcher, hub, logger)
 				continue
 			}
 
@@ -876,6 +1056,8 @@ func isAsyncTransition(tr orchestrator.Transition) bool {
 		return true
 	case orchestrator.StateInReview:
 		return tr.To == orchestrator.StateInReview
+	case orchestrator.StateQA, orchestrator.StateQAFix:
+		return true
 	default:
 		return false
 	}

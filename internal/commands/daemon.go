@@ -19,7 +19,7 @@ import (
 
 // daemonRunLoopFn is the function used to run the loop. Package-level var for testability.
 var daemonRunLoopFn = func(ctx context.Context, cfg loop.Config) error {
-	return loop.Run(ctx, cfg)
+	return loop.RunFull(ctx, cfg)
 }
 
 // Daemon runs the Ralph loop headlessly as a background-ready process.
@@ -96,6 +96,8 @@ func Daemon(args []string) error {
 		PromptsDir:    promptsDir,
 		QualityChecks: cfg.QualityChecks,
 		KnowledgePath: knowledge.Dir(wc.WorkDir),
+		QAReportPath:  workspace.QAReportPathForWorkspace(cfg.Repo.Path, wc.Name),
+		QAScriptsPath: workspace.QAScriptsPathForWorkspace(cfg.Repo.Path, wc.Name),
 		EventHandler:  handler,
 	})
 

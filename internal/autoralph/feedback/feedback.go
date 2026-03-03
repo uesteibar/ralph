@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/uesteibar/ralph/internal/autoralph/ai"
 	"github.com/uesteibar/ralph/internal/autoralph/db"
@@ -158,7 +159,12 @@ func IsAddressingFeedback(issue db.Issue) bool {
 // commits and pushes changes, then replies via the appropriate channel.
 func NewAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 	return func(issue db.Issue, database *db.DB) error {
-		ctx := context.Background()
+		// Create a context with timeout to prevent indefinite hangs.
+		// Feedback addressing involves fetching PR comments, AI invocation,
+		// quality checks, and git operations, which should complete within
+		// 60 minutes under normal circumstances.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+		defer cancel()
 
 		project, err := cfg.Projects.GetProject(issue.ProjectID)
 		if err != nil {

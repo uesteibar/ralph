@@ -23,7 +23,7 @@ func TemplateFS() embed.FS {
 // TemplateNames lists all embedded template filenames (without the templates/ prefix).
 var TemplateNames = []string{
 	"loop_iteration.md",
-	"qa_verification.md",
+	"qa_verify.md",
 	"qa_fix.md",
 	"chat_system.md",
 	"prd_new.md",
@@ -106,17 +106,19 @@ func RenderRebaseConflict(data RebaseConflictData, overrideDir string) (string, 
 	return render("templates/rebase_conflict.md", data, overrideDir)
 }
 
-// QAVerificationData holds the context for the QA verification prompt.
-type QAVerificationData struct {
-	PRDPath       string
-	ProgressPath  string
-	QualityChecks []string
-	KnowledgePath string
+// QAVerifyData holds the context for the QA verification prompt.
+type QAVerifyData struct {
+	PRDPath        string
+	ProgressPath   string
+	QualityChecks  []string
+	KnowledgePath  string
+	QAReportPath   string
+	QAScriptsPath  string
 }
 
-// RenderQAVerification renders the prompt for QA integration test verification.
-func RenderQAVerification(data QAVerificationData, overrideDir string) (string, error) {
-	return render("templates/qa_verification.md", data, overrideDir)
+// RenderQAVerify renders the prompt for adversarial QA verification.
+func RenderQAVerify(data QAVerifyData, overrideDir string) (string, error) {
+	return render("templates/qa_verify.md", data, overrideDir)
 }
 
 // QAFixData holds the context for the QA fix prompt.
@@ -124,8 +126,10 @@ type QAFixData struct {
 	PRDPath       string
 	ProgressPath  string
 	QualityChecks []string
-	FailedTests   []prd.IntegrationTest
+	QAReportPath  string
+	QAScriptsPath string
 	KnowledgePath string
+	Findings      []prd.QAFinding
 }
 
 // RenderQAFix renders the prompt for fixing integration test failures.
