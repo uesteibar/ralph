@@ -88,8 +88,9 @@ func NewVerifyAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("loading project: %w", err)
 		}
 
-		// Load quality checks from ralph config.
+		// Load quality checks and QA instructions from ralph config.
 		var qualityChecks []string
+		var qaInstructions []string
 		if cfg.ConfigLoad != nil {
 			ralphConfigPath := filepath.Join(project.LocalPath, project.RalphConfigPath)
 			ralphCfg, err := cfg.ConfigLoad.Load(ralphConfigPath)
@@ -97,6 +98,7 @@ func NewVerifyAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 				return fmt.Errorf("loading ralph config: %w", err)
 			}
 			qualityChecks = ralphCfg.QualityChecks
+			qaInstructions = ralphCfg.QAInstructions
 		}
 
 		if err := database.LogActivity(issue.ID, "qa_verify_start", "", "", fmt.Sprintf("QA verification for %s", issue.Identifier)); err != nil {
@@ -126,12 +128,13 @@ func NewVerifyAction(cfg Config) func(issue db.Issue, database *db.DB) error {
 
 		// Render qa_verify.md prompt.
 		prompt, err := prompts.RenderQAVerify(prompts.QAVerifyData{
-			PRDPath:       prdPath,
-			ProgressPath:  progressPath,
-			QualityChecks: qualityChecks,
-			KnowledgePath: knowledge.Dir(treePath),
-			QAReportPath:  qaReportPath,
-			QAScriptsPath: qaScriptsPath,
+			PRDPath:        prdPath,
+			ProgressPath:   progressPath,
+			QualityChecks:  qualityChecks,
+			QAInstructions: qaInstructions,
+			KnowledgePath:  knowledge.Dir(treePath),
+			QAReportPath:   qaReportPath,
+			QAScriptsPath:  qaScriptsPath,
 		}, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering qa_verify prompt: %w", err)

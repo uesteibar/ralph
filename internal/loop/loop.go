@@ -173,8 +173,9 @@ type Config struct {
 	PRDPath       string
 	ProgressPath  string
 	PromptsDir    string
-	QualityChecks []string
-	KnowledgePath string
+	QualityChecks  []string
+	QAInstructions []string
+	KnowledgePath  string
 	QAReportPath  string
 	QAScriptsPath string
 	Verbose       bool

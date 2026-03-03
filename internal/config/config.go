@@ -14,6 +14,7 @@ type Config struct {
 	Repo           RepoConfig  `yaml:"repo"`
 	Paths          PathsConfig `yaml:"paths"`
 	QualityChecks  []string    `yaml:"quality_checks"`
+	QAInstructions []string    `yaml:"qa_instructions,omitempty"`
 	CopyToWorktree []string    `yaml:"copy_to_worktree,omitempty"`
 	Hooks          HooksConfig `yaml:"hooks"`
 }

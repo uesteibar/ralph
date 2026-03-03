@@ -1060,6 +1060,154 @@ func TestRenderQAFix_KnowledgeBase_HasWriteInstructions(t *testing.T) {
 	}
 }
 
+// --- QAInstructions field tests ---
+
+func TestRenderQAVerify_QAInstructions_RenderedWhenPresent(t *testing.T) {
+	data := QAVerifyData{
+		PRDPath:        ".ralph/state/prd.json",
+		ProgressPath:   ".ralph/progress.txt",
+		QualityChecks:  []string{"just test"},
+		QAInstructions: []string{"Start the app with `just dev`", "Skip flaky network tests"},
+	}
+
+	out, err := RenderQAVerify(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAVerify failed: %v", err)
+	}
+
+	checks := []string{
+		"Project-Specific QA Instructions",
+		"Start the app with `just dev`",
+		"Skip flaky network tests",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when QAInstructions is set", want)
+		}
+	}
+}
+
+func TestRenderQAVerify_QAInstructions_OmittedWhenEmpty(t *testing.T) {
+	data := QAVerifyData{
+		PRDPath:      ".ralph/state/prd.json",
+		ProgressPath: ".ralph/progress.txt",
+	}
+
+	out, err := RenderQAVerify(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAVerify failed: %v", err)
+	}
+
+	if strings.Contains(out, "Project-Specific QA Instructions") {
+		t.Error("output should not contain QA Instructions section when QAInstructions is empty")
+	}
+}
+
+func TestRenderQAVerify_QAInstructions_PlacedAfterContextBeforePhase1(t *testing.T) {
+	data := QAVerifyData{
+		PRDPath:        ".ralph/state/prd.json",
+		ProgressPath:   ".ralph/progress.txt",
+		QualityChecks:  []string{"just test"},
+		QAInstructions: []string{"Custom instruction"},
+	}
+
+	out, err := RenderQAVerify(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAVerify failed: %v", err)
+	}
+
+	contextIdx := strings.Index(out, "## Context")
+	instructionsIdx := strings.Index(out, "Project-Specific QA Instructions")
+	phase1Idx := strings.Index(out, "Phase 1")
+
+	if contextIdx < 0 || instructionsIdx < 0 || phase1Idx < 0 {
+		t.Fatalf("expected all sections to be present: context=%d, instructions=%d, phase1=%d", contextIdx, instructionsIdx, phase1Idx)
+	}
+
+	if instructionsIdx <= contextIdx {
+		t.Error("QA Instructions should appear after Context section")
+	}
+	if instructionsIdx >= phase1Idx {
+		t.Error("QA Instructions should appear before Phase 1 section")
+	}
+}
+
+func TestRenderQAFix_QAInstructions_RenderedWhenPresent(t *testing.T) {
+	data := QAFixData{
+		PRDPath:        ".ralph/state/prd.json",
+		ProgressPath:   ".ralph/progress.txt",
+		QualityChecks:  []string{"just test"},
+		QAReportPath:   "/path/to/qa-report.md",
+		QAInstructions: []string{"Use `just dev` to start the app", "Run tests with verbose output"},
+	}
+
+	out, err := RenderQAFix(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAFix failed: %v", err)
+	}
+
+	checks := []string{
+		"Project-Specific QA Instructions",
+		"Use `just dev` to start the app",
+		"Run tests with verbose output",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q when QAInstructions is set", want)
+		}
+	}
+}
+
+func TestRenderQAFix_QAInstructions_OmittedWhenEmpty(t *testing.T) {
+	data := QAFixData{
+		PRDPath:      ".ralph/state/prd.json",
+		ProgressPath: ".ralph/progress.txt",
+		QAReportPath: "/path/to/qa-report.md",
+	}
+
+	out, err := RenderQAFix(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAFix failed: %v", err)
+	}
+
+	if strings.Contains(out, "Project-Specific QA Instructions") {
+		t.Error("output should not contain QA Instructions section when QAInstructions is empty")
+	}
+}
+
+func TestRenderQAFix_QAInstructions_PlacedAfterContextBeforeFindings(t *testing.T) {
+	data := QAFixData{
+		PRDPath:        ".ralph/state/prd.json",
+		ProgressPath:   ".ralph/progress.txt",
+		QualityChecks:  []string{"just test"},
+		QAReportPath:   "/path/to/qa-report.md",
+		QAInstructions: []string{"Custom fix instruction"},
+		Findings: []prd.QAFinding{
+			{ID: "QA-001", Title: "Test bug", Severity: "error", Status: "found"},
+		},
+	}
+
+	out, err := RenderQAFix(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAFix failed: %v", err)
+	}
+
+	contextIdx := strings.Index(out, "## Context")
+	instructionsIdx := strings.Index(out, "Project-Specific QA Instructions")
+	findingsIdx := strings.Index(out, "QA Findings to Fix")
+
+	if contextIdx < 0 || instructionsIdx < 0 || findingsIdx < 0 {
+		t.Fatalf("expected all sections to be present: context=%d, instructions=%d, findings=%d", contextIdx, instructionsIdx, findingsIdx)
+	}
+
+	if instructionsIdx <= contextIdx {
+		t.Error("QA Instructions should appear after Context section")
+	}
+	if instructionsIdx >= findingsIdx {
+		t.Error("QA Instructions should appear before QA Findings section")
+	}
+}
+
 func TestConfig_PromptsDir(t *testing.T) {
 	// Test readTemplate directly with override
 	dir := t.TempDir()

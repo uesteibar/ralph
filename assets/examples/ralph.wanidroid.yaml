@@ -14,6 +14,12 @@ quality_checks:
   - "npm run typecheck"
   - "cd android && ./gradlew test"
 
+# Optional: project-specific instructions for the QA verify and fix agents
+# qa_instructions:
+#   - "Start the dev server with `npm run dev` before testing"
+#   - "Skip the flaky e2e tests in CI (they require a real device)"
+#   - "Use `adb logcat` to inspect Android logs during testing"
+
 # Optional: additional files/folders to copy to worktrees (supports glob patterns)
 # copy_to_worktree:
 #   - ".env.example"

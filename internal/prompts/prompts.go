@@ -111,6 +111,7 @@ type QAVerifyData struct {
 	PRDPath        string
 	ProgressPath   string
 	QualityChecks  []string
+	QAInstructions []string
 	KnowledgePath  string
 	QAReportPath   string
 	QAScriptsPath  string
@@ -123,13 +124,14 @@ func RenderQAVerify(data QAVerifyData, overrideDir string) (string, error) {
 
 // QAFixData holds the context for the QA fix prompt.
 type QAFixData struct {
-	PRDPath       string
-	ProgressPath  string
-	QualityChecks []string
-	QAReportPath  string
-	QAScriptsPath string
-	KnowledgePath string
-	Findings      []prd.QAFinding
+	PRDPath        string
+	ProgressPath   string
+	QualityChecks  []string
+	QAInstructions []string
+	QAReportPath   string
+	QAScriptsPath  string
+	KnowledgePath  string
+	Findings       []prd.QAFinding
 }
 
 // RenderQAFix renders the prompt for fixing integration test failures.

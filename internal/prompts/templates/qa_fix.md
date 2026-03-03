@@ -21,7 +21,12 @@ A project knowledge base is available at `{{.KnowledgePath}}`. Before starting w
 
 When you fix a non-obvious issue or discover a reusable pattern, write a markdown file to the knowledge base. Use descriptive filenames and add `## Tags: topic1, topic2` at the top.
 {{end}}
+{{if .QAInstructions}}
+## Project-Specific QA Instructions
 
+{{range .QAInstructions}}- {{.}}
+{{end}}
+{{end}}
 ## QA Findings to Fix
 
 {{if .Findings}}

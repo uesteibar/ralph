@@ -17,7 +17,12 @@ Search `{{.KnowledgePath}}` for testing patterns, environment setup, and known g
 
 When you discover reusable patterns, write them to the knowledge base with `## Tags:` at the top.
 {{end}}
+{{if .QAInstructions}}
+## Project-Specific QA Instructions
 
+{{range .QAInstructions}}- {{.}}
+{{end}}
+{{end}}
 ## Phase 1: Detect Project Type & Testing Strategy (MANDATORY)
 
 **Before doing anything else**, determine what type of project this is and what testing is required.

@@ -56,8 +56,9 @@ func NewFixAction(cfg FixConfig) func(issue db.Issue, database *db.DB) error {
 			return fmt.Errorf("loading project: %w", err)
 		}
 
-		// Load quality checks from ralph config.
+		// Load quality checks and QA instructions from ralph config.
 		var qualityChecks []string
+		var qaInstructions []string
 		if cfg.ConfigLoad != nil {
 			ralphConfigPath := filepath.Join(project.LocalPath, project.RalphConfigPath)
 			ralphCfg, err := cfg.ConfigLoad.Load(ralphConfigPath)
@@ -65,6 +66,7 @@ func NewFixAction(cfg FixConfig) func(issue db.Issue, database *db.DB) error {
 				return fmt.Errorf("loading ralph config: %w", err)
 			}
 			qualityChecks = ralphCfg.QualityChecks
+			qaInstructions = ralphCfg.QAInstructions
 		}
 
 		if err := database.LogActivity(issue.ID, "qa_fix_start", "", "", fmt.Sprintf("QA fix for %s", issue.Identifier)); err != nil {
@@ -103,13 +105,14 @@ func NewFixAction(cfg FixConfig) func(issue db.Issue, database *db.DB) error {
 		}
 
 		prompt, err := prompts.RenderQAFix(prompts.QAFixData{
-			PRDPath:       prdPath,
-			ProgressPath:  progressPath,
-			QualityChecks: qualityChecks,
-			QAReportPath:  qaReportPath,
-			QAScriptsPath: qaScriptsPath,
-			KnowledgePath: knowledge.Dir(treePath),
-			Findings:      findings,
+			PRDPath:        prdPath,
+			ProgressPath:   progressPath,
+			QualityChecks:  qualityChecks,
+			QAInstructions: qaInstructions,
+			QAReportPath:   qaReportPath,
+			QAScriptsPath:  qaScriptsPath,
+			KnowledgePath:  knowledge.Dir(treePath),
+			Findings:       findings,
 		}, cfg.OverrideDir)
 		if err != nil {
 			return fmt.Errorf("rendering qa_fix prompt: %w", err)
