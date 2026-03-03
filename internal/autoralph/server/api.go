@@ -432,7 +432,7 @@ func (h *apiHandler) handlePauseIssue(w http.ResponseWriter, r *http.Request) {
 	pausable := map[string]bool{
 		"queued": true, "refining": true, "approved": true,
 		"building": true, "in_review": true, "addressing_feedback": true,
-		"fixing_checks": true,
+		"fixing_checks": true, "qa": true, "qa_fix": true,
 	}
 	if !pausable[issue.State] {
 		writeError(w, http.StatusConflict, "issue cannot be paused from state: "+issue.State)
@@ -682,6 +682,8 @@ var transitionMap = map[string][]string{
 	"refining":            {"queued", "approved"},
 	"queued":              {"refining"},
 	"approved":            {"queued", "refining", "building"},
+	"qa":                  {"in_review", "building", "paused"},
+	"qa_fix":              {"qa", "building", "paused"},
 }
 
 // prerequisitesForTarget checks whether the issue satisfies prerequisites for a target state.
