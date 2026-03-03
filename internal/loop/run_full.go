@@ -127,12 +127,13 @@ func runQAVerify(ctx context.Context, cfg Config, qaReportPath, qaScriptsPath st
 	}
 
 	prompt, err := prompts.RenderQAVerify(prompts.QAVerifyData{
-		PRDPath:       cfg.PRDPath,
-		ProgressPath:  cfg.ProgressPath,
-		QualityChecks: cfg.QualityChecks,
-		KnowledgePath: knowledge.Dir(cfg.WorkDir),
-		QAReportPath:  qaReportPath,
-		QAScriptsPath: qaScriptsPath,
+		PRDPath:        cfg.PRDPath,
+		ProgressPath:   cfg.ProgressPath,
+		QualityChecks:  cfg.QualityChecks,
+		QAInstructions: cfg.QAInstructions,
+		KnowledgePath:  knowledge.Dir(cfg.WorkDir),
+		QAReportPath:   qaReportPath,
+		QAScriptsPath:  qaScriptsPath,
 	}, cfg.PromptsDir)
 	if err != nil {
 		return fmt.Errorf("rendering qa_verify prompt: %w", err)
@@ -161,13 +162,14 @@ func runQAFix(ctx context.Context, cfg Config, qaReportPath, qaScriptsPath strin
 	}
 
 	prompt, err := prompts.RenderQAFix(prompts.QAFixData{
-		PRDPath:       cfg.PRDPath,
-		ProgressPath:  cfg.ProgressPath,
-		QualityChecks: cfg.QualityChecks,
-		QAReportPath:  qaReportPath,
-		QAScriptsPath: qaScriptsPath,
-		KnowledgePath: knowledge.Dir(cfg.WorkDir),
-		Findings:      findings,
+		PRDPath:        cfg.PRDPath,
+		ProgressPath:   cfg.ProgressPath,
+		QualityChecks:  cfg.QualityChecks,
+		QAInstructions: cfg.QAInstructions,
+		QAReportPath:   qaReportPath,
+		QAScriptsPath:  qaScriptsPath,
+		KnowledgePath:  knowledge.Dir(cfg.WorkDir),
+		Findings:       findings,
 	}, cfg.PromptsDir)
 	if err != nil {
 		return fmt.Errorf("rendering qa_fix prompt: %w", err)
