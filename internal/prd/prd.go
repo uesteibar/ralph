@@ -32,6 +32,15 @@ type QAVerification struct {
 	Status   string      `json:"status"`
 	Attempts int         `json:"attempts"`
 	Findings []QAFinding `json:"findings,omitempty"`
+	Tests    []QATest    `json:"tests,omitempty"`
+}
+
+// QATest represents a single test performed during QA verification.
+type QATest struct {
+	ID             string `json:"id"`                        // "QT-001", "QT-002", ...
+	Description    string `json:"description"`               // What was tested
+	Result         string `json:"result"`                    // "pass" | "fail"
+	LinkedFinding  string `json:"linkedFinding,omitempty"`   // Optional reference to a QAFinding ID
 }
 
 // QAFinding represents a single QA issue discovered during verification.

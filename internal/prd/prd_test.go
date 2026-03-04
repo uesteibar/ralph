@@ -498,3 +498,87 @@ func TestHasUnfixedFindings_Empty(t *testing.T) {
 		t.Error("expected false with no findings")
 	}
 }
+
+func TestQATest_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prd.json")
+
+	original := &PRD{
+		Project:     "TestProject",
+		BranchName:  "ralph/test",
+		Description: "Test with QA tests",
+		UserStories: []Story{{ID: "US-001", Passes: true}},
+		QAVerification: &QAVerification{
+			Status:   "passed",
+			Attempts: 1,
+			Tests: []QATest{
+				{ID: "QT-001", Description: "Login form submits correctly", Result: "pass"},
+				{ID: "QT-002", Description: "Invalid email rejected", Result: "fail", LinkedFinding: "QA-001"},
+			},
+		},
+	}
+
+	if err := Write(path, original); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	loaded, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if loaded.QAVerification == nil {
+		t.Fatal("QAVerification should not be nil")
+	}
+	if len(loaded.QAVerification.Tests) != 2 {
+		t.Fatalf("Tests count = %d, want 2", len(loaded.QAVerification.Tests))
+	}
+
+	test1 := loaded.QAVerification.Tests[0]
+	if test1.ID != "QT-001" || test1.Description != "Login form submits correctly" || test1.Result != "pass" {
+		t.Errorf("Test[0] = %+v, unexpected", test1)
+	}
+	if test1.LinkedFinding != "" {
+		t.Errorf("Test[0].LinkedFinding = %q, want empty", test1.LinkedFinding)
+	}
+
+	test2 := loaded.QAVerification.Tests[1]
+	if test2.ID != "QT-002" || test2.Result != "fail" || test2.LinkedFinding != "QA-001" {
+		t.Errorf("Test[1] = %+v, unexpected", test2)
+	}
+}
+
+func TestRead_PRDWithoutTests_LoadsCorrectly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prd.json")
+
+	jsonData := `{
+  "project": "TestProject",
+  "branchName": "ralph/test",
+  "description": "PRD with QA but no tests field",
+  "userStories": [{"id": "US-001", "passes": true}],
+  "qaVerification": {
+    "status": "passed",
+    "attempts": 1,
+    "findings": [{"id": "QA-001", "title": "Bug", "description": "A bug", "severity": "error", "testScript": "test.sh", "status": "found"}]
+  }
+}`
+	if err := os.WriteFile(path, []byte(jsonData), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if loaded.QAVerification == nil {
+		t.Fatal("QAVerification should not be nil")
+	}
+	if loaded.QAVerification.Tests != nil {
+		t.Errorf("Tests should be nil for PRD without tests field, got %v", loaded.QAVerification.Tests)
+	}
+	if len(loaded.QAVerification.Findings) != 1 {
+		t.Errorf("Findings count = %d, want 1", len(loaded.QAVerification.Findings))
+	}
+}
