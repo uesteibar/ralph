@@ -41,6 +41,14 @@ type storyResponse struct {
 	Passes bool   `json:"passes"`
 }
 
+// qaTestResponse represents a single QA test in the API response.
+type qaTestResponse struct {
+	ID            string `json:"id"`
+	Description   string `json:"description"`
+	Result        string `json:"result"`
+	LinkedFinding string `json:"linked_finding"`
+}
+
 // qaFindingResponse represents a single QA finding in the API response.
 type qaFindingResponse struct {
 	ID          string `json:"id"`
@@ -56,6 +64,7 @@ type qaVerificationResponse struct {
 	Status   string              `json:"status"`
 	Attempts int                 `json:"attempts"`
 	Findings []qaFindingResponse `json:"findings"`
+	Tests    []qaTestResponse    `json:"tests"`
 }
 
 // readPRD reads the PRD for an issue from disk, returning nil if unavailable.
@@ -365,10 +374,20 @@ func (h *apiHandler) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 					Status:      f.Status,
 				}
 			}
+			tests := make([]qaTestResponse, len(p.QAVerification.Tests))
+			for i, t := range p.QAVerification.Tests {
+				tests[i] = qaTestResponse{
+					ID:            t.ID,
+					Description:   t.Description,
+					Result:        t.Result,
+					LinkedFinding: t.LinkedFinding,
+				}
+			}
 			qaVerification = &qaVerificationResponse{
 				Status:   p.QAVerification.Status,
 				Attempts: p.QAVerification.Attempts,
 				Findings: findings,
+				Tests:    tests,
 			}
 		}
 	}
