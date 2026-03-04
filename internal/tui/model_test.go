@@ -724,6 +724,97 @@ func TestModel_EnterKey_OpensStoryOverlay(t *testing.T) {
 	}
 }
 
+func TestModel_EnterKey_OpensQATestOverlay(t *testing.T) {
+	m := NewModel("ws", "")
+	testPRD := &prd.PRD{
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Auth", Passes: true},
+		},
+		QAVerification: &prd.QAVerification{
+			Tests: []prd.QATest{
+				{ID: "QT-001", Description: "Login works", Result: "pass"},
+				{ID: "QT-002", Description: "Error handling", Result: "fail", LinkedFinding: "QA-001"},
+			},
+		},
+	}
+
+	// Load PRD
+	updated, _ := m.Update(prdLoadedMsg{prd: testPRD})
+	m = updated.(Model)
+	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = ready.(Model)
+
+	// Switch to sidebar
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
+
+	// Move to QT-001 (index 1, after US-001)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+
+	// Press Enter on QA test
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if !m.Overlay().visible {
+		t.Fatal("expected overlay to be visible for QA test")
+	}
+	if !strings.Contains(m.Overlay().content, "QT-001") {
+		t.Error("expected overlay to contain QA test ID")
+	}
+	if !strings.Contains(m.Overlay().content, "Login works") {
+		t.Error("expected overlay to contain QA test description")
+	}
+	if !strings.Contains(m.Overlay().content, "PASS") {
+		t.Error("expected overlay to contain PASS result")
+	}
+}
+
+func TestModel_EnterKey_OpensQATestOverlay_WithLinkedFinding(t *testing.T) {
+	m := NewModel("ws", "")
+	testPRD := &prd.PRD{
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Auth", Passes: true},
+		},
+		QAVerification: &prd.QAVerification{
+			Tests: []prd.QATest{
+				{ID: "QT-001", Description: "Login works", Result: "pass"},
+				{ID: "QT-002", Description: "Error handling", Result: "fail", LinkedFinding: "QA-001"},
+			},
+		},
+	}
+
+	updated, _ := m.Update(prdLoadedMsg{prd: testPRD})
+	m = updated.(Model)
+	ready, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = ready.(Model)
+
+	// Switch to sidebar, move to QT-002 (index 2)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+
+	// Press Enter
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if !m.Overlay().visible {
+		t.Fatal("expected overlay to be visible for QA test with linked finding")
+	}
+	if !strings.Contains(m.Overlay().content, "QT-002") {
+		t.Error("expected overlay to contain QA test ID")
+	}
+	if !strings.Contains(m.Overlay().content, "FAIL") {
+		t.Error("expected overlay to contain FAIL result")
+	}
+	if !strings.Contains(m.Overlay().content, "QA-001") {
+		t.Error("expected overlay to contain linked finding")
+	}
+}
+
 func TestModel_EscKey_ClosesOverlay(t *testing.T) {
 	m := NewModel("ws", "")
 	testPRD := &prd.PRD{

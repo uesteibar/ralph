@@ -282,6 +282,15 @@ func (m *Model) openOverlay() {
 				}
 			}
 		}
+	} else if item.isQATest {
+		if m.currentPRD.QAVerification != nil {
+			for _, qt := range m.currentPRD.QAVerification.Tests {
+				if qt.ID == item.id {
+					content = renderQATestOverlay(qt)
+					break
+				}
+			}
+		}
 	} else if item.isTest {
 		// Integration tests removed — no overlay content for test items
 	} else {
