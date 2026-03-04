@@ -27,6 +27,7 @@ func initTestRepo(t *testing.T, dir string) *shell.Runner {
 		{"git", "init"},
 		{"git", "config", "user.email", "test@test.com"},
 		{"git", "config", "user.name", "Test"},
+		{"git", "config", "commit.gpgsign", "false"},
 	}
 	for _, c := range cmds {
 		if _, err := r.Run(ctx, c[0], c[1:]...); err != nil {
