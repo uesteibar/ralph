@@ -60,10 +60,18 @@ type PRDescriptionStory struct {
 	Title string
 }
 
+// QATestSummary represents a QA test result for the PR description prompt.
+type QATestSummary struct {
+	ID          string
+	Description string
+	Result      string
+}
+
 // PRDescriptionData holds the context for rendering the pr_description prompt.
 type PRDescriptionData struct {
 	PRDSummary            string
 	Stories               []PRDescriptionStory
+	QATests               []QATestSummary
 	DiffStats             string
 	LinearIssueIdentifier string
 }

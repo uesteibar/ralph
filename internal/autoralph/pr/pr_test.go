@@ -969,6 +969,69 @@ func TestGenerateDescription_PromptContainsDiffStatsAndPRDAndIdentifier(t *testi
 	}
 }
 
+func TestGenerateDescription_PromptContainsQATests(t *testing.T) {
+	inv := &mockInvoker{response: "feat: title\n\nbody"}
+	diff := &mockDiffStatter{stats: " 3 files changed"}
+	prdReader := &mockPRDReader{info: PRDInfo{
+		Description: "Add feature",
+		Stories:     []StoryInfo{{ID: "US-001", Title: "Story"}},
+		QATests: []QATestInfo{
+			{ID: "QT-001", Description: "Login works", Result: "pass"},
+			{ID: "QT-002", Description: "Signup fails on duplicate", Result: "fail"},
+		},
+	}}
+	cfgLoader := &mockConfigLoader{base: "main"}
+
+	_, _, err := GenerateDescription(context.Background(), inv, diff, prdReader, cfgLoader, DescriptionInput{
+		TreePath:    "/tmp/test/tree",
+		DefaultBase: "main",
+		PRDPath:     "/tmp/test/prd.json",
+		Identifier:  "PROJ-42",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	checks := []string{
+		"QA Tests Performed",
+		"QT-001",
+		"Login works",
+		"pass",
+		"QT-002",
+		"Signup fails on duplicate",
+		"fail",
+	}
+	for _, want := range checks {
+		if !strings.Contains(inv.lastPrompt, want) {
+			t.Errorf("expected prompt to contain %q", want)
+		}
+	}
+}
+
+func TestGenerateDescription_WithoutQATests_OmitsQASection(t *testing.T) {
+	inv := &mockInvoker{response: "feat: title\n\nbody"}
+	diff := &mockDiffStatter{stats: " 3 files changed"}
+	prdReader := &mockPRDReader{info: PRDInfo{
+		Description: "Add feature",
+		Stories:     []StoryInfo{{ID: "US-001", Title: "Story"}},
+	}}
+	cfgLoader := &mockConfigLoader{base: "main"}
+
+	_, _, err := GenerateDescription(context.Background(), inv, diff, prdReader, cfgLoader, DescriptionInput{
+		TreePath:    "/tmp/test/tree",
+		DefaultBase: "main",
+		PRDPath:     "/tmp/test/prd.json",
+		Identifier:  "PROJ-42",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(inv.lastPrompt, "QA Tests Performed") {
+		t.Error("expected prompt to not contain QA Tests section when no QA tests")
+	}
+}
+
 func TestGenerateDescription_DiffStatsErrorFallback(t *testing.T) {
 	inv := &mockInvoker{response: "title\nbody"}
 	diff := &mockDiffStatter{err: errors.New("no upstream")}

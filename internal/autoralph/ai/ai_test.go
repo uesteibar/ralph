@@ -250,6 +250,56 @@ func TestRenderPRDescription_ContainsAllSections(t *testing.T) {
 	}
 }
 
+func TestRenderPRDescription_WithQATests_RendersSection(t *testing.T) {
+	data := PRDescriptionData{
+		PRDSummary: "Add user authentication.",
+		Stories: []PRDescriptionStory{
+			{ID: "US-001", Title: "Add login"},
+		},
+		QATests: []QATestSummary{
+			{ID: "QT-001", Description: "Login with valid credentials", Result: "pass"},
+			{ID: "QT-002", Description: "Login with invalid password", Result: "fail"},
+		},
+		DiffStats: "3 files changed",
+	}
+
+	out, err := RenderPRDescription(data, "")
+	if err != nil {
+		t.Fatalf("RenderPRDescription failed: %v", err)
+	}
+
+	checks := []string{
+		"QA Tests Performed",
+		"QT-001",
+		"Login with valid credentials",
+		"pass",
+		"QT-002",
+		"Login with invalid password",
+		"fail",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q", want)
+		}
+	}
+}
+
+func TestRenderPRDescription_WithoutQATests_OmitsSection(t *testing.T) {
+	data := PRDescriptionData{
+		PRDSummary: "Quick fix.",
+		DiffStats:  "1 file changed",
+	}
+
+	out, err := RenderPRDescription(data, "")
+	if err != nil {
+		t.Fatalf("RenderPRDescription failed: %v", err)
+	}
+
+	if strings.Contains(out, "QA Tests Performed") {
+		t.Error("output should not contain QA Tests Performed when no QA tests")
+	}
+}
+
 func TestRenderPRDescription_WithoutStories_OmitsSection(t *testing.T) {
 	data := PRDescriptionData{
 		PRDSummary: "Quick fix.",
