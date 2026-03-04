@@ -459,6 +459,37 @@ func TestRenderQAVerify_ContainsAllSections(t *testing.T) {
 	}
 }
 
+func TestRenderQAVerify_ContainsTestRecordingInstructions(t *testing.T) {
+	data := QAVerifyData{
+		PRDPath:       ".ralph/state/prd.json",
+		ProgressPath:  ".ralph/progress.txt",
+		QualityChecks: []string{"just test"},
+	}
+
+	out, err := RenderQAVerify(data, "")
+	if err != nil {
+		t.Fatalf("RenderQAVerify failed: %v", err)
+	}
+
+	checks := []string{
+		// Tests array reference
+		"qaVerification.tests",
+		// Required fields in schema example
+		"QT-001",
+		"description",
+		"result",
+		"linkedFinding",
+		// Both pass and fail must be recorded
+		"pass",
+		"fail",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q for test recording instructions", want)
+		}
+	}
+}
+
 func TestRenderQAFix_ContainsAllSections(t *testing.T) {
 	data := QAFixData{
 		PRDPath:       ".ralph/state/prd.json",

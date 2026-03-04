@@ -537,10 +537,51 @@ Create `{{.QAReportPath}}`:
 
 1. Read PRD at `{{.PRDPath}}`
 2. Update `qaVerification.findings[]` with all findings from Phase 5
-3. Update `qaVerification` status:
+3. Update `qaVerification.tests[]` with one entry per test performed (both passing AND failing tests):
+
+```json
+{
+  "qaVerification": {
+    "tests": [
+      {
+        "id": "QT-001",
+        "description": "Lesson completion returns success for valid lesson ID",
+        "result": "pass",
+        "linkedFinding": ""
+      },
+      {
+        "id": "QT-002",
+        "description": "API returns 400 for missing lesson ID",
+        "result": "fail",
+        "linkedFinding": "QA-001"
+      }
+    ],
+    "findings": [
+      {
+        "id": "QA-001",
+        "title": "Missing validation for empty lesson ID",
+        "description": "...",
+        "severity": "error",
+        "testScript": "test-validation.sh",
+        "status": "found"
+      }
+    ]
+  }
+}
+```
+
+Each test entry must include:
+- **id**: Sequential ID (QT-001, QT-002, etc.)
+- **description**: What was tested
+- **result**: `"pass"` or `"fail"`
+- **linkedFinding**: Optional — references a finding ID (e.g. `"QA-001"`) if the test led to a finding. Leave empty string if not applicable.
+
+Record **every** test you performed — passing tests demonstrate coverage, failing tests link to findings.
+
+4. Update `qaVerification` status:
    - No findings + quality checks pass → `status: "passed"`
    - Findings exist OR quality checks failed → `status: "failed"`, increment `attempts`
-4. Write PRD back
+5. Write PRD back
 
 **Do NOT commit QA artifacts** (scripts in `{{.QAScriptsPath}}`, report at `{{.QAReportPath}}`).
 
