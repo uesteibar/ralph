@@ -56,10 +56,18 @@ export interface QAFinding {
   status: string
 }
 
+export interface QATest {
+  id: string
+  description: string
+  result: string
+  linked_finding: string
+}
+
 export interface QAVerification {
   status: string
   attempts: number
   findings: QAFinding[]
+  tests: QATest[]
 }
 
 const BASE = '/api'

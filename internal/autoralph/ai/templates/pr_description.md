@@ -17,6 +17,13 @@ You are an autonomous software engineering agent writing a pull request descript
 - **{{.ID}}:** {{.Title}}
 {{end}}
 {{end}}
+{{- if .QATests}}
+
+## QA Tests Performed
+{{range .QATests}}
+- **{{.ID}}:** {{.Description}} — {{.Result}}
+{{- end}}
+{{end}}
 ## Diff Stats (background context only)
 
 The following diff stats are provided as background context for scope awareness. Do not list individual file changes in your output.

@@ -42,12 +42,20 @@ type PRDReader interface {
 type PRDInfo struct {
 	Description string
 	Stories     []StoryInfo
+	QATests     []QATestInfo
 }
 
 // StoryInfo holds a story's ID and title.
 type StoryInfo struct {
 	ID    string
 	Title string
+}
+
+// QATestInfo holds a QA test's ID, description, and result.
+type QATestInfo struct {
+	ID          string
+	Description string
+	Result      string
 }
 
 // GitHubPRCreator creates a pull request on GitHub.
@@ -137,9 +145,19 @@ func GenerateDescription(ctx context.Context, inv Invoker, diff DiffStatter, prd
 		})
 	}
 
+	var qaTests []ai.QATestSummary
+	for _, t := range prdInfo.QATests {
+		qaTests = append(qaTests, ai.QATestSummary{
+			ID:          t.ID,
+			Description: t.Description,
+			Result:      t.Result,
+		})
+	}
+
 	prompt, err := ai.RenderPRDescription(ai.PRDescriptionData{
 		PRDSummary:            prdInfo.Description,
 		Stories:               stories,
+		QATests:               qaTests,
 		DiffStats:             diffStats,
 		LinearIssueIdentifier: input.Identifier,
 	}, input.OverrideDir)

@@ -157,6 +157,32 @@ func renderFindingOverlay(f prd.QAFinding) string {
 	return b.String()
 }
 
+// renderQATestOverlay builds the overlay content for a QA verification test.
+func renderQATestOverlay(qt prd.QATest) string {
+	var b strings.Builder
+
+	b.WriteString(overlayTitleStyle.Render(fmt.Sprintf("%s: %s", qt.ID, qt.Description)))
+	b.WriteString("\n\n")
+
+	// Result
+	b.WriteString(overlayLabelStyle.Render("Result: "))
+	if qt.Result == "pass" {
+		b.WriteString(overlayPassStyle.Render("PASS"))
+	} else {
+		b.WriteString(overlayFailStyle.Render("FAIL"))
+	}
+	b.WriteString("\n\n")
+
+	// Linked finding
+	if qt.LinkedFinding != "" {
+		b.WriteString(overlayLabelStyle.Render("Linked Finding: "))
+		b.WriteString(qt.LinkedFinding)
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
 // renderHelpOverlay builds the overlay content for the keyboard shortcuts help.
 func renderHelpOverlay() string {
 	var b strings.Builder

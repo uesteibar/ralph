@@ -223,6 +223,66 @@ function StoryList({
   )
 }
 
+function QATestsList({ qaVerification }: { qaVerification?: QAVerification }) {
+  if (!qaVerification || !qaVerification.tests || qaVerification.tests.length === 0) return null
+
+  const tests = qaVerification.tests
+  const passCount = tests.filter(t => t.result === 'pass').length
+
+  return (
+    <div
+      style={{
+        border: '1px solid #e5e7eb',
+        borderRadius: '8px',
+        padding: '16px',
+        backgroundColor: '#fff',
+        marginBottom: '16px',
+      }}
+    >
+      <h3 style={{ margin: '0 0 10px', fontSize: '14px', fontWeight: 600, color: '#374151' }}>
+        QA Tests ({passCount}/{tests.length} passed)
+      </h3>
+      {tests.map(test => {
+        const isPassing = test.result === 'pass'
+        const icon = isPassing ? '\u2705' : '\u274C'
+        return (
+          <div
+            key={test.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '5px 0',
+              fontSize: '13px',
+              color: '#374151',
+            }}
+          >
+            <span style={{ flexShrink: 0 }}>{icon}</span>
+            <span style={{ fontWeight: 500, color: '#6b7280', flexShrink: 0 }}>{test.id}</span>
+            <span>{test.description}</span>
+            {test.linked_finding && (
+              <span
+                style={{
+                  marginLeft: 'auto',
+                  fontSize: '11px',
+                  padding: '1px 6px',
+                  borderRadius: '4px',
+                  fontWeight: 600,
+                  backgroundColor: '#fef2f2',
+                  color: '#dc2626',
+                  flexShrink: 0,
+                }}
+              >
+                {test.linked_finding}
+              </span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function QAFindingsList({ qaVerification }: { qaVerification?: QAVerification }) {
   if (!qaVerification || !qaVerification.findings || qaVerification.findings.length === 0) return null
 
@@ -694,6 +754,9 @@ export default function IssueDetail() {
         integrationTests={issue.integration_tests ?? []}
         currentStory={issue.state === 'building' ? issue.current_story : undefined}
       />
+
+      {/* QA Tests */}
+      <QATestsList qaVerification={issue.qa_verification} />
 
       {/* QA Findings */}
       <QAFindingsList qaVerification={issue.qa_verification} />

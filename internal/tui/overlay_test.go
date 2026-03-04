@@ -92,6 +92,61 @@ func TestRenderStoryOverlay_ShowsFailStatus(t *testing.T) {
 	}
 }
 
+func TestRenderQATestOverlay_ContainsIDAndDescription(t *testing.T) {
+	qt := prd.QATest{
+		ID:          "QT-001",
+		Description: "Login form submits",
+		Result:      "pass",
+	}
+	content := renderQATestOverlay(qt)
+	if !strings.Contains(content, "QT-001") {
+		t.Error("expected content to contain QA test ID")
+	}
+	if !strings.Contains(content, "Login form submits") {
+		t.Error("expected content to contain QA test description")
+	}
+}
+
+func TestRenderQATestOverlay_ShowsPassResult(t *testing.T) {
+	qt := prd.QATest{ID: "QT-001", Description: "Test", Result: "pass"}
+	content := renderQATestOverlay(qt)
+	if !strings.Contains(content, "PASS") {
+		t.Error("expected PASS for passing QA test")
+	}
+}
+
+func TestRenderQATestOverlay_ShowsFailResult(t *testing.T) {
+	qt := prd.QATest{ID: "QT-001", Description: "Test", Result: "fail"}
+	content := renderQATestOverlay(qt)
+	if !strings.Contains(content, "FAIL") {
+		t.Error("expected FAIL for failing QA test")
+	}
+}
+
+func TestRenderQATestOverlay_ShowsLinkedFinding(t *testing.T) {
+	qt := prd.QATest{
+		ID:            "QT-003",
+		Description:   "Error handling",
+		Result:        "fail",
+		LinkedFinding: "QA-001",
+	}
+	content := renderQATestOverlay(qt)
+	if !strings.Contains(content, "Linked Finding:") {
+		t.Error("expected Linked Finding label")
+	}
+	if !strings.Contains(content, "QA-001") {
+		t.Error("expected linked finding ID")
+	}
+}
+
+func TestRenderQATestOverlay_NoLinkedFindingWhenEmpty(t *testing.T) {
+	qt := prd.QATest{ID: "QT-001", Description: "Test", Result: "pass"}
+	content := renderQATestOverlay(qt)
+	if strings.Contains(content, "Linked Finding") {
+		t.Error("expected no linked finding section when empty")
+	}
+}
+
 func TestOverlay_ShowAndHide(t *testing.T) {
 	o := newOverlay()
 	if o.visible {

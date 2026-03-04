@@ -711,6 +711,117 @@ describe('IssueDetail', () => {
     })
   })
 
+  describe('QA Tests', () => {
+    it('renders QA tests with pass/fail indicators', async () => {
+      const issueWithQATests = {
+        ...mockIssue,
+        qa_verification: {
+          status: 'passed',
+          attempts: 1,
+          findings: [],
+          tests: [
+            { id: 'QT-001', description: 'Verify login flow', result: 'pass', linked_finding: '' },
+            { id: 'QT-002', description: 'Verify error handling', result: 'fail', linked_finding: 'QA-001' },
+          ],
+        },
+        activity: [],
+        build_activity: [],
+      }
+      vi.mocked(fetchIssue).mockResolvedValue(issueWithQATests)
+
+      renderIssueDetail()
+      await waitFor(() => {
+        expect(screen.getByText(/QA Tests/)).toBeInTheDocument()
+      })
+      expect(screen.getByText('Verify login flow')).toBeInTheDocument()
+      expect(screen.getByText('Verify error handling')).toBeInTheDocument()
+    })
+
+    it('shows linked finding reference for failing tests', async () => {
+      const issueWithLinkedFinding = {
+        ...mockIssue,
+        qa_verification: {
+          status: 'failed',
+          attempts: 1,
+          findings: [],
+          tests: [
+            { id: 'QT-001', description: 'Verify error handling', result: 'fail', linked_finding: 'QA-001' },
+          ],
+        },
+        activity: [],
+        build_activity: [],
+      }
+      vi.mocked(fetchIssue).mockResolvedValue(issueWithLinkedFinding)
+
+      renderIssueDetail()
+      await waitFor(() => {
+        expect(screen.getByText('Verify error handling')).toBeInTheDocument()
+      })
+      expect(screen.getByText('QA-001')).toBeInTheDocument()
+    })
+
+    it('does not render QA tests section when tests array is empty', async () => {
+      const issueNoTests = {
+        ...mockIssue,
+        qa_verification: {
+          status: 'pending',
+          attempts: 0,
+          findings: [],
+          tests: [],
+        },
+        activity: [],
+        build_activity: [],
+      }
+      vi.mocked(fetchIssue).mockResolvedValue(issueNoTests)
+
+      renderIssueDetail()
+      await waitFor(() => {
+        expect(screen.getByText('Add user avatars')).toBeInTheDocument()
+      })
+      expect(screen.queryByText(/QA Tests/)).not.toBeInTheDocument()
+    })
+
+    it('does not render QA tests section when qa_verification is undefined', async () => {
+      const issueNoQA = {
+        ...mockIssue,
+        qa_verification: undefined,
+        activity: [],
+        build_activity: [],
+      }
+      vi.mocked(fetchIssue).mockResolvedValue(issueNoQA)
+
+      renderIssueDetail()
+      await waitFor(() => {
+        expect(screen.getByText('Add user avatars')).toBeInTheDocument()
+      })
+      expect(screen.queryByText(/QA Tests/)).not.toBeInTheDocument()
+    })
+
+    it('shows pass count in header', async () => {
+      const issueWithTests = {
+        ...mockIssue,
+        qa_verification: {
+          status: 'passed',
+          attempts: 1,
+          findings: [],
+          tests: [
+            { id: 'QT-001', description: 'Test A', result: 'pass', linked_finding: '' },
+            { id: 'QT-002', description: 'Test B', result: 'pass', linked_finding: '' },
+            { id: 'QT-003', description: 'Test C', result: 'fail', linked_finding: '' },
+          ],
+        },
+        activity: [],
+        build_activity: [],
+      }
+      vi.mocked(fetchIssue).mockResolvedValue(issueWithTests)
+
+      renderIssueDetail()
+      await waitFor(() => {
+        expect(screen.getByText(/QA Tests \(2\/3 passed\)/)).toBeInTheDocument()
+      })
+    })
+  })
+
   describe('polling', () => {
     it('calls loadIssue every 5 seconds', async () => {
       renderIssueDetail()

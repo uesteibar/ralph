@@ -223,6 +223,84 @@ func TestSidebar_RenderItem_ActiveStoryHighlighted(t *testing.T) {
 	}
 }
 
+func TestSidebar_UpdateFromPRD_QATests(t *testing.T) {
+	s := newSidebar()
+	p := &prd.PRD{
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Auth", Passes: true},
+		},
+		QAVerification: &prd.QAVerification{
+			Tests: []prd.QATest{
+				{ID: "QT-001", Description: "Login works", Result: "pass"},
+				{ID: "QT-002", Description: "Logout fails", Result: "fail"},
+			},
+			Findings: []prd.QAFinding{
+				{ID: "QA-001", Title: "Bug found", Severity: "error", Status: "found"},
+			},
+		},
+	}
+
+	s.updateFromPRD(p, "")
+
+	if len(s.Items()) != 4 {
+		t.Fatalf("expected 4 items (1 story + 2 QA tests + 1 finding), got %d", len(s.Items()))
+	}
+
+	// QA tests are between stories and findings
+	qt1 := s.Items()[1]
+	if qt1.id != "QT-001" || !qt1.isQATest || !qt1.passes {
+		t.Errorf("expected QT-001 as passing QA test, got %+v", qt1)
+	}
+	qt2 := s.Items()[2]
+	if qt2.id != "QT-002" || !qt2.isQATest || qt2.passes {
+		t.Errorf("expected QT-002 as failing QA test, got %+v", qt2)
+	}
+	finding := s.Items()[3]
+	if finding.id != "QA-001" || !finding.isFinding {
+		t.Errorf("expected QA-001 as finding, got %+v", finding)
+	}
+}
+
+func TestSidebar_View_QATestPassFailIndicators(t *testing.T) {
+	s := newSidebar()
+	s.width = 50
+	s.height = 20
+	s.items = []sidebarItem{
+		{id: "US-001", title: "Auth", passes: true},
+		{id: "QT-001", title: "Login works", isQATest: true, passes: true},
+		{id: "QT-002", title: "Logout fails", isQATest: true, passes: false},
+	}
+
+	v := s.view()
+	if !strings.Contains(v, "✓") {
+		t.Error("expected checkmark for passing QA test")
+	}
+	if !strings.Contains(v, "✗") {
+		t.Error("expected cross for failing QA test")
+	}
+	if !strings.Contains(v, "QT-001") {
+		t.Error("expected QT-001 in view")
+	}
+	if !strings.Contains(v, "QT-002") {
+		t.Error("expected QT-002 in view")
+	}
+}
+
+func TestSidebar_View_ShowsSeparatorBeforeQATests(t *testing.T) {
+	s := newSidebar()
+	s.width = 50
+	s.height = 20
+	s.items = []sidebarItem{
+		{id: "US-001", title: "Auth", passes: true},
+		{id: "QT-001", title: "Login works", isQATest: true, passes: true},
+	}
+
+	v := s.view()
+	if !strings.Contains(v, "─") {
+		t.Error("expected separator between stories and QA tests")
+	}
+}
+
 func TestSidebar_View_ShowsSeparatorBetweenStoriesAndTests(t *testing.T) {
 	s := newSidebar()
 	s.width = 40

@@ -21,6 +21,7 @@ type sidebarItem struct {
 	passes    bool
 	active    bool   // currently being worked on
 	isTest    bool   // true for integration tests
+	isQATest  bool   // true for QA verification tests
 	isFinding bool   // true for QA findings
 	severity  string // "error" | "warning" (only for findings)
 	status    string // "found" | "addressed" (only for findings)
@@ -75,6 +76,18 @@ func (s *sidebar) updateFromPRD(p *prd.PRD, activeStoryID string) {
 			passes: story.Passes,
 			active: story.ID == activeStoryID,
 		})
+	}
+
+	// Add QA tests if present (between stories and findings).
+	if p.QAVerification != nil {
+		for _, qt := range p.QAVerification.Tests {
+			s.items = append(s.items, sidebarItem{
+				id:       qt.ID,
+				title:    qt.Description,
+				isQATest: true,
+				passes:   qt.Result == "pass",
+			})
+		}
 	}
 
 	// Add QA findings if present.
@@ -132,12 +145,16 @@ func (s sidebar) view() string {
 
 	var lines []string
 
-	// Find where tests and findings start (to add separators)
+	// Find where tests, QA tests, and findings start (to add separators)
 	firstTestIdx := -1
+	firstQATestIdx := -1
 	firstFindingIdx := -1
 	for i, item := range s.items {
 		if item.isTest && firstTestIdx == -1 {
 			firstTestIdx = i
+		}
+		if item.isQATest && firstQATestIdx == -1 {
+			firstQATestIdx = i
 		}
 		if item.isFinding && firstFindingIdx == -1 {
 			firstFindingIdx = i
@@ -159,8 +176,18 @@ func (s sidebar) view() string {
 			}
 		}
 
+		// Add separator before QA tests section
+		if i == firstQATestIdx && i > 0 && i != firstTestIdx {
+			lines = append(lines, strings.Repeat("─", s.width-2))
+			contentHeight--
+			visibleEnd = min(s.scrollOff+contentHeight+1, len(s.items))
+			if i >= visibleEnd {
+				break
+			}
+		}
+
 		// Add separator before findings section
-		if i == firstFindingIdx && i > 0 && i != firstTestIdx {
+		if i == firstFindingIdx && i > 0 && i != firstTestIdx && i != firstQATestIdx {
 			lines = append(lines, strings.Repeat("─", s.width-2))
 			contentHeight--
 			visibleEnd = min(s.scrollOff+contentHeight+1, len(s.items))

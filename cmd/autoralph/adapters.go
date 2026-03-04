@@ -336,9 +336,20 @@ func (p *prdReaderAdapter) ReadPRD(path string) (pr.PRDInfo, error) {
 	for i, s := range d.UserStories {
 		stories[i] = pr.StoryInfo{ID: s.ID, Title: s.Title}
 	}
+	var qaTests []pr.QATestInfo
+	if d.QAVerification != nil {
+		for _, t := range d.QAVerification.Tests {
+			qaTests = append(qaTests, pr.QATestInfo{
+				ID:          t.ID,
+				Description: t.Description,
+				Result:      t.Result,
+			})
+		}
+	}
 	return pr.PRDInfo{
 		Description: d.Description,
 		Stories:     stories,
+		QATests:     qaTests,
 	}, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/uesteibar/ralph/internal/autoralph/eventlog"
 	"github.com/uesteibar/ralph/internal/autoralph/server"
 	"github.com/uesteibar/ralph/internal/events"
+	"github.com/uesteibar/ralph/internal/prd"
 )
 
 // mockCCUsageProvider implements server.CCUsageProvider for testing.
@@ -2431,5 +2433,163 @@ func TestIntegration_TokenTracking_ZeroTokensNoIncrement(t *testing.T) {
 	}
 	if int(result["output_tokens"].(float64)) != 0 {
 		t.Fatalf("API output_tokens = %v, want 0", result["output_tokens"])
+	}
+}
+
+// writePRD writes a PRD to a temp directory and returns a PRDPathFn that resolves to it.
+func writePRD(t *testing.T, p *prd.PRD, wsName string) (localPath string, pathFn func(string, string) string) {
+	t.Helper()
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, ".ralph", "workspaces", wsName)
+	if err := os.MkdirAll(wsDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	prdPath := filepath.Join(wsDir, "prd.json")
+	if err := prd.Write(prdPath, p); err != nil {
+		t.Fatalf("write prd: %v", err)
+	}
+	return dir, func(projectLocalPath, ws string) string {
+		return filepath.Join(projectLocalPath, ".ralph", "workspaces", ws, "prd.json")
+	}
+}
+
+func TestAPI_GetIssue_QATestsIncludedInResponse(t *testing.T) {
+	d := testDB(t)
+
+	testPRD := &prd.PRD{
+		Project: "test",
+		UserStories: []prd.Story{
+			{ID: "US-001", Title: "Story 1", Passes: true},
+		},
+		QAVerification: &prd.QAVerification{
+			Status:   "passed",
+			Attempts: 1,
+			Findings: []prd.QAFinding{
+				{ID: "QA-001", Title: "Bug", Description: "desc", Severity: "error", TestScript: "s.sh", Status: "found"},
+			},
+			Tests: []prd.QATest{
+				{ID: "QT-001", Description: "Login works", Result: "pass", LinkedFinding: ""},
+				{ID: "QT-002", Description: "Logout fails", Result: "fail", LinkedFinding: "QA-001"},
+			},
+		},
+	}
+
+	localPath, pathFn := writePRD(t, testPRD, "ws-test")
+
+	srv := newTestServer(t, server.Config{DB: d, PRDPathFn: pathFn})
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: localPath})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID:     p.ID,
+		Title:         "QA test issue",
+		State:         "qa",
+		WorkspaceName: "ws-test",
+	})
+
+	resp, err := http.Get("http://" + srv.Addr() + "/api/issues/" + iss.ID)
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	qa, ok := result["qa_verification"].(map[string]any)
+	if !ok {
+		t.Fatal("expected qa_verification object in response")
+	}
+
+	tests, ok := qa["tests"].([]any)
+	if !ok {
+		t.Fatal("expected tests array in qa_verification")
+	}
+	if len(tests) != 2 {
+		t.Fatalf("expected 2 tests, got %d", len(tests))
+	}
+
+	t1 := tests[0].(map[string]any)
+	if t1["id"] != "QT-001" {
+		t.Fatalf("expected first test id 'QT-001', got %v", t1["id"])
+	}
+	if t1["description"] != "Login works" {
+		t.Fatalf("expected description 'Login works', got %v", t1["description"])
+	}
+	if t1["result"] != "pass" {
+		t.Fatalf("expected result 'pass', got %v", t1["result"])
+	}
+	if t1["linked_finding"] != "" {
+		t.Fatalf("expected empty linked_finding, got %v", t1["linked_finding"])
+	}
+
+	t2 := tests[1].(map[string]any)
+	if t2["id"] != "QT-002" {
+		t.Fatalf("expected second test id 'QT-002', got %v", t2["id"])
+	}
+	if t2["linked_finding"] != "QA-001" {
+		t.Fatalf("expected linked_finding 'QA-001', got %v", t2["linked_finding"])
+	}
+}
+
+func TestAPI_GetIssue_QATestsEmptyArrayNotNull(t *testing.T) {
+	d := testDB(t)
+
+	testPRD := &prd.PRD{
+		Project:     "test",
+		UserStories: []prd.Story{},
+		QAVerification: &prd.QAVerification{
+			Status:   "passed",
+			Attempts: 1,
+			Findings: []prd.QAFinding{},
+		},
+	}
+
+	localPath, pathFn := writePRD(t, testPRD, "ws-empty")
+
+	srv := newTestServer(t, server.Config{DB: d, PRDPathFn: pathFn})
+
+	p, _ := d.CreateProject(db.Project{Name: "proj", LocalPath: localPath})
+	iss, _ := d.CreateIssue(db.Issue{
+		ProjectID:     p.ID,
+		Title:         "No QA tests issue",
+		State:         "qa",
+		WorkspaceName: "ws-empty",
+	})
+
+	resp, err := http.Get("http://" + srv.Addr() + "/api/issues/" + iss.ID)
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Read raw body to check for null vs []
+	var raw json.RawMessage
+	json.NewDecoder(resp.Body).Decode(&raw)
+
+	var result map[string]any
+	json.Unmarshal(raw, &result)
+
+	qa := result["qa_verification"].(map[string]any)
+
+	// Verify tests is an array (not null)
+	tests, ok := qa["tests"].([]any)
+	if !ok {
+		t.Fatal("expected tests to be an array, not null")
+	}
+	if len(tests) != 0 {
+		t.Fatalf("expected empty tests array, got %d entries", len(tests))
+	}
+
+	// Also verify findings is an array (not null) - existing behavior
+	findings, ok := qa["findings"].([]any)
+	if !ok {
+		t.Fatal("expected findings to be an array, not null")
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected empty findings array, got %d entries", len(findings))
 	}
 }
