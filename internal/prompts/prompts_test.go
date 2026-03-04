@@ -439,13 +439,13 @@ func TestRenderQAVerify_ContainsAllSections(t *testing.T) {
 		"just vet",
 		data.QAReportPath,
 		data.QAScriptsPath,
-		// Key instructions — project-type-based testing
-		"Detect Project Type",
-		"Testing Strategy",
-		"MANDATORY for Web/API/CLI",
+		// Efficiency guidance
+		"Stay focused",
+		"Batch work",
+		"Browser reuse",
+		// Key instructions — hands-on testing
 		"Hands-On Testing",
-		"Test Coverage Verification",
-		"Manual Test Plan",
+		"hands-on testing is mandatory",
 		"QA report",
 		// Structured findings
 		"qaVerification.findings",
@@ -521,7 +521,7 @@ func TestRenderQAFix_ContainsAllSections(t *testing.T) {
 		// Key instructions — fix persona
 		"Reproduce the Failure",
 		"You MUST reproduce",
-		"Fix the code",
+		"Fix the Code",
 		// Commit format
 		"fix(QA):",
 		// Rules
@@ -1134,7 +1134,7 @@ func TestRenderQAVerify_QAInstructions_OmittedWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestRenderQAVerify_QAInstructions_PlacedAfterContextBeforePhase1(t *testing.T) {
+func TestRenderQAVerify_QAInstructions_PlacedAfterContextBeforeWorkflow(t *testing.T) {
 	data := QAVerifyData{
 		PRDPath:        ".ralph/state/prd.json",
 		ProgressPath:   ".ralph/progress.txt",
@@ -1149,17 +1149,17 @@ func TestRenderQAVerify_QAInstructions_PlacedAfterContextBeforePhase1(t *testing
 
 	contextIdx := strings.Index(out, "## Context")
 	instructionsIdx := strings.Index(out, "Project-Specific QA Instructions")
-	phase1Idx := strings.Index(out, "Phase 1")
+	workflowIdx := strings.Index(out, "## Workflow")
 
-	if contextIdx < 0 || instructionsIdx < 0 || phase1Idx < 0 {
-		t.Fatalf("expected all sections to be present: context=%d, instructions=%d, phase1=%d", contextIdx, instructionsIdx, phase1Idx)
+	if contextIdx < 0 || instructionsIdx < 0 || workflowIdx < 0 {
+		t.Fatalf("expected all sections to be present: context=%d, instructions=%d, workflow=%d", contextIdx, instructionsIdx, workflowIdx)
 	}
 
 	if instructionsIdx <= contextIdx {
 		t.Error("QA Instructions should appear after Context section")
 	}
-	if instructionsIdx >= phase1Idx {
-		t.Error("QA Instructions should appear before Phase 1 section")
+	if instructionsIdx >= workflowIdx {
+		t.Error("QA Instructions should appear before Workflow section")
 	}
 }
 
